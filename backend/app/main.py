@@ -4,6 +4,7 @@ import io
 import os
 import uuid
 from dataclasses import dataclass
+import re
 from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -351,38 +352,206 @@ def generate(req: GenerateRequest):
 @app.post("/convert")
 async def convert(file: UploadFile = File(...)):
     try:
-        # Read PDF content
-        reader = PdfReader(file.file)
-        text = "\n".join(page.extract_text() for page in reader.pages)
+        # Validate file type
+        if not file.filename or not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="只支持PDF文件格式")
+        
+        # Reset file pointer to beginning
+        await file.seek(0)
+        
+        # Read PDF content safely; skip pages with no text
+        try:
+            reader = PdfReader(file.file)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"無法讀取PDF文件: {str(e)}")
+        
+        texts = []
+        for page in reader.pages:
+            try:
+                t = page.extract_text() or ""
+            except Exception:
+                t = ""
+            texts.append(t)
+        
+        if not any(texts):  # No text extracted
+            raise HTTPException(status_code=400, detail="PDF文件中没有找到可提取的文本内容")
+            
+        full_text = "\n".join(texts)
 
-        # Mocked parsing logic for demonstration
-        # Replace this with actual parsing logic to extract chapters, sections, articles, etc.
-        structured_json = {
-            "law_name": "商標法",
-            "chapters": [
-                {
-                    "chapter": "第1章 總則",
-                    "sections": [
-                        {
-                            "section": "第1節 申請註冊",
-                            "articles": [
-                                {
-                                    "article": "第18條",
-                                    "items": [
-                                        {"item": "1", "content": "商標，指任何具有識別性之標識..."},
-                                        {"item": "2", "content": "前項所稱識別性，指..."}
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                }
-            ]
-        }
+        def normalize_digits(s: str) -> str:
+            # Convert fullwidth digits to ASCII for simpler matching
+            fw = "０１２３４５６７８９"
+            hw = "0123456789"
+            return s.translate(str.maketrans(fw, hw))
 
-        return structured_json
+        # Determine law name: first non-empty line containing a legal keyword, else filename
+        lines = [normalize_digits((ln or "").strip()) for ln in full_text.splitlines()]
+        law_name = None
+        for ln in lines:
+            if not ln:
+                continue
+            if any(key in ln for key in ["法", "條例", "法規", "法律"]):
+                law_name = ln
+                break
+        if not law_name:
+            base = os.path.splitext(file.filename or "document")[0]
+            law_name = base or "未命名法規"
+
+        chapter_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)\s*章[\u3000\s]*(.*)$")
+        section_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)\s*節[\u3000\s]*(.*)$")
+        article_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+(?:之[一二三四五六七八九十0-9]+)?)\s*條[\u3000\s]*(.*)$")
+
+        def parse_item_line(ln: str):
+            # Match common item markers like 「一、」「1.」「（一）」「(1)」「1）」 etc.
+            ln = ln.lstrip()
+            # （一） or (1)
+            m = re.match(r"^[（(]([0-9０-９一二三四五六七八九十]+)[）)]\s*(.*)$", ln)
+            if m:
+                return m.group(1), m.group(2), "parentheses"
+            # 一、 二、 十、 style (Chinese numerals with punctuation)
+            m = re.match(r"^([一二三四五六七八九十]+)[、．.）)]\s*(.*)$", ln)
+            if m:
+                return m.group(1), m.group(2), "chinese_with_punct"
+            # 1. 1、 1) styles (Arabic numbers with punctuation)
+            m = re.match(r"^([0-9０-９]+)[、．.）)]\s*(.*)$", ln)
+            if m:
+                return m.group(1), m.group(2), "arabic_with_punct"
+            # 1 2 3 styles (Arabic numbers followed by space, common in ROC legal documents)
+            m = re.match(r"^([0-9０-９]+)\s+(.*)$", ln)
+            if m:
+                return m.group(1), m.group(2), "arabic_space"
+            # 一 二 三 styles (Chinese numerals followed by space, sub-items)
+            m = re.match(r"^([一二三四五六七八九十]+)\s+(.*)$", ln)
+            if m:
+                return m.group(1), m.group(2), "chinese_space"
+            return None, None, None
+
+        structure: Dict[str, Any] = {"law_name": law_name, "chapters": []}
+        current_chapter: Optional[Dict[str, Any]] = None
+        current_section: Optional[Dict[str, Any]] = None
+        current_article: Optional[Dict[str, Any]] = None
+        current_item: Optional[Dict[str, Any]] = None
+        current_sub_item: Optional[Dict[str, Any]] = None
+
+        def ensure_chapter():
+            nonlocal current_chapter
+            if current_chapter is None:
+                current_chapter = {"chapter": "未分類章", "sections": []}
+                structure["chapters"].append(current_chapter)
+
+        def ensure_section():
+            nonlocal current_section
+            ensure_chapter()
+            if current_section is None:
+                current_section = {"section": "未分類節", "articles": []}
+                current_chapter["sections"].append(current_section)
+
+        for raw in lines:
+            ln = raw.strip()
+            if not ln:
+                continue
+
+            # Headings
+            m = chapter_re.match(ln)
+            if m:
+                title = f"第{m.group(1)}章" + (f" {m.group(2).strip()}" if m.group(2) else "")
+                current_chapter = {"chapter": title, "sections": []}
+                structure["chapters"].append(current_chapter)
+                current_section = None
+                current_article = None
+                current_item = None
+                current_sub_item = None
+                continue
+
+            m = section_re.match(ln)
+            if m:
+                ensure_chapter()
+                title = f"第{m.group(1)}節" + (f" {m.group(2).strip()}" if m.group(2) else "")
+                current_section = {"section": title, "articles": []}
+                current_chapter["sections"].append(current_section)
+                current_article = None
+                current_item = None
+                current_sub_item = None
+                current_sub_item = None
+                continue
+
+            m = article_re.match(ln)
+            if m:
+                ensure_section()
+                title = f"第{m.group(1)}條"
+                rest = m.group(2).strip() if m.group(2) else ""
+                current_article = {"article": title, "content": rest, "items": []}
+                current_section["articles"].append(current_article)
+                current_item = None
+                current_sub_item = None
+                current_sub_item = None
+                continue
+
+            # Items within article
+            if current_article is not None:
+                num, content, item_type = parse_item_line(ln)
+                if num is not None:
+                    num = normalize_digits(num)
+                    
+                    # Determine if this is a sub-item (Chinese numerals after Arabic numerals)
+                    if (item_type == "chinese_space" or item_type == "chinese_with_punct") and current_item is not None:
+                        # This is a sub-item of the current item
+                        if "sub_items" not in current_item:
+                            current_item["sub_items"] = []
+                        sub_item = {"item": str(num), "content": content or "", "sub_items": []}
+                        current_item["sub_items"].append(sub_item)
+                        current_sub_item = sub_item
+                    else:
+                        # This is a main item
+                        current_item = {"item": str(num), "content": content or "", "sub_items": []}
+                        current_article["items"].append(current_item)
+                        current_sub_item = None
+                else:
+                    # continuation line
+                    if current_sub_item is not None:
+                        # Append to current sub-item
+                        sep = "\n" if current_sub_item["content"] else ""
+                        current_sub_item["content"] = f"{current_sub_item['content']}{sep}{ln}"
+                    elif current_item is not None:
+                        # Check if we have sub-items and append to the last sub-item
+                        if "sub_items" in current_item and current_item["sub_items"]:
+                            last_sub_item = current_item["sub_items"][-1]
+                            sep = "\n" if last_sub_item["content"] else ""
+                            last_sub_item["content"] = f"{last_sub_item['content']}{sep}{ln}"
+                        else:
+                            sep = "\n" if current_item["content"] else ""
+                            current_item["content"] = f"{current_item['content']}{sep}{ln}"
+                    else:
+                        # accumulate into article content
+                        if "content" not in current_article or current_article["content"] is None:
+                            current_article["content"] = ln
+                        else:
+                            current_article["content"] = (current_article["content"] + "\n" + ln).strip()
+                continue
+
+            # If no article yet, but we have text, place it under a default article
+            if current_section is not None and current_article is None:
+                current_article = {"article": "未標示條文", "content": ln, "items": []}
+                current_section["articles"].append(current_article)
+                current_item = None
+                current_sub_item = None
+            elif current_article is None:
+                ensure_section()
+                current_article = {"article": "未標示條文", "content": ln, "items": []}
+                current_section["articles"].append(current_article)
+                current_item = None
+                current_sub_item = None
+            else:
+                # fallback append
+                current_article["content"] = (current_article.get("content", "") + "\n" + ln).strip()
+
+        return structure
+    except HTTPException:
+        # Re-raise HTTPExceptions with their original status codes
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
+        # For other unexpected errors, return 500
+        raise HTTPException(status_code=500, detail=f"處理PDF時發生意外錯誤: {str(e)}")
 
 
 @app.get("/docs/schema")
