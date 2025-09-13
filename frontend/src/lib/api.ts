@@ -28,4 +28,10 @@ export const api = {
     const res = await fetch(`${base}/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     return json<any>(res)
   },
+  async convert(file: File) {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch(`${base}/convert`, { method: 'POST', body: fd })
+    return json<any>(res)
+  },
 }

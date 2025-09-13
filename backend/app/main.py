@@ -6,13 +6,14 @@ import uuid
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from dotenv import load_dotenv
+from PyPDF2 import PdfReader
 
 load_dotenv()
 
@@ -24,9 +25,9 @@ def get_env_bool(name: str, default: bool = False) -> bool:
     return v.lower() in {"1", "true", "yes", "on"}
 
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-USE_OPENAI_EMBEDDING = get_env_bool("USE_OPENAI_EMBEDDING", False)
-USE_OPENAI_COMPLETION = get_env_bool("USE_OPENAI_COMPLETION", False)
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+USE_GEMINI_EMBEDDING = get_env_bool("USE_GEMINI_EMBEDDING", False)
+USE_GEMINI_COMPLETION = get_env_bool("USE_GEMINI_COMPLETION", False)
 
 try:
     import httpx
@@ -49,15 +50,16 @@ class InMemoryStore:
     def __init__(self) -> None:
         self.docs: Dict[str, DocRecord] = {}
         self.tfidf: Optional[TfidfVectorizer] = None
-        self.embeddings = None  # matrix for chunks
+        self.embeddings = None  # matrix for chunks (numpy array or list)
         self.chunk_doc_ids: List[str] = []
-    self.chunks_flat = []
+        self.chunks_flat: List[str] = []
 
     def reset_embeddings(self):
+        """Clear vector/index state so embeddings can be recomputed."""
         self.tfidf = None
         self.embeddings = None
         self.chunk_doc_ids = []
-    self.chunks_flat = []
+        self.chunks_flat = []
 
 
 store = InMemoryStore()
@@ -152,26 +154,29 @@ def chunk(req: ChunkRequest):
     return {"doc_id": doc.id, "num_chunks": len(chunks), "chunk_size": req.chunk_size, "overlap": req.overlap, "sample": chunks[:3]}
 
 
-async def embed_openai(texts: List[str]) -> List[List[float]]:
+async def embed_gemini(texts: List[str]) -> List[List[float]]:
+    """Call Google Generative API (Gemini) embeddings endpoint using API key.
+
+    Note: This uses the REST endpoint pattern with the API key in query params.
+    """
     if not httpx:
         raise RuntimeError("httpx not available")
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY not set")
-    # Use OpenAI embeddings API v1
-    url = "https://api.openai.com/v1/embeddings"
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+    if not GOOGLE_API_KEY:
+        raise RuntimeError("GOOGLE_API_KEY not set")
+    model = os.getenv("GOOGLE_EMBEDDING_MODEL", "embed-gecko-001")
+    # endpoint pattern: models/{model}:embed
+    url = f"https://generativelanguage.googleapis.com/v1beta2/models/{model}:embed?key={GOOGLE_API_KEY}"
     out: List[List[float]] = []
     async with httpx.AsyncClient(timeout=60) as client:
-        # batch to avoid token limits; simple small batches
         batch_size = 64
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i+batch_size]
-            payload = {"input": batch, "model": model}
-            r = await client.post(url, headers=headers, json=payload)
+            payload = {"input": batch}
+            r = await client.post(url, json=payload)
             r.raise_for_status()
             data = r.json()
-            out.extend([d["embedding"] for d in data["data"]])
+            # expected shape: { data: [ { embedding: [...] }, ... ] }
+            out.extend([d.get("embedding") for d in data.get("data", [])])
     return out
 
 
@@ -190,14 +195,14 @@ async def embed(req: EmbedRequest):
     if not all_chunks:
         return JSONResponse(status_code=400, content={"error": "no chunks to embed"})
 
-    if USE_OPENAI_EMBEDDING:
-        vectors = await embed_openai(all_chunks)
-        # keep as numpy matrix-like list of lists; for cosine sim we'll rely on sklearn if available
+    if USE_GEMINI_EMBEDDING:
+        vectors = await embed_gemini(all_chunks)
+        # keep as numpy matrix-like list of lists; for cosine sim we'll rely on numpy if available
         store.tfidf = None
         store.embeddings = vectors
         store.chunk_doc_ids = chunk_doc_ids
         store.chunks_flat = all_chunks
-        return {"provider": "openai", "num_vectors": len(vectors)}
+        return {"provider": "gemini", "num_vectors": len(vectors)}
     else:
         # TF-IDF fallback (per-chunk bag-of-words)
         vectorizer = TfidfVectorizer(max_features=4096, stop_words="english")
@@ -217,11 +222,11 @@ def rank_with_tfidf(query: str, k: int):
     return idxs, sims[idxs]
 
 
-def rank_with_openai(query: str, k: int):
+def rank_with_gemini(query: str, k: int):
     # cosine similarity on dense vectors list
     import numpy as np
     vecs = np.array(store.embeddings, dtype=float)  # type: ignore[assignment]
-    qvec = np.array(asyncio_run(embed_openai([query]))[0], dtype=float)
+    qvec = np.array(asyncio_run(embed_gemini([query]))[0], dtype=float)
     # normalize
     vecs_norm = vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-8)
     q_norm = qvec / (np.linalg.norm(qvec) + 1e-8)
@@ -249,7 +254,7 @@ def retrieve(req: RetrieveRequest):
     if store.tfidf is not None:
         idxs, sims = rank_with_tfidf(req.query, req.k)
     else:
-        idxs, sims = rank_with_openai(req.query, req.k)
+        idxs, sims = rank_with_gemini(req.query, req.k)
 
     # Use the same order as built in /embed
     chunks_flat = store.chunks_flat
@@ -269,24 +274,25 @@ def retrieve(req: RetrieveRequest):
     return {"query": req.query, "k": req.k, "results": results}
 
 
-async def openai_chat(messages: List[Dict[str, str]]) -> str:
+async def gemini_chat(messages: List[Dict[str, str]]) -> str:
     if not httpx:
         raise RuntimeError("httpx not available")
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY not set")
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    model = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.2,
-    }
+    if not GOOGLE_API_KEY:
+        raise RuntimeError("GOOGLE_API_KEY not set")
+    model = os.getenv("GOOGLE_CHAT_MODEL", "gemini-1.5")
+    # Use Generative Language API: models/{model}:generateText
+    url = f"https://generativelanguage.googleapis.com/v1beta2/models/{model}:generateText?key={GOOGLE_API_KEY}"
+    # Flatten messages into a single prompt
+    prompt = "".join([f"{m.get('role','user')}: {m.get('content','')}\n" for m in messages])
+    payload = {"prompt": {"text": prompt}, "temperature": 0.2}
     async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(url, headers=headers, json=payload)
+        r = await client.post(url, json=payload)
         r.raise_for_status()
         data = r.json()
-        return data["choices"][0]["message"]["content"].strip()
+        # Expect generatedText in response
+        if "candidates" in data:
+            return data["candidates"][0].get("output", "").strip()
+        return data.get("output", "").strip()
 
 
 def simple_extractive_answer(query: str, contexts: List[str]) -> str:
@@ -322,15 +328,15 @@ def generate(req: GenerateRequest):
         {"type": "synthesize", "text": "Synthesize answer grounded in retrieved text."},
     ]
 
-    if USE_OPENAI_COMPLETION:
+    if USE_GEMINI_COMPLETION:
         prompt = [
             {"role": "system", "content": "You are a helpful assistant. Answer using ONLY the provided context. If missing, say you don't know."},
             {"role": "user", "content": f"Query: {req.query}\n\nContext:\n" + "\n---\n".join(contexts)},
         ]
         try:
-            answer = asyncio_run(openai_chat(prompt))
+            answer = asyncio_run(gemini_chat(prompt))
         except Exception as e:
-            answer = f"OpenAI call failed: {e}. Falling back to extractive answer.\n" + simple_extractive_answer(req.query, contexts)
+            answer = f"Gemini call failed: {e}. Falling back to extractive answer.\n" + simple_extractive_answer(req.query, contexts)
     else:
         answer = simple_extractive_answer(req.query, contexts)
 
@@ -340,6 +346,43 @@ def generate(req: GenerateRequest):
         "contexts": results,
         "steps": reasoning_steps,
     }
+
+
+@app.post("/convert")
+async def convert(file: UploadFile = File(...)):
+    try:
+        # Read PDF content
+        reader = PdfReader(file.file)
+        text = "\n".join(page.extract_text() for page in reader.pages)
+
+        # Mocked parsing logic for demonstration
+        # Replace this with actual parsing logic to extract chapters, sections, articles, etc.
+        structured_json = {
+            "law_name": "商標法",
+            "chapters": [
+                {
+                    "chapter": "第1章 總則",
+                    "sections": [
+                        {
+                            "section": "第1節 申請註冊",
+                            "articles": [
+                                {
+                                    "article": "第18條",
+                                    "items": [
+                                        {"item": "1", "content": "商標，指任何具有識別性之標識..."},
+                                        {"item": "2", "content": "前項所稱識別性，指..."}
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+
+        return structured_json
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
 
 
 @app.get("/docs/schema")

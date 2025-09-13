@@ -17,10 +17,26 @@ export default function App() {
   const [retrieval, setRetrieval] = useState<any[] | null>(null)
   const [answer, setAnswer] = useState<string | null>(null)
   const [steps, setSteps] = useState<any[] | null>(null)
+  const [jsonData, setJsonData] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [fileName, setFileName] = useState('')
 
   const canEmbed = useMemo(() => !!docId && !!chunkMeta, [docId, chunkMeta])
   const canRetrieve = useMemo(() => !!embedProvider, [embedProvider])
   const canGenerate = useMemo(() => !!retrieval, [retrieval])
+
+  const handleUpload = async (file: File) => {
+    setLoading(true)
+    try {
+      const response = await api.convert(file)
+      setJsonData(response)
+      setFileName(file.name)
+    } catch (error) {
+      console.error('Error converting file:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
     <div style={{ maxWidth: 960, margin: '0 auto', padding: 24, fontFamily: 'Inter, system-ui, Avenir, Arial' }}>
@@ -111,6 +127,38 @@ export default function App() {
                 <li key={i}><strong>{s.type}:</strong> {s.text}</li>
               ))}
             </ol>
+          </div>
+        )}
+      </Section>
+
+      <Section title="Upload and Convert PDF">
+        {!jsonData ? (
+          <div>
+            <input
+              type="file"
+              accept="application/pdf"
+              onChange={(e) => {
+                const file = e.target.files[0]
+                if (file) handleUpload(file)
+              }}
+            />
+            {loading && <p>Converting PDF to JSON...</p>}
+          </div>
+        ) : (
+          <div>
+            <h2>Converted JSON</h2>
+            <pre style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
+              {JSON.stringify(jsonData, null, 2)}
+            </pre>
+            <a
+              href={`data:text/json;charset=utf-8,${encodeURIComponent(
+                JSON.stringify(jsonData, null, 2)
+              )}`}
+              download={`${fileName.replace(/\.pdf$/, '')}.json`}
+            >
+              Download JSON
+            </a>
+            <button onClick={() => setJsonData(null)}>Upload Another File</button>
           </div>
         )}
       </Section>

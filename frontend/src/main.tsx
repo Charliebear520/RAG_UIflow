@@ -1,10 +1,34 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import App from './App'
+import { createBrowserRouter, RouterProvider } from 'react-router-dom'
+import 'bootstrap/dist/css/bootstrap.min.css'
 import './styles.css'
+import { Layout } from './routes/Layout'
+import { UploadPage } from './routes/UploadPage'
+import { ChunkPage } from './routes/ChunkPage'
+import { EmbedPage } from './routes/EmbedPage'
+import { RetrievePage } from './routes/RetrievePage'
+import { GeneratePage } from './routes/GeneratePage'
+import { RagProvider } from './lib/ragStore'
+
+const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <Layout />,
+    children: [
+      { index: true, element: <UploadPage /> },
+      { path: 'chunk', element: <ChunkPage /> },
+      { path: 'embed', element: <EmbedPage /> },
+      { path: 'retrieve', element: <RetrievePage /> },
+      { path: 'generate', element: <GeneratePage /> },
+    ],
+  },
+])
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <RagProvider>
+      <RouterProvider router={router} />
+    </RagProvider>
   </React.StrictMode>
 )
