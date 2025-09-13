@@ -23,7 +23,8 @@ type RagContextType = {
 
   // actions
   upload: (file: File) => Promise<void>;
-  convert: (file: File) => Promise<void>;
+  convert: (file: File, metadataOptions?: any) => Promise<void>;
+  updateJsonData: (newJsonData: any) => void;
   chunk: (size: number, overlap: number) => Promise<void>;
   embed: () => Promise<void>;
   retrieve: (query: string, k: number) => Promise<void>;
@@ -69,10 +70,10 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function convert(file: File) {
+  async function convert(file: File, metadataOptions?: any) {
     setLoading(true);
     try {
-      const res = await api.convert(file);
+      const res = await api.convert(file, metadataOptions);
       setJsonData(res);
       setFileName(file.name);
     } catch (error) {
@@ -85,6 +86,10 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
+  }
+
+  function updateJsonData(newJsonData: any) {
+    setJsonData(newJsonData);
   }
 
   async function chunk(size: number, overlap: number) {
@@ -136,6 +141,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     canGenerate,
     upload,
     convert,
+    updateJsonData,
     chunk,
     embed,
     retrieve,
