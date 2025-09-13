@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRag } from "../lib/ragStore";
+import { api } from "../lib/api";
 
 // 分塊策略類型定義
 type ChunkStrategy =
@@ -207,6 +208,37 @@ const strategyInfo = {
   },
 };
 
+// 評測相關接口
+interface EvaluationResult {
+  config: {
+    chunk_size: number;
+    overlap: number;
+    overlap_ratio: number;
+  };
+  metrics: {
+    precision_omega: number;
+    precision_at_k: Record<number, number>;
+    recall_at_k: Record<number, number>;
+    chunk_count: number;
+    avg_chunk_length: number;
+    length_variance: number;
+  };
+  test_queries: string[];
+  retrieval_results: Record<string, any[]>;
+  timestamp: string;
+}
+
+interface EvaluationTask {
+  task_id: string;
+  status: string;
+  created_at: string;
+  completed_at?: string;
+  error_message?: string;
+  total_configs: number;
+  completed_configs: number;
+  progress: number;
+}
+
 export function ChunkPage() {
   const nav = useNavigate();
   const { canChunk, chunk, docId, chunkMeta } = useRag();
@@ -241,6 +273,45 @@ export function ChunkPage() {
   });
   const [busy, setBusy] = useState(false);
   const [chunkResults, setChunkResults] = useState<any>(null);
+
+  // 評測相關狀態
+  const [showEvaluation, setShowEvaluation] = useState(false);
+  const [evaluationConfig, setEvaluationConfig] = useState({
+    chunk_sizes: [300, 500, 800],
+    overlap_ratios: [0.0, 0.1, 0.2],
+    test_queries: [
+      "著作權的定義是什麼？",
+      "什麼情況下可以合理使用他人作品？",
+      "侵犯著作權的法律後果是什麼？",
+      "著作權的保護期限是多久？",
+      "如何申請著作權登記？",
+    ],
+    k_values: [1, 3, 5, 10],
+  });
+  const [currentTask, setCurrentTask] = useState<EvaluationTask | null>(null);
+  const [evaluationResults, setEvaluationResults] = useState<
+    EvaluationResult[]
+  >([]);
+  const [evaluationComparison, setEvaluationComparison] = useState<any>(null);
+  const [evaluationLoading, setEvaluationLoading] = useState(false);
+  const [evaluationError, setEvaluationError] = useState<string | null>(null);
+
+  // 問題生成相關狀態
+  const [generatedQuestions, setGeneratedQuestions] = useState<any[]>([]);
+  const [questionLoading, setQuestionLoading] = useState(false);
+  const [numQuestions, setNumQuestions] = useState(10);
+  const [questionTypes, setQuestionTypes] = useState<string[]>([
+    "案例應用",
+    "情境分析",
+    "實務處理",
+    "法律後果",
+    "合規判斷",
+  ]);
+  const [difficultyLevels, setDifficultyLevels] = useState<string[]>([
+    "基礎",
+    "進階",
+    "應用",
+  ]);
 
   const handleParamChange = (
     strategy: ChunkStrategy,
@@ -286,23 +357,256 @@ export function ChunkPage() {
           chunkSize = 500;
       }
 
-      await chunk(chunkSize, currentParams.overlap);
+      // 構建策略特定的參數
+      let strategyParams: any = { strategy: selectedStrategy };
 
-      // 模擬結果數據（後續需要從後端獲取）
+      switch (selectedStrategy) {
+        case "hierarchical":
+          strategyParams.hierarchical_params = {
+            min_chunk_size: (currentParams as ChunkParams["hierarchical"])
+              .min_chunk_size,
+            level_depth: (currentParams as ChunkParams["hierarchical"])
+              .level_depth,
+          };
+          break;
+        case "adaptive":
+          strategyParams.adaptive_params = {
+            tolerance: (currentParams as ChunkParams["adaptive"]).tolerance,
+            semantic_threshold: (currentParams as ChunkParams["adaptive"])
+              .semantic_threshold,
+          };
+          break;
+        case "hybrid":
+          strategyParams.hybrid_params = {
+            secondary_size: (currentParams as ChunkParams["hybrid"])
+              .secondary_size,
+            switch_threshold: (currentParams as ChunkParams["hybrid"])
+              .switch_threshold,
+          };
+          break;
+        case "semantic":
+          strategyParams.semantic_params = {
+            similarity_threshold: (currentParams as ChunkParams["semantic"])
+              .similarity_threshold,
+            context_window: (currentParams as ChunkParams["semantic"])
+              .context_window,
+          };
+          break;
+      }
+
+      const result = await chunk(
+        chunkSize,
+        currentParams.overlap,
+        selectedStrategy,
+        strategyParams
+      );
+
+      // 使用真實的chunking結果
       setChunkResults({
         strategy: selectedStrategy,
         metrics: {
-          chunk_count: chunkMeta?.count || 0,
-          avg_length: 450,
-          length_variance: 0.15,
-          overlap_rate: currentParams.overlap / chunkSize,
+          chunk_count: result.num_chunks,
+          avg_length: result.metrics.avg_length,
+          length_variance: result.metrics.length_variance,
+          overlap_rate: result.metrics.overlap_rate,
+          min_length: result.metrics.min_length,
+          max_length: result.metrics.max_length,
         },
-        chunks: ["示例分塊內容1...", "示例分塊內容2...", "示例分塊內容3..."],
+        chunks: result.sample || [],
+        all_chunks: result.all_chunks || [],
+        full_chunks: result.num_chunks,
+        chunk_size: result.chunk_size,
+        overlap: result.overlap,
       });
     } finally {
       setBusy(false);
     }
   };
+
+  // 評測相關函數
+  const startEvaluation = async () => {
+    if (!docId) {
+      setEvaluationError("請先上傳文檔");
+      return;
+    }
+
+    setEvaluationLoading(true);
+    setEvaluationError(null);
+    setEvaluationResults([]);
+    setEvaluationComparison(null);
+
+    try {
+      const response = await api.startFixedSizeEvaluation({
+        doc_id: docId,
+        ...evaluationConfig,
+      });
+
+      setCurrentTask({
+        task_id: response.task_id,
+        status: "running",
+        created_at: new Date().toISOString(),
+        total_configs: response.total_configs,
+        completed_configs: 0,
+        progress: 0,
+      });
+    } catch (err) {
+      setEvaluationError(`啟動評測失敗: ${err}`);
+    } finally {
+      setEvaluationLoading(false);
+    }
+  };
+
+  const loadEvaluationResults = async (taskId: string) => {
+    try {
+      const [resultsResponse, comparisonResponse] = await Promise.all([
+        api.getEvaluationResults(taskId),
+        api.getEvaluationComparison(taskId),
+      ]);
+
+      setEvaluationResults(resultsResponse.results);
+      setEvaluationComparison(comparisonResponse);
+    } catch (err) {
+      setEvaluationError(`載入結果失敗: ${err}`);
+    }
+  };
+
+  const generateQuestions = async () => {
+    if (!docId) {
+      setEvaluationError("請先上傳文檔");
+      return;
+    }
+
+    setQuestionLoading(true);
+    setEvaluationError(null);
+    setGeneratedQuestions([]);
+
+    try {
+      const response = await api.generateQuestions({
+        doc_id: docId,
+        num_questions: numQuestions,
+        question_types: questionTypes,
+        difficulty_levels: difficultyLevels,
+      });
+
+      if (response.success) {
+        setGeneratedQuestions(response.result.questions);
+        // 將生成的問題添加到測試查詢中
+        const newQueries = response.result.questions.map(
+          (q: any) => q.question
+        );
+        setEvaluationConfig((prev) => ({
+          ...prev,
+          test_queries: [...prev.test_queries, ...newQueries],
+        }));
+      } else {
+        setEvaluationError("問題生成失敗");
+      }
+    } catch (err) {
+      setEvaluationError(`問題生成失敗: ${err}`);
+    } finally {
+      setQuestionLoading(false);
+    }
+  };
+
+  const exportEvaluationReport = () => {
+    if (!evaluationResults.length || !evaluationComparison) return;
+
+    const report = {
+      evaluation_info: {
+        task_id: currentTask?.task_id,
+        doc_id: docId,
+        created_at: currentTask?.created_at,
+        completed_at: currentTask?.completed_at,
+        total_configs: evaluationResults.length,
+      },
+      configuration: evaluationConfig,
+      results: evaluationResults,
+      comparison: evaluationComparison,
+      summary: {
+        best_config: evaluationResults.reduce((best, current) => {
+          const currentScore =
+            (current.metrics.precision_at_k[3] || 0) * 0.3 +
+            (current.metrics.recall_at_k[3] || 0) * 0.3 +
+            (current.metrics.precision_omega || 0) * 0.4;
+          const bestScore =
+            (best.metrics.precision_at_k[3] || 0) * 0.3 +
+            (best.metrics.recall_at_k[3] || 0) * 0.3 +
+            (best.metrics.precision_omega || 0) * 0.4;
+          return currentScore > bestScore ? current : best;
+        }, evaluationResults[0]),
+        recommendations: evaluationComparison.recommendations,
+      },
+    };
+
+    const blob = new Blob([JSON.stringify(report, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `chunk-evaluation-report-${
+      new Date().toISOString().split("T")[0]
+    }.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const exportQuestions = () => {
+    if (!generatedQuestions.length) return;
+
+    const report = {
+      generation_info: {
+        doc_id: docId,
+        num_questions: generatedQuestions.length,
+        question_types: questionTypes,
+        difficulty_levels: difficultyLevels,
+        generated_at: new Date().toISOString(),
+      },
+      questions: generatedQuestions,
+    };
+
+    const blob = new Blob([JSON.stringify(report, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `legal-questions-${
+      new Date().toISOString().split("T")[0]
+    }.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // 輪詢任務狀態
+  useEffect(() => {
+    if (
+      !currentTask ||
+      currentTask.status === "completed" ||
+      currentTask.status === "failed"
+    ) {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await api.getEvaluationStatus(currentTask.task_id);
+        setCurrentTask(status);
+
+        if (status.status === "completed") {
+          await loadEvaluationResults(status.task_id);
+        }
+      } catch (err) {
+        console.error("獲取任務狀態失敗:", err);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [currentTask]);
 
   return (
     <div className="row g-3">
@@ -345,6 +649,31 @@ export function ChunkPage() {
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* 評測功能切換 */}
+            <div className="mb-4">
+              <div className="d-flex justify-content-between align-items-center">
+                <h6 className="mb-0">分割策略評測</h6>
+                <div className="form-check form-switch">
+                  <input
+                    className="form-check-input"
+                    type="checkbox"
+                    id="evaluationSwitch"
+                    checked={showEvaluation}
+                    onChange={(e) => setShowEvaluation(e.target.checked)}
+                  />
+                  <label
+                    className="form-check-label"
+                    htmlFor="evaluationSwitch"
+                  >
+                    啟用評測模式
+                  </label>
+                </div>
+              </div>
+              <small className="text-muted">
+                啟用後可以測試不同chunk size和overlap比例的組合效果
+              </small>
             </div>
 
             {/* 策略描述 */}
@@ -401,23 +730,123 @@ export function ChunkPage() {
               </div>
             </div>
 
-            {/* 執行按鈕 */}
+            {/* 評測配置 */}
+            {showEvaluation && (
+              <div className="mb-4">
+                <h6 className="text-success">評測配置</h6>
+
+                {/* 問題生成 */}
+                <div className="mb-3">
+                  <label className="form-label fw-bold">生成繁體中文問題</label>
+                  <div className="row g-2 mb-2">
+                    <div className="col-6">
+                      <input
+                        type="number"
+                        className="form-control form-control-sm"
+                        placeholder="問題數量"
+                        value={numQuestions}
+                        onChange={(e) =>
+                          setNumQuestions(parseInt(e.target.value) || 10)
+                        }
+                        min="1"
+                        max="50"
+                      />
+                    </div>
+                    <div className="col-6">
+                      <button
+                        className="btn btn-success btn-sm w-100"
+                        onClick={generateQuestions}
+                        disabled={!docId || questionLoading}
+                      >
+                        {questionLoading ? (
+                          <span className="spinner-border spinner-border-sm me-1" />
+                        ) : (
+                          <i className="bi bi-question-circle me-1"></i>
+                        )}
+                        生成問題
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 評測參數 */}
+                <div className="mb-3">
+                  <label className="form-label fw-bold">評測參數</label>
+                  <div className="row g-2">
+                    <div className="col-6">
+                      <input
+                        type="text"
+                        className="form-control form-control-sm"
+                        placeholder="Chunk Sizes (逗號分隔)"
+                        value={evaluationConfig.chunk_sizes.join(",")}
+                        onChange={(e) => {
+                          const sizes = e.target.value
+                            .split(",")
+                            .map((s) => parseInt(s.trim()))
+                            .filter((n) => !isNaN(n));
+                          setEvaluationConfig((prev) => ({
+                            ...prev,
+                            chunk_sizes: sizes,
+                          }));
+                        }}
+                      />
+                    </div>
+                    <div className="col-6">
+                      <input
+                        type="text"
+                        className="form-control form-control-sm"
+                        placeholder="Overlap Ratios (逗號分隔)"
+                        value={evaluationConfig.overlap_ratios.join(",")}
+                        onChange={(e) => {
+                          const ratios = e.target.value
+                            .split(",")
+                            .map((s) => parseFloat(s.trim()))
+                            .filter((n) => !isNaN(n));
+                          setEvaluationConfig((prev) => ({
+                            ...prev,
+                            overlap_ratios: ratios,
+                          }));
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 統一執行按鈕 */}
             <div className="d-grid">
               <button
-                className="btn btn-primary"
-                disabled={!canChunk || busy}
-                onClick={handleRunChunker}
+                className={`btn ${
+                  showEvaluation ? "btn-warning" : "btn-primary"
+                }`}
+                disabled={
+                  !canChunk ||
+                  busy ||
+                  evaluationLoading ||
+                  currentTask?.status === "running"
+                }
+                onClick={showEvaluation ? startEvaluation : handleRunChunker}
               >
-                {busy ? (
+                {busy || evaluationLoading ? (
                   <>
                     <span
                       className="spinner-border spinner-border-sm me-2"
                       role="status"
                     />
-                    執行分塊中...
+                    {showEvaluation ? "啟動評測中..." : "執行分塊中..."}
                   </>
                 ) : (
-                  "Run Chunker"
+                  <>
+                    {showEvaluation ? (
+                      <>
+                        <i className="bi bi-graph-up me-1"></i>
+                        開始評測
+                      </>
+                    ) : (
+                      "Run Chunker"
+                    )}
+                  </>
                 )}
               </button>
             </div>
@@ -493,7 +922,7 @@ export function ChunkPage() {
                         <div className="card-body p-2">
                           <div className="small text-muted">平均長度</div>
                           <div className="fw-bold">
-                            {chunkResults.metrics.avg_length}
+                            {chunkResults.metrics.avg_length} 字符
                           </div>
                         </div>
                       </div>
@@ -521,15 +950,67 @@ export function ChunkPage() {
                         </div>
                       </div>
                     </div>
+                    <div className="col-6">
+                      <div className="card bg-light">
+                        <div className="card-body p-2">
+                          <div className="small text-muted">最小長度</div>
+                          <div className="fw-bold">
+                            {chunkResults.metrics.min_length} 字符
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="col-6">
+                      <div className="card bg-light">
+                        <div className="card-body p-2">
+                          <div className="small text-muted">最大長度</div>
+                          <div className="fw-bold">
+                            {chunkResults.metrics.max_length} 字符
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
                 {/* 分塊內容預覽 */}
                 <div>
-                  <h6>分塊內容預覽</h6>
+                  <div className="d-flex justify-content-between align-items-center mb-2">
+                    <h6>分塊內容預覽</h6>
+                    <div>
+                      <small className="text-muted me-2">
+                        顯示前 {chunkResults.chunks.length} 個分塊，共{" "}
+                        {chunkResults.full_chunks} 個
+                      </small>
+                      {chunkResults.all_chunks &&
+                        chunkResults.all_chunks.length > 3 && (
+                          <button
+                            className="btn btn-outline-primary btn-sm"
+                            onClick={() => {
+                              // 切換顯示所有分塊或只顯示前3個
+                              if (chunkResults.chunks.length === 3) {
+                                setChunkResults((prev: any) => ({
+                                  ...prev,
+                                  chunks: prev.all_chunks || [],
+                                }));
+                              } else {
+                                setChunkResults((prev: any) => ({
+                                  ...prev,
+                                  chunks: prev.all_chunks?.slice(0, 3) || [],
+                                }));
+                              }
+                            }}
+                          >
+                            {chunkResults.chunks.length === 3
+                              ? "顯示全部"
+                              : "顯示前3個"}
+                          </button>
+                        )}
+                    </div>
+                  </div>
                   <div
                     className="border rounded p-3"
-                    style={{ maxHeight: "300px", overflowY: "auto" }}
+                    style={{ maxHeight: "400px", overflowY: "auto" }}
                   >
                     {chunkResults.chunks.map((chunk: string, index: number) => (
                       <div key={index} className="mb-3">
@@ -541,7 +1022,10 @@ export function ChunkPage() {
                             {chunk.length} 字符
                           </small>
                         </div>
-                        <div className="bg-light p-2 rounded small">
+                        <div
+                          className="bg-light p-2 rounded small"
+                          style={{ whiteSpace: "pre-wrap" }}
+                        >
                           {chunk}
                         </div>
                       </div>
@@ -549,6 +1033,456 @@ export function ChunkPage() {
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* 評測結果顯示 */}
+            {showEvaluation && (
+              <>
+                {/* 錯誤顯示 */}
+                {evaluationError && (
+                  <div className="alert alert-danger" role="alert">
+                    {evaluationError}
+                  </div>
+                )}
+
+                {/* 任務狀態 */}
+                {currentTask && (
+                  <div className="card mb-3">
+                    <div className="card-header">
+                      <h6 className="mb-0">評測任務狀態</h6>
+                    </div>
+                    <div className="card-body">
+                      <div className="row g-3">
+                        <div className="col-md-3">
+                          <div className="text-center">
+                            <div
+                              className={`badge bg-${
+                                currentTask.status === "completed"
+                                  ? "success"
+                                  : currentTask.status === "running"
+                                  ? "primary"
+                                  : currentTask.status === "failed"
+                                  ? "danger"
+                                  : "secondary"
+                              } fs-6`}
+                            >
+                              {currentTask.status === "completed"
+                                ? "已完成"
+                                : currentTask.status === "running"
+                                ? "運行中"
+                                : currentTask.status === "failed"
+                                ? "失敗"
+                                : currentTask.status}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="col-md-3">
+                          <div className="text-center">
+                            <div className="small text-muted">進度</div>
+                            <div className="fw-bold">
+                              {currentTask.progress.toFixed(1)}%
+                            </div>
+                          </div>
+                        </div>
+                        <div className="col-md-3">
+                          <div className="text-center">
+                            <div className="small text-muted">已完成配置</div>
+                            <div className="fw-bold">
+                              {currentTask.completed_configs}/
+                              {currentTask.total_configs}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="col-md-3">
+                          <div className="text-center">
+                            <div className="small text-muted">任務ID</div>
+                            <div className="fw-bold small">
+                              {currentTask.task_id.slice(0, 8)}...
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {currentTask.status === "running" && (
+                        <div className="mt-3">
+                          <div className="progress">
+                            <div
+                              className="progress-bar progress-bar-striped progress-bar-animated"
+                              role="progressbar"
+                              style={{ width: `${currentTask.progress}%` }}
+                            >
+                              {currentTask.progress.toFixed(1)}%
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {currentTask.error_message && (
+                        <div className="mt-3">
+                          <div className="alert alert-danger" role="alert">
+                            <strong>錯誤:</strong> {currentTask.error_message}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 評測結果 */}
+                {evaluationResults.length > 0 && (
+                  <div className="card mb-3">
+                    <div className="card-header d-flex justify-content-between align-items-center">
+                      <h6 className="mb-0">評測結果</h6>
+                      <button
+                        className="btn btn-outline-primary btn-sm"
+                        onClick={exportEvaluationReport}
+                      >
+                        <i className="bi bi-download me-1"></i>
+                        導出報告
+                      </button>
+                    </div>
+                    <div className="card-body">
+                      <div className="table-responsive">
+                        <table className="table table-sm table-hover">
+                          <thead>
+                            <tr>
+                              <th>配置</th>
+                              <th>Precision@1</th>
+                              <th>Precision@3</th>
+                              <th>Precision@5</th>
+                              <th>Recall@1</th>
+                              <th>Recall@3</th>
+                              <th>Recall@5</th>
+                              <th>PrecisionΩ</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {evaluationResults.map((result, index) => (
+                              <tr key={index}>
+                                <td>
+                                  <div className="small">
+                                    <div>Size: {result.config.chunk_size}</div>
+                                    <div>
+                                      Overlap:{" "}
+                                      {(
+                                        result.config.overlap_ratio * 100
+                                      ).toFixed(0)}
+                                      %
+                                    </div>
+                                  </div>
+                                </td>
+                                <td>
+                                  <span
+                                    className={`badge ${
+                                      result.metrics.precision_at_k[1] > 0.7
+                                        ? "bg-success"
+                                        : result.metrics.precision_at_k[1] > 0.5
+                                        ? "bg-warning"
+                                        : "bg-danger"
+                                    }`}
+                                  >
+                                    {result.metrics.precision_at_k[1]?.toFixed(
+                                      3
+                                    ) || "0.000"}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span
+                                    className={`badge ${
+                                      result.metrics.precision_at_k[3] > 0.7
+                                        ? "bg-success"
+                                        : result.metrics.precision_at_k[3] > 0.5
+                                        ? "bg-warning"
+                                        : "bg-danger"
+                                    }`}
+                                  >
+                                    {result.metrics.precision_at_k[3]?.toFixed(
+                                      3
+                                    ) || "0.000"}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span
+                                    className={`badge ${
+                                      result.metrics.precision_at_k[5] > 0.7
+                                        ? "bg-success"
+                                        : result.metrics.precision_at_k[5] > 0.5
+                                        ? "bg-warning"
+                                        : "bg-danger"
+                                    }`}
+                                  >
+                                    {result.metrics.precision_at_k[5]?.toFixed(
+                                      3
+                                    ) || "0.000"}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span
+                                    className={`badge ${
+                                      result.metrics.recall_at_k[1] > 0.8
+                                        ? "bg-success"
+                                        : result.metrics.recall_at_k[1] > 0.6
+                                        ? "bg-warning"
+                                        : "bg-danger"
+                                    }`}
+                                  >
+                                    {result.metrics.recall_at_k[1]?.toFixed(
+                                      3
+                                    ) || "0.000"}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span
+                                    className={`badge ${
+                                      result.metrics.recall_at_k[3] > 0.8
+                                        ? "bg-success"
+                                        : result.metrics.recall_at_k[3] > 0.6
+                                        ? "bg-warning"
+                                        : "bg-danger"
+                                    }`}
+                                  >
+                                    {result.metrics.recall_at_k[3]?.toFixed(
+                                      3
+                                    ) || "0.000"}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span
+                                    className={`badge ${
+                                      result.metrics.recall_at_k[5] > 0.8
+                                        ? "bg-success"
+                                        : result.metrics.recall_at_k[5] > 0.6
+                                        ? "bg-warning"
+                                        : "bg-danger"
+                                    }`}
+                                  >
+                                    {result.metrics.recall_at_k[5]?.toFixed(
+                                      3
+                                    ) || "0.000"}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span
+                                    className={`badge ${
+                                      result.metrics.precision_omega > 0.7
+                                        ? "bg-success"
+                                        : result.metrics.precision_omega > 0.5
+                                        ? "bg-warning"
+                                        : "bg-danger"
+                                    }`}
+                                  >
+                                    {result.metrics.precision_omega?.toFixed(
+                                      3
+                                    ) || "0.000"}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 對比分析 */}
+                {evaluationComparison && (
+                  <div className="card mb-3">
+                    <div className="card-header">
+                      <h6 className="mb-0">對比分析與推薦</h6>
+                    </div>
+                    <div className="card-body">
+                      <div className="row g-4">
+                        {/* Chunk Size 分析 */}
+                        <div className="col-md-6">
+                          <h6>分塊大小分析</h6>
+                          <div className="table-responsive">
+                            <table className="table table-sm">
+                              <thead>
+                                <tr>
+                                  <th>Size</th>
+                                  <th>Precision@3</th>
+                                  <th>Recall@3</th>
+                                  <th>PrecisionΩ</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {Object.entries(
+                                  evaluationComparison.chunk_size_analysis
+                                ).map(([size, metrics]: [string, any]) => (
+                                  <tr key={size}>
+                                    <td>{size}</td>
+                                    <td>
+                                      {metrics.precision_at_k?.[3]?.toFixed(
+                                        3
+                                      ) || "0.000"}
+                                    </td>
+                                    <td>
+                                      {metrics.recall_at_k?.[3]?.toFixed(3) ||
+                                        "0.000"}
+                                    </td>
+                                    <td>
+                                      {metrics.precision_omega?.toFixed(3) ||
+                                        "0.000"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Overlap 分析 */}
+                        <div className="col-md-6">
+                          <h6>重疊比例分析</h6>
+                          <div className="table-responsive">
+                            <table className="table table-sm">
+                              <thead>
+                                <tr>
+                                  <th>Ratio</th>
+                                  <th>Precision@3</th>
+                                  <th>Recall@3</th>
+                                  <th>PrecisionΩ</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {Object.entries(
+                                  evaluationComparison.overlap_analysis
+                                ).map(([ratio, metrics]: [string, any]) => (
+                                  <tr key={ratio}>
+                                    <td>
+                                      {(parseFloat(ratio) * 100).toFixed(0)}%
+                                    </td>
+                                    <td>
+                                      {metrics.precision_at_k?.[3]?.toFixed(
+                                        3
+                                      ) || "0.000"}
+                                    </td>
+                                    <td>
+                                      {metrics.recall_at_k?.[3]?.toFixed(3) ||
+                                        "0.000"}
+                                    </td>
+                                    <td>
+                                      {metrics.precision_omega?.toFixed(3) ||
+                                        "0.000"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 推薦 */}
+                      <div className="mt-4">
+                        <h6>推薦配置</h6>
+                        <div className="alert alert-info">
+                          {evaluationComparison.recommendations.map(
+                            (rec: string, index: number) => (
+                              <div key={index}>{rec}</div>
+                            )
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 生成問題結果 */}
+                {generatedQuestions.length > 0 && (
+                  <div className="card">
+                    <div className="card-header d-flex justify-content-between align-items-center">
+                      <h6 className="mb-0">生成的繁體中文問題</h6>
+                      <button
+                        className="btn btn-outline-success btn-sm"
+                        onClick={exportQuestions}
+                      >
+                        <i className="bi bi-download me-1"></i>
+                        導出問題
+                      </button>
+                    </div>
+                    <div className="card-body">
+                      <div className="row g-3">
+                        {generatedQuestions.map((question, index) => (
+                          <div key={index} className="col-12">
+                            <div className="card border-primary">
+                              <div className="card-body">
+                                <div className="d-flex justify-content-between align-items-start mb-2">
+                                  <h6 className="card-title mb-0">
+                                    問題 {index + 1}
+                                  </h6>
+                                  <div>
+                                    <span
+                                      className={`badge bg-${
+                                        question.difficulty === "基礎"
+                                          ? "success"
+                                          : question.difficulty === "進階"
+                                          ? "warning"
+                                          : "danger"
+                                      } me-1`}
+                                    >
+                                      {question.difficulty}
+                                    </span>
+                                    <span className="badge bg-info">
+                                      {question.question_type}
+                                    </span>
+                                  </div>
+                                </div>
+                                <p className="card-text">{question.question}</p>
+
+                                <div className="mt-3">
+                                  <h6 className="small text-muted mb-2">
+                                    相關法規：
+                                  </h6>
+                                  <div className="d-flex flex-wrap gap-1">
+                                    {question.references.map(
+                                      (ref: string, refIndex: number) => (
+                                        <span
+                                          key={refIndex}
+                                          className="badge bg-secondary"
+                                        >
+                                          {ref}
+                                        </span>
+                                      )
+                                    )}
+                                  </div>
+                                </div>
+
+                                {question.keywords.length > 0 && (
+                                  <div className="mt-2">
+                                    <h6 className="small text-muted mb-2">
+                                      關鍵詞：
+                                    </h6>
+                                    <div className="d-flex flex-wrap gap-1">
+                                      {question.keywords.map(
+                                        (keyword: string, kwIndex: number) => (
+                                          <span
+                                            key={kwIndex}
+                                            className="badge bg-light text-dark"
+                                          >
+                                            {keyword}
+                                          </span>
+                                        )
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div className="mt-2">
+                                  <small className="text-muted">
+                                    估算Token數: {question.estimated_tokens}
+                                  </small>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

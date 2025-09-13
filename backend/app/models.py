@@ -1,0 +1,87 @@
+"""
+數據模型定義
+"""
+
+from dataclasses import dataclass
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
+
+
+@dataclass
+class DocRecord:
+    """文檔記錄"""
+    id: str
+    filename: str
+    text: str
+    chunks: List[str]
+    chunk_size: int
+    overlap: int
+    json_data: Optional[Dict[str, Any]] = None
+    structured_chunks: Optional[List[Dict[str, Any]]] = None
+
+
+@dataclass
+class EvaluationTask:
+    """評估任務"""
+    id: str
+    doc_id: str
+    status: str  # "pending", "running", "completed", "failed"
+    progress: float  # 0.0 to 1.0
+    configs: List[Dict[str, Any]]
+    results: List[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+    created_at: str = None
+    completed_at: Optional[str] = None
+
+
+@dataclass
+class EvaluationMetrics:
+    """評估指標"""
+    precision_omega: float
+    precision_at_k: Dict[int, float]
+    recall_at_k: Dict[int, float]
+    chunk_count: int
+    avg_chunk_length: float
+    length_variance: float
+
+
+@dataclass
+class EvaluationResult:
+    """評估結果"""
+    config: Dict[str, Any]
+    metrics: EvaluationMetrics
+
+
+# Pydantic 模型
+class ChunkConfig(BaseModel):
+    """分塊配置"""
+    chunk_size: int = 500
+    overlap_ratio: float = 0.1
+
+
+class EvaluationRequest(BaseModel):
+    """評估請求"""
+    doc_id: str
+    chunk_sizes: List[int] = [300, 500, 800]
+    overlap_ratios: List[float] = [0.0, 0.1, 0.2]
+    question_types: List[str] = ["案例應用", "情境分析", "實務處理", "法律後果", "合規判斷"]
+    num_questions: int = 10
+
+
+class GenerateQuestionsRequest(BaseModel):
+    """生成問題請求"""
+    doc_id: str
+    question_types: List[str] = ["案例應用", "情境分析", "實務處理", "法律後果", "合規判斷"]
+    num_questions: int = 10
+    difficulty_levels: List[str] = ["基礎", "進階", "應用"]
+
+
+class MetadataOptions(BaseModel):
+    """元數據選項"""
+    include_page_numbers: bool = True
+    include_section_headers: bool = True
+    include_footnotes: bool = False
+    include_tables: bool = True
+    include_figures: bool = False
+    preserve_formatting: bool = True
+    extract_metadata: bool = True

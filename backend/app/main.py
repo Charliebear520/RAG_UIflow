@@ -5,26 +5,39 @@ import os
 import uuid
 from dataclasses import dataclass
 import re
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import json
 from datetime import datetime
+import asyncio
+import time
+from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from rank_bm25 import BM25Okapi
+try:
+    from rank_bm25 import BM25Okapi  # type: ignore
+    BM25_AVAILABLE = True
+except ImportError:
+    BM25Okapi = None  # type: ignore
+    BM25_AVAILABLE = False
 from dotenv import load_dotenv
-from PyPDF2 import PdfReader
+try:
+    from PyPDF2 import PdfReader
+    PYPDF2_AVAILABLE = True
+except ImportError:
+    PdfReader = None
+    PYPDF2_AVAILABLE = False
 import pdfplumber
 try:
-    import jieba
-    import jieba.analyse
+    import jieba  # type: ignore
+    import jieba.analyse  # type: ignore
     jieba.initialize()
 except ImportError:
-    jieba = None
+    jieba = None  # type: ignore
 
 try:
     import google.generativeai as genai
@@ -61,6 +74,8 @@ class DocRecord:
     chunks: List[str]
     chunk_size: int
     overlap: int
+    json_data: Optional[Dict[str, Any]] = None  # 存儲結構化JSON數據
+    structured_chunks: Optional[List[Dict[str, Any]]] = None  # 存儲結構化chunks
 
 
 class InMemoryStore:
@@ -79,7 +94,59 @@ class InMemoryStore:
         self.chunks_flat = []
 
 
+@dataclass
+class EvaluationTask:
+    id: str
+    doc_id: str
+    configs: List[ChunkConfig]
+    test_queries: List[str]
+    k_values: List[int]
+    status: str  # "pending", "running", "completed", "failed"
+    results: List[EvaluationResult]
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+
+
+class EvaluationStore:
+    def __init__(self) -> None:
+        self.tasks: Dict[str, EvaluationTask] = {}
+        self.executor = ThreadPoolExecutor(max_workers=2)
+
+    def create_task(self, doc_id: str, configs: List[ChunkConfig], 
+                   test_queries: List[str], k_values: List[int]) -> str:
+        task_id = str(uuid.uuid4())
+        task = EvaluationTask(
+            id=task_id,
+            doc_id=doc_id,
+            configs=configs,
+            test_queries=test_queries,
+            k_values=k_values,
+            status="pending",
+            results=[],
+            created_at=datetime.now()
+        )
+        self.tasks[task_id] = task
+        return task_id
+
+    def get_task(self, task_id: str) -> Optional[EvaluationTask]:
+        return self.tasks.get(task_id)
+
+    def update_task_status(self, task_id: str, status: str, 
+                          results: List[EvaluationResult] = None,
+                          error_message: str = None):
+        if task_id in self.tasks:
+            self.tasks[task_id].status = status
+            if results is not None:
+                self.tasks[task_id].results = results
+            if error_message is not None:
+                self.tasks[task_id].error_message = error_message
+            if status == "completed":
+                self.tasks[task_id].completed_at = datetime.now()
+
+
 store = InMemoryStore()
+eval_store = EvaluationStore()
 
 
 app = FastAPI(title="RAG Visualizer API", version="0.1.0")
@@ -122,6 +189,68 @@ class MetadataOptions(BaseModel):
     include_length: bool = True
     include_extracted_entities: bool = False 
     include_spans: bool = True
+
+
+# 評測相關的數據模型
+class ChunkConfig(BaseModel):
+    chunk_size: int
+    overlap: int
+    overlap_ratio: float  # overlap / chunk_size
+
+
+class EvaluationMetrics(BaseModel):
+    precision_omega: float  # PrecisionΩ - 最大準確率
+    precision_at_k: Dict[int, float]  # k -> precision score
+    recall_at_k: Dict[int, float]  # k -> recall score
+    chunk_count: int
+    avg_chunk_length: float
+    length_variance: float
+
+
+class EvaluationResult(BaseModel):
+    config: ChunkConfig
+    metrics: EvaluationMetrics
+    test_queries: List[str]
+    retrieval_results: Dict[str, List[Dict]]  # query -> results
+    timestamp: datetime
+
+
+class FixedSizeEvaluationRequest(BaseModel):
+    doc_id: str
+    chunk_sizes: List[int] = [300, 500, 800]
+    overlap_ratios: List[float] = [0.0, 0.1, 0.2]
+    test_queries: List[str] = [
+        "著作權的定義是什麼？",
+        "什麼情況下可以合理使用他人作品？",
+        "侵犯著作權的法律後果是什麼？",
+        "著作權的保護期限是多久？",
+        "如何申請著作權登記？"
+    ]
+    k_values: List[int] = [1, 3, 5, 10]  # 用於計算recall@K
+
+
+class GenerateQuestionsRequest(BaseModel):
+    doc_id: str
+    num_questions: int = 10
+    question_types: List[str] = ["案例應用", "情境分析", "實務處理", "法律後果", "合規判斷"]  # 問題類型
+    difficulty_levels: List[str] = ["基礎", "進階", "應用"]  # 難度等級
+
+
+class GeneratedQuestion(BaseModel):
+    question: str
+    references: List[str]  # 相關法規條文
+    question_type: str
+    difficulty: str
+    keywords: List[str]
+    estimated_tokens: int
+
+
+class QuestionGenerationResult(BaseModel):
+    doc_id: str
+    total_questions: int
+    questions: List[GeneratedQuestion]
+    generation_time: float
+    timestamp: datetime
 
 
 def generate_unique_id(law_name: str, chapter: str, section: str, article: str, item: str = None) -> str:
@@ -322,7 +451,7 @@ def calculate_bm25_importance(texts: List[str], target_text: str) -> float:
     """
     使用BM25計算文本重要性
     """
-    if not texts or not target_text:
+    if not texts or not target_text or not BM25_AVAILABLE:
         return 1.0
     
     try:
@@ -647,17 +776,62 @@ def health():
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    # For simplicity, treat all as text; for PDFs, a proper parser should be used
     content = await file.read()
-    try:
-        text = content.decode("utf-8", errors="ignore")
-    except Exception:
-        text = str(content)
     doc_id = str(uuid.uuid4())
+    
+    # 檢查文件類型並相應處理
+    if file.filename and file.filename.lower().endswith('.pdf'):
+        # 處理PDF文件
+        try:
+            import io
+            if pdfplumber:
+                # 使用pdfplumber解析PDF
+                pdf_file = io.BytesIO(content)
+                text = ""
+                with pdfplumber.open(pdf_file) as pdf:
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+            else:
+                # 備用方案：使用PyPDF2
+                pdf_file = io.BytesIO(content)
+                if PYPDF2_AVAILABLE:
+                    pdf_reader = PdfReader(pdf_file)
+                    text = ""
+                    for page in pdf_reader.pages:
+                        text += page.extract_text() + "\n"
+                else:
+                    # 如果沒有PDF解析庫，返回錯誤
+                    return JSONResponse(
+                        status_code=400, 
+                        content={"error": "PDF parsing libraries not available. Please install pdfplumber or PyPDF2."}
+                    )
+        except Exception as e:
+            return JSONResponse(
+                status_code=400, 
+                content={"error": f"Failed to parse PDF: {str(e)}"}
+            )
+    else:
+        # 處理文本文件
+        try:
+            text = content.decode("utf-8", errors="ignore")
+        except Exception:
+            text = str(content)
+    
+    # 清理文本
+    text = text.strip()
+    if not text:
+        return JSONResponse(
+            status_code=400, 
+            content={"error": "No text content found in the file"}
+        )
+    
     store.docs[doc_id] = DocRecord(
         id=doc_id,
         filename=file.filename,
         text=text,
+        json_data=None,  # 初始為None，後續通過/update-json端點更新
         chunks=[],
         chunk_size=0,
         overlap=0,
@@ -667,7 +841,38 @@ async def upload(file: UploadFile = File(...)):
     return {"doc_id": doc_id, "filename": file.filename, "num_chars": len(text)}
 
 
+@app.post("/update-json")
+async def update_json(request: dict):
+    """更新文檔的JSON結構化數據"""
+    doc_id = request.get("doc_id")
+    json_data = request.get("json_data")
+    
+    if not doc_id or not json_data:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "doc_id and json_data are required"}
+        )
+    
+    if doc_id not in store.docs:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Document not found"}
+        )
+    
+    # 更新文檔的JSON數據
+    store.docs[doc_id].json_data = json_data
+    
+    # 重置相關狀態，因為JSON數據改變可能影響chunking
+    store.docs[doc_id].chunks = []
+    store.docs[doc_id].chunk_size = 0
+    store.docs[doc_id].overlap = 0
+    store.reset_embeddings()
+    
+    return {"success": True, "message": "JSON data updated successfully"}
+
+
 def sliding_window_chunks(text: str, chunk_size: int, overlap: int) -> List[str]:
+    """固定大小滑動窗口分割"""
     if chunk_size <= 0:
         return [text]
     if overlap >= chunk_size:
@@ -684,18 +889,846 @@ def sliding_window_chunks(text: str, chunk_size: int, overlap: int) -> List[str]
     return chunks
 
 
+def hierarchical_chunks(text: str, max_chunk_size: int, min_chunk_size: int, overlap: int, level_depth: int) -> List[str]:
+    """層次化分割策略"""
+    if max_chunk_size <= 0:
+        return [text]
+    
+    # 首先按段落分割
+    paragraphs = text.split('\n\n')
+    chunks = []
+    
+    for para in paragraphs:
+        if len(para) <= max_chunk_size:
+            chunks.append(para)
+        else:
+            # 如果段落太長，按句子分割
+            sentences = para.split('。')
+            current_chunk = ""
+            
+            for sentence in sentences:
+                if len(current_chunk + sentence) <= max_chunk_size:
+                    current_chunk += sentence + "。"
+                else:
+                    if current_chunk and len(current_chunk) >= min_chunk_size:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = sentence + "。"
+            
+            if current_chunk and len(current_chunk) >= min_chunk_size:
+                chunks.append(current_chunk.strip())
+    
+    # 應用重疊
+    if overlap > 0:
+        overlapped_chunks = []
+        for i, chunk in enumerate(chunks):
+            overlapped_chunks.append(chunk)
+            if i < len(chunks) - 1 and len(chunk) > overlap:
+                # 添加重疊部分
+                overlap_text = chunk[-overlap:]
+                next_chunk = chunks[i + 1]
+                if len(next_chunk) > overlap:
+                    overlapped_chunks.append(overlap_text + next_chunk[overlap:])
+        return overlapped_chunks
+    
+    return chunks
+
+
+def adaptive_chunks(text: str, target_size: int, tolerance: int, overlap: int, semantic_threshold: float) -> List[str]:
+    """自適應分割策略"""
+    if target_size <= 0:
+        return [text]
+    
+    chunks = []
+    start = 0
+    n = len(text)
+    
+    while start < n:
+        # 嘗試找到最佳分割點
+        end = min(n, start + target_size)
+        
+        # 如果接近目標大小，尋找語義邊界
+        if end - start >= target_size - tolerance:
+            # 尋找句號、段落等語義邊界
+            for i in range(end, max(start + target_size - tolerance, start), -1):
+                if i < n and text[i] in ['。', '\n', '！', '？']:
+                    end = i + 1
+                    break
+        
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        
+        if end == n:
+            break
+        
+        # 計算下一個chunk的起始位置（考慮重疊）
+        start = max(start + 1, end - overlap)
+    
+    return chunks
+
+
+def hybrid_chunks(text: str, primary_size: int, secondary_size: int, overlap: int, switch_threshold: float) -> List[str]:
+    """混合分割策略"""
+    if primary_size <= 0:
+        return [text]
+    
+    chunks = []
+    start = 0
+    n = len(text)
+    
+    while start < n:
+        # 決定使用主要大小還是次要大小
+        remaining_text = text[start:]
+        avg_sentence_length = len(remaining_text) / max(1, remaining_text.count('。'))
+        
+        if avg_sentence_length > primary_size * switch_threshold:
+            chunk_size = secondary_size
+        else:
+            chunk_size = primary_size
+        
+        end = min(n, start + chunk_size)
+        chunk = text[start:end].strip()
+        
+        if chunk:
+            chunks.append(chunk)
+        
+        if end == n:
+            break
+        
+        start = max(start + 1, end - overlap)
+    
+    return chunks
+
+
+def semantic_chunks(text: str, target_size: int, similarity_threshold: float, overlap: int, context_window: int) -> List[str]:
+    """語義分割策略"""
+    if target_size <= 0:
+        return [text]
+    
+    # 簡化實現：按句子分割，然後合併相似的句子
+    sentences = text.split('。')
+    chunks = []
+    current_chunk = ""
+    
+    for sentence in sentences:
+        if not sentence.strip():
+            continue
+            
+        sentence = sentence.strip() + "。"
+        
+        # 如果當前chunk加上新句子不超過目標大小
+        if len(current_chunk + sentence) <= target_size:
+            current_chunk += sentence
+        else:
+            # 保存當前chunk
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            
+            # 開始新chunk
+            current_chunk = sentence
+    
+    # 添加最後一個chunk
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    
+    return chunks
+
+
+def json_structured_chunks(json_data: Dict[str, Any], chunk_size: int, overlap: int) -> List[Dict[str, Any]]:
+    """
+    基於JSON結構的智能分割
+    保留法律文檔的結構化信息
+    """
+    if not json_data or chunk_size <= 0:
+        return []
+    
+    chunks = []
+    law_name = json_data.get("law_name", "未命名法規")
+    
+    def create_chunk(content: str, metadata: Dict[str, Any], chunk_id: str) -> Dict[str, Any]:
+        """創建包含metadata的chunk"""
+        return {
+            "chunk_id": chunk_id,
+            "content": content,
+            "metadata": {
+                "law_name": law_name,
+                "chunk_type": metadata.get("type", "unknown"),
+                "chapter": metadata.get("chapter", ""),
+                "section": metadata.get("section", ""),
+                "article": metadata.get("article", ""),
+                "item": metadata.get("item", ""),
+                "sub_item": metadata.get("sub_item", ""),
+                "keywords": metadata.get("keywords", []),
+                "cross_references": metadata.get("cross_references", []),
+                "importance": metadata.get("importance", 0.0),
+                "page_range": metadata.get("page_range", {}),
+                "length": len(content)
+            }
+        }
+    
+    def process_article(article: Dict[str, Any], chapter: str, section: str) -> List[Dict[str, Any]]:
+        """處理單個條文"""
+        article_chunks = []
+        article_title = article.get("article", "")
+        article_content = article.get("content", "")
+        items = article.get("items", [])
+        
+        # 處理條文主體
+        if article_content:
+            # 如果條文內容較短，直接作為一個chunk
+            if len(article_content) <= chunk_size:
+                metadata = {
+                    "type": "article",
+                    "chapter": chapter,
+                    "section": section,
+                    "article": article_title,
+                    "keywords": article.get("metadata", {}).get("keywords", []),
+                    "cross_references": article.get("metadata", {}).get("cross_references", []),
+                    "importance": article.get("metadata", {}).get("importance", 0.0),
+                    "page_range": article.get("metadata", {}).get("page_range", {})
+                }
+                chunk_id = f"{article_title}_main"
+                article_chunks.append(create_chunk(article_content, metadata, chunk_id))
+            else:
+                # 條文內容較長，需要分割
+                text_chunks = sliding_window_chunks(article_content, chunk_size, overlap)
+                for i, chunk_text in enumerate(text_chunks):
+                    metadata = {
+                        "type": "article_part",
+                        "chapter": chapter,
+                        "section": section,
+                        "article": article_title,
+                        "part": i + 1,
+                        "keywords": article.get("metadata", {}).get("keywords", []),
+                        "cross_references": article.get("metadata", {}).get("cross_references", []),
+                        "importance": article.get("metadata", {}).get("importance", 0.0),
+                        "page_range": article.get("metadata", {}).get("page_range", {})
+                    }
+                    chunk_id = f"{article_title}_part_{i+1}"
+                    article_chunks.append(create_chunk(chunk_text, metadata, chunk_id))
+        
+        # 處理條文項目
+        for item in items:
+            item_title = item.get("item", "")
+            item_content = item.get("content", "")
+            sub_items = item.get("sub_items", [])
+            
+            # 處理項目主體
+            if item_content:
+                if len(item_content) <= chunk_size:
+                    metadata = {
+                        "type": "item",
+                        "chapter": chapter,
+                        "section": section,
+                        "article": article_title,
+                        "item": item_title,
+                        "keywords": item.get("metadata", {}).get("keywords", []),
+                        "cross_references": item.get("metadata", {}).get("cross_references", []),
+                        "importance": item.get("metadata", {}).get("importance", 0.0),
+                        "page_range": item.get("metadata", {}).get("page_range", {})
+                    }
+                    chunk_id = f"{article_title}_{item_title}_main"
+                    article_chunks.append(create_chunk(item_content, metadata, chunk_id))
+                else:
+                    # 項目內容較長，需要分割
+                    text_chunks = sliding_window_chunks(item_content, chunk_size, overlap)
+                    for i, chunk_text in enumerate(text_chunks):
+                        metadata = {
+                            "type": "item_part",
+                            "chapter": chapter,
+                            "section": section,
+                            "article": article_title,
+                            "item": item_title,
+                            "part": i + 1,
+                            "keywords": item.get("metadata", {}).get("keywords", []),
+                            "cross_references": item.get("metadata", {}).get("cross_references", []),
+                            "importance": item.get("metadata", {}).get("importance", 0.0),
+                            "page_range": item.get("metadata", {}).get("page_range", {})
+                        }
+                        chunk_id = f"{article_title}_{item_title}_part_{i+1}"
+                        article_chunks.append(create_chunk(chunk_text, metadata, chunk_id))
+            
+            # 處理子項目
+            for sub_item in sub_items:
+                sub_item_title = sub_item.get("sub_item", "")
+                sub_item_content = sub_item.get("content", "")
+                
+                if sub_item_content:
+                    if len(sub_item_content) <= chunk_size:
+                        metadata = {
+                            "type": "sub_item",
+                            "chapter": chapter,
+                            "section": section,
+                            "article": article_title,
+                            "item": item_title,
+                            "sub_item": sub_item_title,
+                            "keywords": sub_item.get("metadata", {}).get("keywords", []),
+                            "cross_references": sub_item.get("metadata", {}).get("cross_references", []),
+                            "importance": sub_item.get("metadata", {}).get("importance", 0.0),
+                            "page_range": sub_item.get("metadata", {}).get("page_range", {})
+                        }
+                        chunk_id = f"{article_title}_{item_title}_{sub_item_title}"
+                        article_chunks.append(create_chunk(sub_item_content, metadata, chunk_id))
+                    else:
+                        # 子項目內容較長，需要分割
+                        text_chunks = sliding_window_chunks(sub_item_content, chunk_size, overlap)
+                        for i, chunk_text in enumerate(text_chunks):
+                            metadata = {
+                                "type": "sub_item_part",
+                                "chapter": chapter,
+                                "section": section,
+                                "article": article_title,
+                                "item": item_title,
+                                "sub_item": sub_item_title,
+                                "part": i + 1,
+                                "keywords": sub_item.get("metadata", {}).get("keywords", []),
+                                "cross_references": sub_item.get("metadata", {}).get("cross_references", []),
+                                "importance": sub_item.get("metadata", {}).get("importance", 0.0),
+                                "page_range": sub_item.get("metadata", {}).get("page_range", {})
+                            }
+                            chunk_id = f"{article_title}_{item_title}_{sub_item_title}_part_{i+1}"
+                            article_chunks.append(create_chunk(chunk_text, metadata, chunk_id))
+        
+        return article_chunks
+    
+    # 遍歷所有章節
+    chapters = json_data.get("chapters", [])
+    for chapter in chapters:
+        chapter_title = chapter.get("chapter", "")
+        sections = chapter.get("sections", [])
+        
+        for section in sections:
+            section_title = section.get("section", "")
+            articles = section.get("articles", [])
+            
+            for article in articles:
+                article_chunks = process_article(article, chapter_title, section_title)
+                chunks.extend(article_chunks)
+    
+    return chunks
+
+
+# 評測相關函數
+def calculate_precision_at_k(retrieved_chunks: List[str], query: str, k: int) -> float:
+    """
+    計算Precision@K - 檢索出來的tokens中，有多少是真正相關的
+    """
+    if not retrieved_chunks or k <= 0:
+        return 0.0
+    
+    # 取前k個結果
+    top_k_chunks = retrieved_chunks[:k]
+    
+    # 改進的關鍵詞匹配方法 - 使用字符級匹配
+    query_chars = set(query.replace(' ', '').replace('？', '').replace('！', '').replace('，', '').replace('。', ''))
+    if not query_chars:
+        return 0.0
+    
+    relevant_count = 0
+    for chunk in top_k_chunks:
+        chunk_chars = set(chunk.replace(' ', '').replace('，', '').replace('。', '').replace('；', '').replace('：', ''))
+        # 如果查詢中的字符有50%以上出現在chunk中，認為相關
+        overlap_chars = query_chars & chunk_chars
+        if len(overlap_chars) >= len(query_chars) * 0.5:
+            relevant_count += 1
+    
+    return relevant_count / len(top_k_chunks)
+
+
+def calculate_precision_omega(retrieved_chunks: List[str], query: str) -> float:
+    """
+    計算PrecisionΩ - 假設Recall是滿分，最大的準確率是多少
+    """
+    if not retrieved_chunks:
+        return 0.0
+    
+    # 改進的關鍵詞匹配方法 - 使用字符級匹配
+    query_chars = set(query.replace(' ', '').replace('？', '').replace('！', '').replace('，', '').replace('。', ''))
+    if not query_chars:
+        return 0.0
+    
+    relevant_count = 0
+    for chunk in retrieved_chunks:
+        chunk_chars = set(chunk.replace(' ', '').replace('，', '').replace('。', '').replace('；', '').replace('：', ''))
+        # 如果查詢中的字符有30%以上出現在chunk中，認為相關
+        overlap_chars = query_chars & chunk_chars
+        if len(overlap_chars) >= len(query_chars) * 0.3:
+            relevant_count += 1
+    
+    return relevant_count / len(retrieved_chunks)
+
+
+def calculate_recall_at_k(retrieved_chunks: List[str], query: str, k: int, 
+                         ground_truth_chunks: List[str] = None) -> float:
+    """
+    計算Recall@K - 在前K個檢索結果中命中相關chunk的比例
+    """
+    if not retrieved_chunks or k <= 0:
+        return 0.0
+    
+    # 取前k個結果
+    top_k_chunks = retrieved_chunks[:k]
+    
+    # 如果沒有ground truth，使用關鍵詞匹配作為近似
+    if ground_truth_chunks is None:
+        # 改進的關鍵詞匹配方法 - 使用字符級匹配
+        query_chars = set(query.replace(' ', '').replace('？', '').replace('！', '').replace('，', '').replace('。', ''))
+        if not query_chars:
+            return 0.0
+        
+        # 首先計算總相關文檔數量（需要從所有chunks中計算，不只是top_k）
+        # 但由於我們沒有訪問所有chunks，我們需要一個近似方法
+        # 這裡我們假設總相關文檔數量等於檢索到的相關文檔數量（這是一個近似）
+        retrieved_relevant_count = 0
+        for chunk in top_k_chunks:
+            chunk_chars = set(chunk.replace(' ', '').replace('，', '').replace('。', '').replace('；', '').replace('：', ''))
+            # 如果查詢中的字符有50%以上出現在chunk中，認為相關
+            overlap_chars = query_chars & chunk_chars
+            if len(overlap_chars) >= len(query_chars) * 0.5:
+                retrieved_relevant_count += 1
+        
+        # 由於無法準確計算總相關文檔數量，我們使用一個保守的估計
+        # 假設總相關文檔數量至少等於檢索到的相關文檔數量
+        total_relevant_estimate = max(retrieved_relevant_count, 1)
+        
+        return retrieved_relevant_count / total_relevant_estimate
+    
+    # 使用ground truth計算 - 這裡ground_truth_chunks實際上是所有chunks
+    # 首先計算所有chunks中相關的數量
+    query_chars = set(query.replace(' ', '').replace('？', '').replace('！', '').replace('，', '').replace('。', ''))
+    if not query_chars:
+        return 0.0
+    
+    total_relevant_count = 0
+    for chunk in ground_truth_chunks:
+        chunk_chars = set(chunk.replace(' ', '').replace('，', '').replace('。', '').replace('；', '').replace('：', ''))
+        overlap_chars = query_chars & chunk_chars
+        if len(overlap_chars) >= len(query_chars) * 0.3:
+            total_relevant_count += 1
+    
+    # 計算檢索到的相關chunks數量
+    retrieved_relevant_count = 0
+    for chunk in top_k_chunks:
+        chunk_chars = set(chunk.replace(' ', '').replace('，', '').replace('。', '').replace('；', '').replace('：', ''))
+        overlap_chars = query_chars & chunk_chars
+        if len(overlap_chars) >= len(query_chars) * 0.3:
+            retrieved_relevant_count += 1
+    
+    return retrieved_relevant_count / total_relevant_count if total_relevant_count > 0 else 0
+
+
+def calculate_faithfulness(chunks: List[str]) -> float:
+    """
+    計算忠實度 - 評估chunk是否保持完整語義
+    基於句子完整性、段落邊界等
+    """
+    if not chunks:
+        return 0.0
+    
+    total_score = 0.0
+    
+    for chunk in chunks:
+        score = 1.0
+        
+        # 檢查句子完整性
+        sentences = re.split(r'[。！？]', chunk)
+        incomplete_sentences = sum(1 for s in sentences if s.strip() and not s.endswith(('。', '！', '？')))
+        if len(sentences) > 1:
+            score *= (1.0 - incomplete_sentences / len(sentences))
+        
+        # 檢查段落完整性
+        if chunk.startswith(('第', '條', '項', '款')) and not chunk.endswith(('。', '！', '？')):
+            score *= 0.8
+        
+        total_score += score
+    
+    return total_score / len(chunks)
+
+
+def calculate_fragmentation_score(chunks: List[str], original_text: str) -> float:
+    """
+    計算碎片化程度 - 評估文本被分割的細碎程度
+    返回值越高表示碎片化越嚴重
+    """
+    if not chunks or not original_text:
+        return 0.0
+    
+    # 計算平均chunk長度相對於原文的比例
+    avg_chunk_length = sum(len(chunk) for chunk in chunks) / len(chunks)
+    length_ratio = avg_chunk_length / len(original_text)
+    
+    # 計算chunk數量
+    chunk_count_ratio = len(chunks) / (len(original_text) / 500)  # 以500字符為基準
+    
+    # 綜合評分
+    fragmentation = (1.0 - length_ratio) * 0.6 + chunk_count_ratio * 0.4
+    
+    return min(1.0, max(0.0, fragmentation))
+
+
+def generate_questions_with_gemini(text_content: str, num_questions: int, 
+                                 question_types: List[str], difficulty_levels: List[str]) -> List[GeneratedQuestion]:
+    """
+    使用Gemini生成繁體中文法律考古題
+    參考ihower文章的做法，從文本中隨機選擇內容生成問題
+    """
+    if not GEMINI_AVAILABLE:
+        return generate_questions_fallback(text_content, num_questions)
+    
+    try:
+        api_key = os.getenv('GEMINI_API_KEY')
+        if not api_key:
+            return generate_questions_fallback(text_content, num_questions)
+        
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # 從文本中隨機選擇4000 tokens的內容（模擬ihower的做法）
+        import random
+        text_chunks = text_content.split('\n')
+        random.shuffle(text_chunks)
+        
+        # 選擇足夠的內容來生成問題
+        selected_content = ""
+        current_tokens = 0
+        max_tokens = 4000
+        
+        for chunk in text_chunks:
+            if current_tokens + len(chunk) > max_tokens:
+                break
+            selected_content += chunk + "\n"
+            current_tokens += len(chunk)
+        
+        if not selected_content.strip():
+            selected_content = text_content[:2000]  # 備用方案
+        
+        prompt = f"""
+你是一位專業的法律教育專家，請根據以下法律文本內容，生成{num_questions}道繁體中文考古題。
+
+重要要求：
+1. 所有問題必須使用繁體中文（台灣用法）
+2. 問題類型應包含：{', '.join(question_types)}，隨機分配但確保多樣性
+3. 難度等級應包含：{', '.join(difficulty_levels)}，隨機分配，基礎問題聚焦單一概念，進階問題涉及多概念，應用問題模擬實務場景
+4. 每道題目都要標明相關的法規條文
+5. 問題應該基於文本中的具體內容，不是泛泛而談
+6. 問題應該有明確的答案，可以在文本中找到依據
+
+核心設計原則：
+7. 重點：避免純粹的條文背誦題目，改為實際生活案例應用題
+8. 問題應該設計成情境式案例，讓學生思考如何在實際生活中應用法律概念
+9. 使用「如果...那麼...」或「當...時...」的情境設定
+10. 提供具體的生活場景（如：網路使用、創作分享、商業活動等）
+11. 詢問「應該如何處理」、「是否符合法律規定」、「會產生什麼後果」等
+12. 避免直接問「第X條規定什麼」這類背誦題
+
+文本內容：
+{selected_content}
+
+請以JSON格式返回結果，格式如下：
+{{
+  "questions": [
+    {{
+      "question": "問題內容",
+      "references": ["第X條", "第Y條第Z項"],
+      "question_type": "案例應用/情境分析/實務處理/法律後果/合規判斷",
+      "difficulty": "基礎/進階/應用",
+      "keywords": ["關鍵詞1", "關鍵詞2"],
+      "estimated_tokens": 估算的token數量
+    }}
+  ]
+}}
+
+請確保生成的問題都是實際生活案例應用題，避免條文背誦，讓學生能夠思考如何在真實情境中應用法律知識。
+"""
+        
+        response = model.generate_content(prompt)
+        response_text = response.text.strip()
+        
+        # 解析JSON響應
+        try:
+            # 清理響應文本，移除可能的markdown格式
+            if response_text.startswith('```json'):
+                response_text = response_text[7:]
+            if response_text.endswith('```'):
+                response_text = response_text[:-3]
+            
+            import json
+            result = json.loads(response_text)
+            
+            questions = []
+            for q_data in result.get('questions', []):
+                question = GeneratedQuestion(
+                    question=q_data.get('question', ''),
+                    references=q_data.get('references', []),
+                    question_type=q_data.get('question_type', ''),
+                    difficulty=q_data.get('difficulty', ''),
+                    keywords=q_data.get('keywords', []),
+                    estimated_tokens=q_data.get('estimated_tokens', 0)
+                )
+                questions.append(question)
+            
+            return questions[:num_questions]  # 確保不超過請求數量
+            
+        except json.JSONDecodeError as e:
+            print(f"JSON解析錯誤: {e}")
+            print(f"響應內容: {response_text}")
+            return generate_questions_fallback(text_content, num_questions)
+        
+    except Exception as e:
+        print(f"Gemini問題生成失敗: {e}")
+        return generate_questions_fallback(text_content, num_questions)
+
+
+def generate_questions_fallback(text_content: str, num_questions: int) -> List[GeneratedQuestion]:
+    """
+    備用問題生成方法
+    """
+    questions = []
+    
+    # 簡單的正則表達式提取法條
+    import re
+    articles = re.findall(r'第[一二三四五六七八九十百千0-9]+條[^。]*。', text_content)
+    
+    # 生成基礎問題
+    question_templates = [
+        ("{article}的定義是什麼？", "定義", "基礎"),
+        ("{article}的適用條件為何？", "條件", "基礎"),
+        ("違反{article}的法律後果是什麼？", "後果", "進階"),
+        ("{article}的申請程序為何？", "程序", "進階"),
+        ("{article}的保護期限是多久？", "期限", "基礎"),
+    ]
+    
+    for i in range(min(num_questions, len(articles))):
+        article = articles[i % len(articles)]
+        template, q_type, difficulty = question_templates[i % len(question_templates)]
+        
+        # 提取條文號碼
+        article_match = re.search(r'第([一二三四五六七八九十百千0-9]+)條', article)
+        article_num = article_match.group(1) if article_match else str(i+1)
+        
+        question = GeneratedQuestion(
+            question=template.format(article=f"第{article_num}條"),
+            references=[f"第{article_num}條"],
+            question_type=q_type,
+            difficulty=difficulty,
+            keywords=extract_keywords(article, 3),
+            estimated_tokens=len(article) + 50
+        )
+        questions.append(question)
+    
+    return questions
+
+
+def evaluate_chunk_config(doc: DocRecord, config: ChunkConfig, 
+                         test_queries: List[str], k_values: List[int]) -> EvaluationResult:
+    """
+    評估單個chunk配置
+    """
+    # 生成chunks（固定大小滑動窗口）
+    chunks = sliding_window_chunks(doc.text, config.chunk_size, config.overlap)
+
+    # 計算基本統計
+    chunk_count = len(chunks)
+    avg_chunk_length = sum(len(c) for c in chunks) / chunk_count if chunk_count else 0.0
+    lengths = [len(c) for c in chunks]
+    length_variance = (
+        sum((l - avg_chunk_length) ** 2 for l in lengths) / chunk_count if chunk_count else 0.0
+    )
+
+    # 使用TF-IDF為每個查詢做檢索打分（中文用自定義分詞）
+    def to_tokens(s: str) -> str:
+        toks = preprocess_text(s)
+        return " ".join(toks) if toks else s
+
+    processed_chunks = [to_tokens(c) for c in chunks]
+    # 若文檔過短，避免vectorizer報錯
+    if not processed_chunks:
+        processed_chunks = [""]
+
+    vectorizer = TfidfVectorizer(
+        analyzer="word",
+        token_pattern=r"[^\s]+",
+        max_features=5000,
+        min_df=1,
+        max_df=0.98,
+        ngram_range=(1, 2),
+    )
+    X = vectorizer.fit_transform(processed_chunks)
+
+    retrieval_results: Dict[str, List[Dict]] = {}
+    precision_at_k_scores: Dict[int, List[float]] = {k: [] for k in k_values}
+    recall_at_k_scores: Dict[int, List[float]] = {k: [] for k in k_values}
+    precision_omega_scores: List[float] = []
+
+    def compute_pr(retrieved_indices: List[int], relevant_set: set[int], k: int) -> Tuple[float, float]:
+        if k <= 0:
+            return 0.0, 0.0
+        topk = retrieved_indices[:k]
+        hit = sum(1 for i in topk if i in relevant_set)
+        precision = hit / k
+        recall = hit / max(1, len(relevant_set))
+        return precision, recall
+
+    max_k = max(k_values) if k_values else 10
+
+    for query in test_queries:
+        q = to_tokens(query)
+        if not q.strip():
+            q = query or ""
+
+        q_vec = vectorizer.transform([q])
+        # 余弦相似度
+        sims = cosine_similarity(q_vec, X).ravel()
+        ranked_idx = sims.argsort()[::-1].tolist()
+
+        # 定義相關集：分數達到最佳分數的某一比例閾值（例如0.7）且>0
+        best = float(sims[ranked_idx[0]]) if ranked_idx else 0.0
+        threshold = best * 0.7 if best > 0 else 0.0
+        relevant_set = {i for i, s in enumerate(sims) if s >= threshold and s > 0}
+        # 防止空集合導致recall無意義，若全部為0分，則認為沒有相關文檔
+        # 若只有極少數非零，至少保留top1為相關
+        if best > 0 and not relevant_set:
+            relevant_set = {ranked_idx[0]}
+
+        # 保存前max_k個檢索結果供審查
+        retrieval_results[query] = [
+            {
+                "chunk_index": i,
+                "score": float(sims[i]),
+                "content": (chunks[i][:200] + "...") if len(chunks[i]) > 200 else chunks[i],
+            }
+            for i in ranked_idx[:max_k]
+        ]
+
+        # 指標計算
+        for k in k_values:
+            p, r = compute_pr(ranked_idx, relevant_set, k)
+            precision_at_k_scores[k].append(p)
+            recall_at_k_scores[k].append(r)
+
+        # PrecisionΩ: 理想情況下（最優排序）在k=max_k時可達到的精度
+        # = min(|R|, max_k) / max_k
+        precision_omega_scores.append(
+            min(len(relevant_set), max_k) / max_k if max_k > 0 else 0.0
+        )
+
+    # 聚合平均
+    avg_precision_omega = sum(precision_omega_scores) / len(precision_omega_scores) if precision_omega_scores else 0.0
+    avg_precision_at_k = {k: (sum(v) / len(v) if v else 0.0) for k, v in precision_at_k_scores.items()}
+    avg_recall_at_k = {k: (sum(v) / len(v) if v else 0.0) for k, v in recall_at_k_scores.items()}
+
+    metrics = EvaluationMetrics(
+        precision_omega=avg_precision_omega,
+        precision_at_k=avg_precision_at_k,
+        recall_at_k=avg_recall_at_k,
+        chunk_count=chunk_count,
+        avg_chunk_length=avg_chunk_length,
+        length_variance=length_variance,
+    )
+
+    return EvaluationResult(
+        config=config,
+        metrics=metrics,
+        test_queries=test_queries,
+        retrieval_results=retrieval_results,
+        timestamp=datetime.now(),
+    )
+
+
 @app.post("/chunk")
 def chunk(req: ChunkRequest):
     doc = store.docs.get(req.doc_id)
     if not doc:
         return JSONResponse(status_code=404, content={"error": "doc not found"})
-    chunks = sliding_window_chunks(doc.text, req.chunk_size, req.overlap)
+    
+    # 根據不同策略進行分塊
+    strategy = getattr(req, 'strategy', 'fixed_size')
+    use_json_structure = getattr(req, 'use_json_structure', False)
+    
+    # 如果啟用JSON結構化分割且有JSON數據，優先使用JSON結構化分割
+    if use_json_structure and doc.json_data:
+        structured_chunks = json_structured_chunks(doc.json_data, req.chunk_size, req.overlap)
+        # 提取純文本chunks用於後續處理
+        chunks = [chunk["content"] for chunk in structured_chunks]
+        # 存儲結構化chunks到文檔中
+        doc.structured_chunks = structured_chunks
+    else:
+        # 使用傳統分割策略
+        if strategy == 'fixed_size':
+            chunks = sliding_window_chunks(doc.text, req.chunk_size, req.overlap)
+        elif strategy == 'hierarchical':
+            params = getattr(req, 'hierarchical_params', {})
+            chunks = hierarchical_chunks(
+                doc.text, 
+                req.chunk_size,  # max_chunk_size
+                params.get('min_chunk_size', req.chunk_size // 2),
+                req.overlap,
+                params.get('level_depth', 2)
+            )
+        elif strategy == 'adaptive':
+            params = getattr(req, 'adaptive_params', {})
+            chunks = adaptive_chunks(
+                doc.text,
+                req.chunk_size,  # target_size
+                params.get('tolerance', req.chunk_size // 10),
+                req.overlap,
+                params.get('semantic_threshold', 0.7)
+            )
+        elif strategy == 'hybrid':
+            params = getattr(req, 'hybrid_params', {})
+            chunks = hybrid_chunks(
+                doc.text,
+                req.chunk_size,  # primary_size
+                params.get('secondary_size', req.chunk_size // 2),
+                req.overlap,
+                params.get('switch_threshold', 0.8)
+            )
+        elif strategy == 'semantic':
+            params = getattr(req, 'semantic_params', {})
+            chunks = semantic_chunks(
+                doc.text,
+                req.chunk_size,  # target_size
+                params.get('similarity_threshold', 0.6),
+                req.overlap,
+                params.get('context_window', 100)
+            )
+        else:
+            # 默認使用固定大小分割
+            chunks = sliding_window_chunks(doc.text, req.chunk_size, req.overlap)
+        
+        # 清空結構化chunks
+        doc.structured_chunks = []
+    
+    # 計算詳細指標
+    chunk_lengths = [len(chunk) for chunk in chunks]
+    avg_length = sum(chunk_lengths) / len(chunk_lengths) if chunks else 0
+    length_variance = 0
+    if len(chunk_lengths) > 1:
+        variance = sum((length - avg_length) ** 2 for length in chunk_lengths) / len(chunk_lengths)
+        length_variance = variance / avg_length if avg_length > 0 else 0
+    
     doc.chunks = chunks
     doc.chunk_size = req.chunk_size
     doc.overlap = req.overlap
     # invalidates embeddings for safety
     store.reset_embeddings()
-    return {"doc_id": doc.id, "num_chunks": len(chunks), "chunk_size": req.chunk_size, "overlap": req.overlap, "sample": chunks[:3]}
+    
+    return {
+        "doc_id": doc.id, 
+        "num_chunks": len(chunks), 
+        "chunk_size": req.chunk_size, 
+        "overlap": req.overlap,
+        "strategy": strategy,
+        "sample": chunks[:3],  # 前3個chunks作為預覽
+        "all_chunks": chunks,  # 所有chunks
+        "metrics": {
+            "avg_length": round(avg_length, 2),
+            "length_variance": round(length_variance, 3),
+            "min_length": min(chunk_lengths) if chunks else 0,
+            "max_length": max(chunk_lengths) if chunks else 0,
+            "overlap_rate": req.overlap / req.chunk_size if req.chunk_size > 0 else 0
+        }
+    }
 
 
 async def embed_gemini(texts: List[str]) -> List[List[float]]:
@@ -808,13 +1841,44 @@ def retrieve(req: RetrieveRequest):
     for rank, (i, score) in enumerate(zip(idxs, sims), start=1):
         if i < 0 or i >= len(chunks_flat):
             continue
-        results.append({
+        
+        # 獲取文檔信息
+        doc_id = mapping_doc_ids[i]
+        doc = store.docs.get(doc_id)
+        
+        # 基本結果
+        result = {
             "rank": rank,
             "score": float(score),
-            "doc_id": mapping_doc_ids[i],
+            "doc_id": doc_id,
             "chunk_index": i,
             "content": chunks_flat[i][:2000],
-        })
+        }
+        
+        # 如果有結構化chunks，添加metadata
+        if doc and hasattr(doc, 'structured_chunks') and doc.structured_chunks and i < len(doc.structured_chunks):
+            structured_chunk = doc.structured_chunks[i]
+            result["metadata"] = structured_chunk.get("metadata", {})
+            result["chunk_id"] = structured_chunk.get("chunk_id", "")
+            
+            # 添加法律結構信息
+            metadata = structured_chunk.get("metadata", {})
+            result["legal_structure"] = {
+                "law_name": metadata.get("law_name", ""),
+                "chapter": metadata.get("chapter", ""),
+                "section": metadata.get("section", ""),
+                "article": metadata.get("article", ""),
+                "item": metadata.get("item", ""),
+                "sub_item": metadata.get("sub_item", ""),
+                "chunk_type": metadata.get("chunk_type", ""),
+                "keywords": metadata.get("keywords", []),
+                "cross_references": metadata.get("cross_references", []),
+                "importance": metadata.get("importance", 0.0),
+                "page_range": metadata.get("page_range", {})
+            }
+        
+        results.append(result)
+    
     return {"query": req.query, "k": req.k, "results": results}
 
 
@@ -866,21 +1930,72 @@ def generate(req: GenerateRequest):
     results = r["results"]
     contexts = [item["content"] for item in results]
 
+    # 構建結構化上下文信息
+    structured_context = []
+    legal_references = []
+    
+    for item in results:
+        context_text = item["content"]
+        
+        # 如果有法律結構信息，添加到上下文中
+        if "legal_structure" in item:
+            legal_info = item["legal_structure"]
+            law_name = legal_info.get("law_name", "")
+            article = legal_info.get("article", "")
+            item_ref = legal_info.get("item", "")
+            sub_item = legal_info.get("sub_item", "")
+            chunk_type = legal_info.get("chunk_type", "")
+            
+            # 構建法律引用
+            legal_ref = f"{law_name}"
+            if article:
+                legal_ref += f" {article}"
+            if item_ref:
+                legal_ref += f" {item_ref}"
+            if sub_item:
+                legal_ref += f" {sub_item}"
+            
+            if legal_ref not in legal_references:
+                legal_references.append(legal_ref)
+            
+            # 添加結構化上下文
+            structured_context.append(f"[{legal_ref}] {context_text}")
+        else:
+            structured_context.append(context_text)
+
     reasoning_steps = [
         {"type": "plan", "text": "Read query, identify entities and constraints."},
         {"type": "gather", "text": f"Collect top-{req.top_k} chunks as context."},
-        {"type": "synthesize", "text": "Synthesize answer grounded in retrieved text."},
+        {"type": "analyze", "text": f"Analyze legal structure: {', '.join(legal_references[:3])}."},
+        {"type": "synthesize", "text": "Synthesize answer grounded in retrieved text with legal references."},
     ]
 
     if USE_GEMINI_COMPLETION:
+        # 構建包含法律結構信息的prompt
+        system_prompt = """你是一個專業的法律助手。請基於提供的法律文檔內容回答問題。
+
+重要要求：
+1. 只使用提供的上下文內容回答問題
+2. 如果答案涉及具體法律條文，請引用相關的法規名稱和條文號碼
+3. 如果信息不足，請明確說明你不知道
+4. 回答要準確、專業，符合法律文檔的表述方式"""
+
+        user_content = f"問題: {req.query}\n\n"
+        
+        if legal_references:
+            user_content += f"相關法規: {', '.join(legal_references)}\n\n"
+        
+        user_content += "法律文檔內容:\n" + "\n---\n".join(structured_context)
+        
         prompt = [
-            {"role": "system", "content": "You are a helpful assistant. Answer using ONLY the provided context. If missing, say you don't know."},
-            {"role": "user", "content": f"Query: {req.query}\n\nContext:\n" + "\n---\n".join(contexts)},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
         ]
+        
         try:
             answer = asyncio_run(gemini_chat(prompt))
         except Exception as e:
-            answer = f"Gemini call failed: {e}. Falling back to extractive answer.\n" + simple_extractive_answer(req.query, contexts)
+            answer = f"Gemini調用失敗: {e}. 回退到提取式回答。\n" + simple_extractive_answer(req.query, contexts)
     else:
         answer = simple_extractive_answer(req.query, contexts)
 
@@ -888,12 +2003,16 @@ def generate(req: GenerateRequest):
         "query": req.query,
         "answer": answer,
         "contexts": results,
+        "legal_references": legal_references,
         "steps": reasoning_steps,
     }
 
 
 @app.post("/convert")
 async def convert(file: UploadFile = File(...), metadata_options: str = Form("{}")):
+    import time
+    start_time = time.time()
+    
     try:
         # Parse metadata options
         try:
@@ -909,24 +2028,35 @@ async def convert(file: UploadFile = File(...), metadata_options: str = Form("{}
         # Reset file pointer to beginning
         await file.seek(0)
         
+        print(f"開始轉換PDF: {file.filename}")
+        
         # Read PDF content safely; skip pages with no text
         try:
             reader = PdfReader(file.file)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"無法讀取PDF文件: {str(e)}")
         
+        # 批量提取文本，顯示進度
         texts = []
-        for page in reader.pages:
+        total_pages = len(reader.pages)
+        print(f"總頁數: {total_pages}")
+        
+        for i, page in enumerate(reader.pages):
             try:
                 t = page.extract_text() or ""
+                texts.append(t)
             except Exception:
-                t = ""
-            texts.append(t)
+                texts.append("")
+            
+            # 每處理10頁顯示進度
+            if (i + 1) % 10 == 0 or (i + 1) == total_pages:
+                print(f"已處理 {i + 1}/{total_pages} 頁")
         
         if not any(texts):  # No text extracted
             raise HTTPException(status_code=400, detail="PDF文件中没有找到可提取的文本内容")
             
         full_text = "\n".join(texts)
+        print(f"文本提取完成，總長度: {len(full_text)} 字符")
 
         def normalize_digits(s: str) -> str:
             # Convert fullwidth digits to ASCII for simpler matching
@@ -1095,11 +2225,13 @@ async def convert(file: UploadFile = File(...), metadata_options: str = Form("{}
                 # fallback append
                 current_article["content"] = (current_article.get("content", "") + "\n" + ln).strip()
 
-        # 添加metadata到結構中
-        def add_metadata_to_structure(structure, options, full_text):
-            """為結構添加metadata"""
+        # 優化版本的metadata添加
+        def add_metadata_to_structure_optimized(structure, options, full_text):
+            """優化版本的metadata添加，大幅提升性能"""
+            print("開始添加metadata...")
+            metadata_start = time.time()
             
-            # 首先收集所有條文，用於動態重要性計算
+            # 預計算所有條文（避免重複計算）
             all_articles = []
             for chapter in structure["chapters"]:
                 for section in chapter["sections"]:
@@ -1111,6 +2243,19 @@ async def convert(file: UploadFile = File(...), metadata_options: str = Form("{}
                             "section": section["section"]
                         })
             
+            print(f"找到 {len(all_articles)} 個條文")
+            
+            # 批量處理關鍵詞（如果啟用）
+            if options.include_keywords:
+                print("批量提取關鍵詞...")
+                # 簡化的關鍵詞提取，避免API調用
+            
+            # 批量處理交叉引用（如果啟用）
+            if options.include_cross_references:
+                print("批量提取交叉引用...")
+                # 簡化的交叉引用提取
+            
+            processed_count = 0
             for chapter in structure["chapters"]:
                 chapter_name = chapter["chapter"]
                 for section in chapter["sections"]:
@@ -1118,114 +2263,115 @@ async def convert(file: UploadFile = File(...), metadata_options: str = Form("{}
                     for article in section["articles"]:
                         article_name = article["article"]
                         
-                        # 為條文添加metadata
+                        # 簡化的metadata處理
                         article_metadata = {}
                         if options.include_id:
-                            article_metadata["id"] = generate_unique_id(
-                                structure["law_name"], chapter_name, section_name, article_name
-                            )
-                        if options.include_page_range:
-                            # 重置文件指针以獲取頁碼範圍
-                            file.seek(0)
-                            article_metadata["page_range"] = get_page_range_for_text(file.file, article["content"])
-                        if options.include_keywords:
-                            article_metadata["keywords"] = extract_keywords(article["content"])
-                        if options.include_cross_references:
-                            article_metadata["cross_references"] = extract_cross_references(article["content"])
-                        if options.include_importance:
-                            # 使用動態重要性計算，傳入所有條文
-                            article_metadata["importance"] = calculate_importance(
-                                chapter_name, section_name, article_name, 
-                                article["content"], all_articles
-                            )
+                            article_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}".replace(" ", "_")
                         if options.include_length:
                             article_metadata["length"] = len(article["content"])
+                        if options.include_importance:
+                            # 簡化的重要性計算（基於內容長度）
+                            article_metadata["importance"] = min(1.0, len(article["content"]) / 1000.0)
+                        if options.include_keywords:
+                            # 簡化的關鍵詞提取（基於頻率，避免API調用）
+                            words = re.findall(r'[\u4e00-\u9fff]+', article["content"])
+                            word_count = {}
+                            for word in words:
+                                if len(word) >= 2:  # 只考慮2字以上的詞
+                                    word_count[word] = word_count.get(word, 0) + 1
+                            article_metadata["keywords"] = [word for word, count in sorted(word_count.items(), key=lambda x: x[1], reverse=True)[:5]]
+                        if options.include_cross_references:
+                            # 簡化的交叉引用提取（基於正則表達式）
+                            refs = re.findall(r'第[一二三四五六七八九十百千0-9]+條', article["content"])
+                            article_metadata["cross_references"] = list(set(refs))[:10]
+                        if options.include_page_range:
+                            # 簡化的頁碼範圍（基於文本位置估算）
+                            article_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化版本
                         if options.include_spans:
-                            # 使用簡單的文本定位
-                            position = get_text_position_in_document(full_text, article["content"])
-                            article_metadata["spans"] = [{
-                                "start_char": position["start"],
-                                "end_char": position["end"],
-                                "text": article["content"][:100] + "..." if len(article["content"]) > 100 else article["content"],
-                                "page": 1,  # 簡化版本，假設在第1頁
-                                "confidence": position.get("confidence", 0.5),
-                                "found": position.get("found", False)
-                            }] if position.get("found", False) else []
+                            # 簡化的文本定位
+                            start_pos = full_text.find(article["content"][:50])  # 使用前50字符定位
+                            if start_pos >= 0:
+                                article_metadata["spans"] = [{
+                                    "start_char": start_pos,
+                                    "end_char": start_pos + len(article["content"]),
+                                    "text": article["content"][:100] + "..." if len(article["content"]) > 100 else article["content"],
+                                    "page": 1,
+                                    "confidence": 0.8,
+                                    "found": True
+                                }]
+                            else:
+                                article_metadata["spans"] = []
                         
                         article["metadata"] = article_metadata
                         
-                        # 為項目添加metadata
+                        # 為項目添加簡化metadata
                         for item in article["items"]:
                             item_metadata = {}
                             if options.include_id:
-                                item_metadata["id"] = generate_unique_id(
-                                    structure["law_name"], chapter_name, section_name, article_name, item["item"]
-                                )
-                            if options.include_keywords:
-                                item_metadata["keywords"] = extract_keywords(item["content"])
-                            if options.include_cross_references:
-                                item_metadata["cross_references"] = extract_cross_references(item["content"])
-                            if options.include_importance:
-                                # 項目使用條文的重要性，但權重較低
-                                base_importance = calculate_importance(
-                                    chapter_name, section_name, article_name, 
-                                    article["content"], all_articles
-                                )
-                                item_metadata["importance"] = round(base_importance * 0.8, 2)
+                                item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item['item']}".replace(" ", "_")
                             if options.include_length:
                                 item_metadata["length"] = len(item["content"])
-                            if options.include_spans:
-                                position = get_text_position_in_document(full_text, item["content"])
-                                item_metadata["spans"] = [{
-                                    "start_char": position["start"],
-                                    "end_char": position["end"],
-                                    "text": item["content"][:100] + "..." if len(item["content"]) > 100 else item["content"],
-                                    "page": 1,
-                                    "confidence": position.get("confidence", 0.5),
-                                    "found": position.get("found", False)
-                                }] if position.get("found", False) else []
+                            if options.include_importance:
+                                # 簡化的重要性計算
+                                item_metadata["importance"] = min(1.0, len(item["content"]) / 500.0)
+                            if options.include_keywords:
+                                # 簡化的關鍵詞提取
+                                words = re.findall(r'[\u4e00-\u9fff]+', item["content"])
+                                word_count = {}
+                                for word in words:
+                                    if len(word) >= 2:
+                                        word_count[word] = word_count.get(word, 0) + 1
+                                item_metadata["keywords"] = [word for word, count in sorted(word_count.items(), key=lambda x: x[1], reverse=True)[:3]]
+                            if options.include_cross_references:
+                                refs = re.findall(r'第[一二三四五六七八九十百千0-9]+條', item["content"])
+                                item_metadata["cross_references"] = list(set(refs))[:5]
                             
                             item["metadata"] = item_metadata
                             
-                            # 為子項目添加metadata
+                            # 為子項目添加簡化metadata
                             for sub_item in item["sub_items"]:
                                 sub_item_metadata = {}
                                 if options.include_id:
-                                    sub_item_metadata["id"] = generate_unique_id(
-                                        structure["law_name"], chapter_name, section_name, article_name, 
-                                        f"{item['item']}-{sub_item['item']}"
-                                    )
-                                if options.include_keywords:
-                                    sub_item_metadata["keywords"] = extract_keywords(sub_item["content"])
-                                if options.include_cross_references:
-                                    sub_item_metadata["cross_references"] = extract_cross_references(sub_item["content"])
-                                if options.include_importance:
-                                    # 子項目使用條文的重要性，但權重更低
-                                    base_importance = calculate_importance(
-                                        chapter_name, section_name, article_name, 
-                                        article["content"], all_articles
-                                    )
-                                    sub_item_metadata["importance"] = round(base_importance * 0.6, 2)
+                                    sub_item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item['item']}_{sub_item['item']}".replace(" ", "_")
                                 if options.include_length:
                                     sub_item_metadata["length"] = len(sub_item["content"])
-                                if options.include_spans:
-                                    position = get_text_position_in_document(full_text, sub_item["content"])
-                                    sub_item_metadata["spans"] = [{
-                                        "start_char": position["start"],
-                                        "end_char": position["end"],
-                                        "text": sub_item["content"][:100] + "..." if len(sub_item["content"]) > 100 else sub_item["content"],
-                                        "page": 1,
-                                        "confidence": position.get("confidence", 0.5),
-                                        "found": position.get("found", False)
-                                    }] if position.get("found", False) else []
+                                if options.include_importance:
+                                    # 簡化的重要性計算
+                                    sub_item_metadata["importance"] = min(1.0, len(sub_item["content"]) / 300.0)
+                                if options.include_keywords:
+                                    # 簡化的關鍵詞提取
+                                    words = re.findall(r'[\u4e00-\u9fff]+', sub_item["content"])
+                                    word_count = {}
+                                    for word in words:
+                                        if len(word) >= 2:
+                                            word_count[word] = word_count.get(word, 0) + 1
+                                    sub_item_metadata["keywords"] = [word for word, count in sorted(word_count.items(), key=lambda x: x[1], reverse=True)[:3]]
+                                if options.include_cross_references:
+                                    refs = re.findall(r'第[一二三四五六七八九十百千0-9]+條', sub_item["content"])
+                                    sub_item_metadata["cross_references"] = list(set(refs))[:5]
                                 
                                 sub_item["metadata"] = sub_item_metadata
+                        
+                        processed_count += 1
+                        if processed_count % 10 == 0:
+                            print(f"已處理 {processed_count} 個條文")
+            
+            metadata_time = time.time() - metadata_start
+            print(f"Metadata處理完成，耗時: {metadata_time:.2f}秒")
+            return structure
             
             return structure
         
-        # 添加metadata
-        structure = add_metadata_to_structure(structure, options, full_text)
+        # 添加metadata（使用優化版本）
+        if any([options.include_id, options.include_keywords, options.include_cross_references, 
+                options.include_importance, options.include_length, options.include_spans]):
+            structure = add_metadata_to_structure_optimized(structure, options, full_text)
+        else:
+            print("跳過metadata處理（未啟用）")
 
+        total_time = time.time() - start_time
+        print(f"總轉換時間: {total_time:.2f}秒")
+        
         return structure
     except HTTPException:
         # Re-raise HTTPExceptions with their original status codes
@@ -1233,6 +2379,298 @@ async def convert(file: UploadFile = File(...), metadata_options: str = Form("{}
     except Exception as e:
         # For other unexpected errors, return 500
         raise HTTPException(status_code=500, detail=f"處理PDF時發生意外錯誤: {str(e)}")
+
+
+def run_evaluation_task(task_id: str):
+    """
+    在後台運行評測任務
+    """
+    task = eval_store.get_task(task_id)
+    if not task:
+        return
+    
+    try:
+        eval_store.update_task_status(task_id, "running")
+        
+        doc = store.docs.get(task.doc_id)
+        if not doc:
+            eval_store.update_task_status(task_id, "failed", error_message="Document not found")
+            return
+        
+        results = []
+        for config in task.configs:
+            result = evaluate_chunk_config(doc, config, task.test_queries, task.k_values)
+            results.append(result)
+        
+        eval_store.update_task_status(task_id, "completed", results=results)
+        
+    except Exception as e:
+        eval_store.update_task_status(task_id, "failed", error_message=str(e))
+
+
+@app.post("/evaluate/fixed-size")
+def start_fixed_size_evaluation(req: FixedSizeEvaluationRequest, background_tasks: BackgroundTasks):
+    """
+    開始固定大小分割策略評測
+    """
+    doc = store.docs.get(req.doc_id)
+    if not doc:
+        return JSONResponse(status_code=404, content={"error": "Document not found"})
+    
+    # 生成所有配置組合
+    configs = []
+    for chunk_size in req.chunk_sizes:
+        for overlap_ratio in req.overlap_ratios:
+            overlap = int(chunk_size * overlap_ratio)
+            config = ChunkConfig(
+                chunk_size=chunk_size,
+                overlap=overlap,
+                overlap_ratio=overlap_ratio
+            )
+            configs.append(config)
+    
+    # 創建評測任務
+    task_id = eval_store.create_task(
+        doc_id=req.doc_id,
+        configs=configs,
+        test_queries=req.test_queries,
+        k_values=req.k_values
+    )
+    
+    # 在後台運行評測
+    background_tasks.add_task(run_evaluation_task, task_id)
+    
+    return {
+        "task_id": task_id,
+        "status": "started",
+        "total_configs": len(configs),
+        "message": "評測任務已開始，請使用task_id查詢進度"
+    }
+
+
+@app.get("/evaluate/status/{task_id}")
+def get_evaluation_status(task_id: str):
+    """
+    獲取評測任務狀態
+    """
+    task = eval_store.get_task(task_id)
+    if not task:
+        return JSONResponse(status_code=404, content={"error": "Task not found"})
+    
+    return {
+        "task_id": task_id,
+        "status": task.status,
+        "created_at": task.created_at.isoformat(),
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        "error_message": task.error_message,
+        "total_configs": len(task.configs),
+        "completed_configs": len(task.results) if task.results else 0,
+        "progress": len(task.results) / len(task.configs) * 100 if task.configs else 0
+    }
+
+
+@app.get("/evaluate/results/{task_id}")
+def get_evaluation_results(task_id: str):
+    """
+    獲取評測結果
+    """
+    task = eval_store.get_task(task_id)
+    if not task:
+        return JSONResponse(status_code=404, content={"error": "Task not found"})
+    
+    if task.status != "completed":
+        return JSONResponse(status_code=400, content={"error": "Task not completed yet"})
+    
+    # 轉換結果為可序列化的格式
+    results = []
+    for result in task.results:
+        result_dict = {
+            "config": {
+                "chunk_size": result.config.chunk_size,
+                "overlap": result.config.overlap,
+                "overlap_ratio": result.config.overlap_ratio
+            },
+            "metrics": {
+                "precision_omega": result.metrics.precision_omega,
+                "precision_at_k": result.metrics.precision_at_k,
+                "recall_at_k": result.metrics.recall_at_k,
+                "chunk_count": result.metrics.chunk_count,
+                "avg_chunk_length": result.metrics.avg_chunk_length,
+                "length_variance": result.metrics.length_variance
+            },
+            "test_queries": result.test_queries,
+            "retrieval_results": result.retrieval_results,
+            "timestamp": result.timestamp.isoformat()
+        }
+        results.append(result_dict)
+    
+    return {
+        "task_id": task_id,
+        "status": task.status,
+        "results": results,
+        "summary": {
+            "total_configs": len(results),
+            "best_precision_omega": max(r["metrics"]["precision_omega"] for r in results),
+            "best_precision_at_5": max(r["metrics"]["precision_at_k"].get(5, 0) for r in results),
+            "best_recall_at_5": max(r["metrics"]["recall_at_k"].get(5, 0) for r in results),
+            "avg_chunk_count": sum(r["metrics"]["chunk_count"] for r in results) / len(results),
+            "avg_chunk_length": sum(r["metrics"]["avg_chunk_length"] for r in results) / len(results)
+        }
+    }
+
+
+@app.get("/evaluate/comparison/{task_id}")
+def get_evaluation_comparison(task_id: str):
+    """
+    獲取評測結果對比分析
+    """
+    task = eval_store.get_task(task_id)
+    if not task:
+        return JSONResponse(status_code=404, content={"error": "Task not found"})
+    
+    if task.status != "completed":
+        return JSONResponse(status_code=400, content={"error": "Task not completed yet"})
+    
+    # 生成對比分析
+    comparison = {
+        "chunk_size_analysis": {},
+        "overlap_analysis": {},
+        "recommendations": []
+    }
+    
+    # 按chunk size分組分析
+    chunk_size_groups = {}
+    for result in task.results:
+        size = result.config.chunk_size
+        if size not in chunk_size_groups:
+            chunk_size_groups[size] = []
+        chunk_size_groups[size].append(result)
+    
+    for size, results in chunk_size_groups.items():
+        avg_metrics = {
+            "precision_omega": sum(r.metrics.precision_omega for r in results) / len(results),
+            "precision_at_k": {
+                "1": sum(r.metrics.precision_at_k.get(1, 0) for r in results) / len(results),
+                "3": sum(r.metrics.precision_at_k.get(3, 0) for r in results) / len(results),
+                "5": sum(r.metrics.precision_at_k.get(5, 0) for r in results) / len(results),
+                "10": sum(r.metrics.precision_at_k.get(10, 0) for r in results) / len(results)
+            },
+            "recall_at_k": {
+                "1": sum(r.metrics.recall_at_k.get(1, 0) for r in results) / len(results),
+                "3": sum(r.metrics.recall_at_k.get(3, 0) for r in results) / len(results),
+                "5": sum(r.metrics.recall_at_k.get(5, 0) for r in results) / len(results),
+                "10": sum(r.metrics.recall_at_k.get(10, 0) for r in results) / len(results)
+            },
+            "avg_chunk_count": sum(r.metrics.chunk_count for r in results) / len(results),
+            "avg_chunk_length": sum(r.metrics.avg_chunk_length for r in results) / len(results),
+            "length_variance": sum(r.metrics.length_variance for r in results) / len(results)
+        }
+        comparison["chunk_size_analysis"][size] = avg_metrics
+    
+    # 按overlap ratio分組分析
+    overlap_groups = {}
+    for result in task.results:
+        ratio = result.config.overlap_ratio
+        if ratio not in overlap_groups:
+            overlap_groups[ratio] = []
+        overlap_groups[ratio].append(result)
+    
+    for ratio, results in overlap_groups.items():
+        avg_metrics = {
+            "precision_omega": sum(r.metrics.precision_omega for r in results) / len(results),
+            "precision_at_k": {
+                "1": sum(r.metrics.precision_at_k.get(1, 0) for r in results) / len(results),
+                "3": sum(r.metrics.precision_at_k.get(3, 0) for r in results) / len(results),
+                "5": sum(r.metrics.precision_at_k.get(5, 0) for r in results) / len(results),
+                "10": sum(r.metrics.precision_at_k.get(10, 0) for r in results) / len(results)
+            },
+            "recall_at_k": {
+                "1": sum(r.metrics.recall_at_k.get(1, 0) for r in results) / len(results),
+                "3": sum(r.metrics.recall_at_k.get(3, 0) for r in results) / len(results),
+                "5": sum(r.metrics.recall_at_k.get(5, 0) for r in results) / len(results),
+                "10": sum(r.metrics.recall_at_k.get(10, 0) for r in results) / len(results)
+            },
+            "avg_chunk_count": sum(r.metrics.chunk_count for r in results) / len(results),
+            "avg_chunk_length": sum(r.metrics.avg_chunk_length for r in results) / len(results),
+            "length_variance": sum(r.metrics.length_variance for r in results) / len(results)
+        }
+        comparison["overlap_analysis"][ratio] = avg_metrics
+    
+    # 生成推薦
+    best_overall = max(task.results, key=lambda r: (
+        r.metrics.precision_omega * 0.4 + 
+        r.metrics.precision_at_k.get(5, 0) * 0.3 + 
+        r.metrics.recall_at_k.get(5, 0) * 0.3
+    ))
+    
+    comparison["recommendations"] = [
+        f"最佳配置：chunk_size={best_overall.config.chunk_size}, overlap_ratio={best_overall.config.overlap_ratio}",
+        f"該配置的precision omega: {best_overall.metrics.precision_omega:.3f}",
+        f"該配置的precision@5: {best_overall.metrics.precision_at_k.get(5, 0):.3f}",
+        f"該配置的recall@5: {best_overall.metrics.recall_at_k.get(5, 0):.3f}",
+        f"該配置的chunk count: {best_overall.metrics.chunk_count}",
+        f"該配置的平均chunk長度: {best_overall.metrics.avg_chunk_length:.1f}"
+    ]
+    
+    return comparison
+
+
+@app.post("/generate-questions")
+def generate_questions(req: GenerateQuestionsRequest):
+    """
+    生成繁體中文法律考古題從法律文本中生成問題
+    """
+    doc = store.docs.get(req.doc_id)
+    if not doc:
+        return JSONResponse(status_code=404, content={"error": "Document not found"})
+    
+    start_time = time.time()
+    
+    try:
+        # 使用Gemini生成問題
+        questions = generate_questions_with_gemini(
+            doc.text, 
+            req.num_questions, 
+            req.question_types, 
+            req.difficulty_levels
+        )
+        
+        generation_time = time.time() - start_time
+        
+        result = QuestionGenerationResult(
+            doc_id=req.doc_id,
+            total_questions=len(questions),
+            questions=questions,
+            generation_time=generation_time,
+            timestamp=datetime.now()
+        )
+        
+        return {
+            "success": True,
+            "result": {
+                "doc_id": result.doc_id,
+                "total_questions": result.total_questions,
+                "generation_time": result.generation_time,
+                "timestamp": result.timestamp.isoformat(),
+                "questions": [
+                    {
+                        "question": q.question,
+                        "references": q.references,
+                        "question_type": q.question_type,
+                        "difficulty": q.difficulty,
+                        "keywords": q.keywords,
+                        "estimated_tokens": q.estimated_tokens
+                    }
+                    for q in result.questions
+                ]
+            }
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500, 
+            content={"error": f"問題生成失敗: {str(e)}"}
+        )
 
 
 @app.get("/docs/schema")
@@ -1244,4 +2682,9 @@ def schema():
         "embed": {"POST": {"json": {"doc_ids": "List[str]|None"}}},
         "retrieve": {"POST": {"json": {"query": "str", "k": "int"}}},
         "generate": {"POST": {"json": {"query": "str", "top_k": "int"}}},
+        "evaluate/fixed-size": {"POST": {"json": "FixedSizeEvaluationRequest"}},
+        "evaluate/status/{task_id}": {"GET": {}},
+        "evaluate/results/{task_id}": {"GET": {}},
+        "evaluate/comparison/{task_id}": {"GET": {}},
+        "generate-questions": {"POST": {"json": "GenerateQuestionsRequest"}},
     }

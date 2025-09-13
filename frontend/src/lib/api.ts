@@ -12,7 +12,13 @@ export const api = {
     const res = await fetch(`${base}/upload`, { method: "POST", body: fd });
     return json<any>(res);
   },
-  async chunk(body: { doc_id: string; chunk_size: number; overlap: number }) {
+  async chunk(body: {
+    doc_id: string;
+    chunk_size: number;
+    overlap: number;
+    strategy?: string;
+    [key: string]: any;
+  }) {
     const res = await fetch(`${base}/chunk`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -51,6 +57,55 @@ export const api = {
       fd.append("metadata_options", JSON.stringify(metadataOptions));
     }
     const res = await fetch(`${base}/convert`, { method: "POST", body: fd });
+    return json<any>(res);
+  },
+  async updateJson(docId: string, jsonData: any) {
+    const res = await fetch(`${base}/update-json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doc_id: docId, json_data: jsonData }),
+    });
+    return json<any>(res);
+  },
+  // 評測相關API
+  async startFixedSizeEvaluation(body: {
+    doc_id: string;
+    chunk_sizes?: number[];
+    overlap_ratios?: number[];
+    test_queries?: string[];
+    k_values?: number[];
+  }) {
+    const res = await fetch(`${base}/evaluate/fixed-size`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return json<any>(res);
+  },
+  async getEvaluationStatus(taskId: string) {
+    const res = await fetch(`${base}/evaluate/status/${taskId}`);
+    return json<any>(res);
+  },
+  async getEvaluationResults(taskId: string) {
+    const res = await fetch(`${base}/evaluate/results/${taskId}`);
+    return json<any>(res);
+  },
+  async getEvaluationComparison(taskId: string) {
+    const res = await fetch(`${base}/evaluate/comparison/${taskId}`);
+    return json<any>(res);
+  },
+  // 問題生成相關API
+  async generateQuestions(body: {
+    doc_id: string;
+    num_questions?: number;
+    question_types?: string[];
+    difficulty_levels?: string[];
+  }) {
+    const res = await fetch(`${base}/generate-questions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
     return json<any>(res);
   },
 };

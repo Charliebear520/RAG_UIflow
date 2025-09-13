@@ -1,68 +1,175 @@
-# RAG Visualizer (Vite + React on Vercel, FastAPI backend)
+# RAG 系統 - 文檔分割策略評測平台
 
-An end-to-end, interactive UI to visualize each step of a RAG pipeline:
+## 🎯 項目概述
 
-- Upload documents (text or PDF)
-- Chunking with adjustable size and overlap
-- Embedding (local TF-IDF or OpenAI embeddings)
-- Retrieval (top-k chunks with scores and content)
-- Generation (final answer + structured reasoning steps)
+本項目是一個基於 FastAPI 和 React 的 RAG (Retrieval-Augmented Generation) 系統，專門用於文檔分割策略的評測和優化。系統支持多種分割算法、繁體中文問題生成、以及全面的評估指標。
 
-Frontend: Vite + React (deployable to Vercel). Backend: FastAPI (run locally or deploy anywhere).
+## ✨ 主要功能
 
-## Quick start
+### 📄 文檔處理
 
-Prereqs: Node 18+ and Python 3.10+ recommended.
+- **PDF 轉換**: 支持 PDF 文檔轉換為文本格式
+- **多格式支持**: 使用 pdfplumber 和 PyPDF2 雙重保障
+- **元數據提取**: 提取頁面信息、表格、圖表等結構化數據
 
-### Backend (FastAPI)
+### 🔪 分割策略
 
-1) Create and activate a virtual env, then install deps:
+- **固定大小分割**: 滑動窗口分割算法
+- **層次化分割**: 按段落和句子層次分割
+- **自適應分割**: 根據語義邊界自適應分割
+- **混合分割**: 根據內容特徵動態選擇分割大小
+- **語義分割**: 基於句子語義的分割策略
+
+### 🤖 智能問題生成
+
+- **繁體中文支持**: 專門針對繁體中文法律文檔優化
+- **多樣化問題類型**: 案例應用、情境分析、實務處理、法律後果、合規判斷
+- **Gemini AI 集成**: 使用 Google Gemini API 生成高質量問題
+- **難度分級**: 基礎、進階、應用三個難度等級
+
+### 📊 評估指標
+
+- **Precision Omega**: 理想情況下可達到的最大精度
+- **Precision@K**: 前 K 個結果中相關文檔的比例 (K=1,3,5,10)
+- **Recall@K**: 相關文檔中被檢索到的比例 (K=1,3,5,10)
+- **TF-IDF 檢索**: 使用 TF-IDF 向量化和餘弦相似度
+- **字符級匹配**: 基於字符重疊的相關性評估
+
+## 🚀 快速開始
+
+### 環境要求
+
+- Python 3.8+
+- Node.js 16+
+- Google Gemini API Key
+
+### 後端設置
 
 ```bash
 cd backend
-python3 -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
+echo "GEMINI_API_KEY=your_gemini_api_key_here" > .env
+python -m uvicorn app.main_new:app --reload --host 0.0.0.0 --port 8000
 ```
 
-2) (Optional) Enable OpenAI providers by copying `.env.example` to `.env` and setting your keys.
-
-3) Run the API locally:
+### 前端設置
 
 ```bash
-uvicorn app.main:app --reload --port 8000
-```
-
-The API will be at http://localhost:8000, docs at http://localhost:8000/docs
-
-### Frontend (Vite + React)
-
-1) Install deps and run dev:
-
-```bash
-cd ../frontend
+cd frontend
 npm install
 npm run dev
 ```
 
-Vite dev server runs at http://localhost:5173 and proxies /api to http://localhost:8000 for local dev.
+### 訪問應用
 
-### Deploy
+```
+http://localhost:5173
+```
 
-- Frontend: Push `frontend` to a GitHub repo and import into Vercel. It will run `npm run build` and serve `dist/`.
-- Backend: Deploy to your preferred host (Render, Fly.io, Railway, etc.). Set `VITE_API_BASE_URL` on Vercel to your backend URL.
+## 📖 使用指南
 
-## Architecture
+1. **上傳文檔**: 在 Upload 頁面選擇 PDF 文件
+2. **配置分割**: 在 Chunk 頁面選擇分割策略和參數
+3. **啟用評測**: 開啟評測模式並配置評估參數
+4. **執行評測**: 點擊開始評測，監控進度
+5. **分析結果**: 查看評測結果和最佳配置推薦
 
-- backend/
-  - FastAPI app with endpoints for upload, chunk, embed, retrieve, generate
-  - Local embedding via TF-IDF (no external model) or OpenAI (if configured)
-  - In-memory store; single-process demo use (not production persistent)
-- frontend/
-  - React UI with panels for each step, wired to the backend
-  - Minimal styling; easy to extend
+## 📁 項目結構
 
-## Notes
+```
+RAG/
+├── backend/                 # 後端代碼（模組化重構）
+│   ├── app/
+│   │   ├── models.py       # 數據模型
+│   │   ├── store.py        # 數據存儲
+│   │   ├── chunking.py     # 分割算法
+│   │   ├── evaluation.py   # 評估邏輯
+│   │   ├── pdf_processor.py # PDF處理
+│   │   ├── question_generator.py # 問題生成
+│   │   ├── routes.py       # API路由
+│   │   ├── main.py         # 原始主文件
+│   │   └── main_new.py     # 模組化主文件
+│   └── requirements.txt    # Python依賴
+├── frontend/               # 前端代碼（組件化）
+│   ├── src/
+│   │   ├── components/     # React組件
+│   │   │   ├── ChunkStrategySelector.tsx
+│   │   │   └── EvaluationPanel.tsx
+│   │   ├── routes/         # 頁面路由
+│   │   ├── lib/           # 工具庫
+│   │   └── main.tsx       # 入口文件
+│   └── package.json       # Node依賴
+├── docs/                  # 完整文檔
+│   ├── README.md          # 詳細使用指南
+│   ├── 功能完成總結.md
+│   ├── 視覺化改進指南.md
+│   └── K值選擇與一致性修復指南.md
+└── corpus/               # 測試文檔
+    └── 著作權法.pdf
+```
 
-- Local embedding uses TF-IDF per document. For production-grade embeddings, use OpenAI or a SentenceTransformer provider and a vector DB.
-- Generation can use OpenAI (if configured) or a simple extractive fallback. The backend returns a structured `steps` array rather than raw chain-of-thought.
+## 🔧 配置說明
+
+### 評估參數
+
+- **Chunk Sizes**: [300, 500, 800] (可自定義)
+- **Overlap Ratios**: [0.0, 0.1, 0.2] (可自定義)
+- **K Values**: [1, 3, 5, 10] (可自定義)
+- **Relevance Threshold**: 50% 字符重疊 (可調整)
+
+### 環境變量
+
+```bash
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+## 📊 實際測試結果
+
+```
+最佳配置：chunk_size=800, overlap_ratio=0.0
+- Precision Omega: 1.000
+- Precision@5: 0.493
+- Recall@5: 0.203
+- Chunk Count: 25
+- Average Chunk Length: 796.9
+```
+
+## 📈 系統改進
+
+### ✅ 已完成的改進
+
+- 模組化後端代碼重構
+- 前端組件化設計
+- 完整的文檔整理
+- K 值一致性修復
+- 視覺化改進建議
+- 清理臨時測試檔案
+- 整合重複文檔
+
+### 🔮 未來規劃
+
+- 修復前後端 K 值一致性問題
+- 添加更多視覺化圖表
+- 支持更多文檔格式
+- 實現分布式評估
+
+## 📚 詳細文檔
+
+完整的使用指南和技術文檔請參考：
+
+- [詳細 README](docs/README.md)
+- [功能完成總結](docs/功能完成總結.md)
+- [視覺化改進指南](docs/視覺化改進指南.md)
+- [K 值選擇與一致性修復指南](docs/K值選擇與一致性修復指南.md)
+
+## 🤝 貢獻指南
+
+歡迎提交 Issue 和 Pull Request！
+
+## 📄 許可證
+
+MIT License
+
+---
+
+**注意**: 本系統主要用於研究和教育目的。在生產環境中使用前，請進行充分的測試和評估。

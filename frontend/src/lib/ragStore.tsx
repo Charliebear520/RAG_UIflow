@@ -11,6 +11,7 @@ type RagContextType = {
   retrieval: any[] | null;
   answer: string | null;
   steps: any[] | null;
+  legalReferences: string[] | null;
   jsonData: any | null;
   fileName: string | null;
   loading: boolean;
@@ -25,7 +26,12 @@ type RagContextType = {
   upload: (file: File) => Promise<void>;
   convert: (file: File, metadataOptions?: any) => Promise<void>;
   updateJsonData: (newJsonData: any) => void;
-  chunk: (size: number, overlap: number) => Promise<void>;
+  chunk: (
+    size: number,
+    overlap: number,
+    strategy?: string,
+    extraParams?: any
+  ) => Promise<any>;
   embed: () => Promise<void>;
   retrieve: (query: string, k: number) => Promise<void>;
   generate: (query: string, topK: number) => Promise<void>;
@@ -41,6 +47,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
   const [retrieval, setRetrieval] = useState<any[] | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
   const [steps, setSteps] = useState<any[] | null>(null);
+  const [legalReferences, setLegalReferences] = useState<string[] | null>(null);
   const [jsonData, setJsonData] = useState<any | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -76,6 +83,16 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
       const res = await api.convert(file, metadataOptions);
       setJsonData(res);
       setFileName(file.name);
+
+      // 如果有docId，同步JSON數據到後端
+      if (docId) {
+        try {
+          await api.updateJson(docId, res);
+          console.log("JSON data synchronized to backend");
+        } catch (error) {
+          console.warn("Failed to sync JSON data to backend:", error);
+        }
+      }
     } catch (error) {
       console.error("Convert error:", error);
       // Reset state on error
@@ -90,12 +107,38 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
 
   function updateJsonData(newJsonData: any) {
     setJsonData(newJsonData);
+
+    // 如果有docId，同步JSON數據到後端
+    if (docId) {
+      api
+        .updateJson(docId, newJsonData)
+        .then(() => {
+          console.log("JSON data updated in backend");
+        })
+        .catch((error) => {
+          console.warn("Failed to update JSON data in backend:", error);
+        });
+    }
   }
 
-  async function chunk(size: number, overlap: number) {
+  async function chunk(
+    size: number,
+    overlap: number,
+    strategy?: string,
+    extraParams?: any
+  ) {
     if (!docId) return;
-    const res = await api.chunk({ doc_id: docId, chunk_size: size, overlap });
+    const requestBody = {
+      doc_id: docId,
+      chunk_size: size,
+      overlap,
+      strategy,
+      use_json_structure: !!jsonData, // 如果有JSON數據，啟用結構化分割
+      ...extraParams,
+    };
+    const res = await api.chunk(requestBody);
     setChunkMeta({ size, overlap, count: res.num_chunks });
+    return res;
   }
 
   async function embed() {
@@ -112,6 +155,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     const res = await api.generate({ query, top_k: topK });
     setAnswer(res.answer);
     setSteps(res.steps);
+    setLegalReferences(res.legal_references || []);
   }
 
   function reset() {
@@ -121,6 +165,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     setRetrieval(null);
     setAnswer(null);
     setSteps(null);
+    setLegalReferences(null);
     setJsonData(null);
     setFileName(null);
   }
@@ -132,6 +177,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     retrieval,
     answer,
     steps,
+    legalReferences,
     jsonData,
     fileName,
     loading,
