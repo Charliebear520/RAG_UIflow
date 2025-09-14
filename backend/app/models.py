@@ -57,9 +57,21 @@ class EvaluationResult:
 class ChunkConfig(BaseModel):
     """分塊配置"""
     chunk_size: int = 500
+    overlap: int = 50  # 重疊大小（字符數）
     overlap_ratio: float = 0.1
     strategy: str = "fixed_size"  # "fixed_size", "hierarchical", "structured_hierarchical", "semantic", "adaptive"
     chunk_by: str = "article"  # 對於structured_hierarchical策略: "chapter", "section", "article"
+    
+    # 策略特定參數
+    preserve_structure: bool = True  # RCTS層次分割
+    level_depth: int = 3  # 層次分割
+    similarity_threshold: float = 0.6  # 語義分割
+    semantic_threshold: float = 0.7  # LLM語義分割
+    switch_threshold: float = 0.5  # 混合分割
+    min_chunk_size: int = 200  # 層次分割
+    context_window: int = 100  # 語義分割
+    step_size: int = 250  # 滑動視窗
+    secondary_size: int = 400  # 混合分割
 
 
 class EvaluationRequest(BaseModel):

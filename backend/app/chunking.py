@@ -744,7 +744,7 @@ class StructuredHierarchicalChunking(ChunkingStrategy):
 class SemanticChunking(ChunkingStrategy):
     """語義分割策略"""
     
-    def chunk(self, text: str, max_chunk_size: int = 500, **kwargs) -> List[str]:
+    def chunk(self, text: str, max_chunk_size: int = 500, similarity_threshold: float = 0.6, context_window: int = 100, **kwargs) -> List[str]:
         """語義分割"""
         # 按句子分割
         sentences = re.split(r'[。！？]', text)

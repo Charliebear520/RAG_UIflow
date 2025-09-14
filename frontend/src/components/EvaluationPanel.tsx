@@ -378,10 +378,59 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
                             {result.config.strategy || "固定大小分割"}
                           </div>
                           <div className="text-xs text-gray-500">
-                            {result.config.chunk_size}/
-                            {result.config.overlap_ratio}
-                            {result.config.chunk_by &&
-                              ` (${result.config.chunk_by})`}
+                            Size: {result.config.chunk_size} | Overlap:{" "}
+                            {(result.config.overlap_ratio * 100).toFixed(0)}%
+                            {result.config.chunk_by && (
+                              <div className="mt-1">
+                                分割單位:{" "}
+                                {result.config.chunk_by === "article"
+                                  ? "按條文分割"
+                                  : result.config.chunk_by === "item"
+                                  ? "按項分割"
+                                  : result.config.chunk_by === "section"
+                                  ? "按節分割"
+                                  : result.config.chunk_by === "chapter"
+                                  ? "按章分割"
+                                  : result.config.chunk_by}
+                              </div>
+                            )}
+                            {result.config.preserve_structure !== undefined && (
+                              <div className="mt-1">
+                                保持結構:{" "}
+                                {result.config.preserve_structure ? "是" : "否"}
+                              </div>
+                            )}
+                            {result.config.level_depth !== undefined && (
+                              <div className="mt-1">
+                                層次深度: {result.config.level_depth}
+                              </div>
+                            )}
+                            {result.config.similarity_threshold !==
+                              undefined && (
+                              <div className="mt-1">
+                                相似度閾值: {result.config.similarity_threshold}
+                              </div>
+                            )}
+                            {result.config.semantic_threshold !== undefined && (
+                              <div className="mt-1">
+                                語義閾值: {result.config.semantic_threshold}
+                              </div>
+                            )}
+                            {result.config.step_size !== undefined && (
+                              <div className="mt-1">
+                                步長: {result.config.step_size}
+                              </div>
+                            )}
+                            {result.config.switch_threshold !== undefined && (
+                              <div className="mt-1">
+                                切換閾值: {result.config.switch_threshold}
+                              </div>
+                            )}
+                            {result.config.secondary_size !== undefined && (
+                              <div className="mt-1">
+                                次要大小: {result.config.secondary_size}
+                              </div>
+                            )}
                           </div>
                         </td>
                         <td className="px-4 py-3 text-sm">

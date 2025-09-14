@@ -419,6 +419,17 @@ export function ChunkPage() {
       "如何申請著作權登記？",
     ],
     k_values: [1, 3, 5, 10],
+    // 策略特定參數選項 - 預設包含所有排列組合
+    chunk_by_options: ["article", "item", "section", "chapter"], // 結構化層次分割
+    preserve_structure_options: [true, false], // RCTS層次分割
+    level_depth_options: [2, 3, 4], // 層次分割
+    similarity_threshold_options: [0.5, 0.6, 0.7], // 語義分割
+    semantic_threshold_options: [0.6, 0.7, 0.8], // LLM語義分割
+    switch_threshold_options: [0.3, 0.5, 0.7], // 混合分割
+    min_chunk_size_options: [100, 200, 300], // 層次分割
+    context_window_options: [50, 100, 150], // 語義分割
+    step_size_options: [200, 250, 300], // 滑動視窗
+    secondary_size_options: [300, 400, 500], // 混合分割
   });
   const [currentTask, setCurrentTask] = useState<EvaluationTask | null>(null);
   const [evaluationResults, setEvaluationResults] = useState<
@@ -1074,6 +1085,286 @@ export function ChunkPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* 策略特定參數 */}
+                {selectedStrategy === "structured_hierarchical" && (
+                  <div className="mb-3">
+                    <label className="form-label fw-bold">分割單位選項</label>
+                    <input
+                      type="text"
+                      className="form-control form-control-sm"
+                      placeholder="分割單位選項 (逗號分隔: article,item,section,chapter)"
+                      value={evaluationConfig.chunk_by_options.join(",")}
+                      onChange={(e) => {
+                        const options = e.target.value
+                          .split(",")
+                          .map((s) => s.trim())
+                          .filter((s) => s);
+                        setEvaluationConfig((prev) => ({
+                          ...prev,
+                          chunk_by_options: options,
+                        }));
+                      }}
+                    />
+                    <div className="form-text small">
+                      可選值: article(按條文分割), item(按項分割),
+                      section(按節分割), chapter(按章分割)
+                    </div>
+                  </div>
+                )}
+
+                {selectedStrategy === "rcts_hierarchical" && (
+                  <div className="mb-3">
+                    <label className="form-label fw-bold">
+                      保持層次結構選項
+                    </label>
+                    <input
+                      type="text"
+                      className="form-control form-control-sm"
+                      placeholder="保持層次結構選項 (逗號分隔: true,false)"
+                      value={evaluationConfig.preserve_structure_options.join(
+                        ","
+                      )}
+                      onChange={(e) => {
+                        const options = e.target.value
+                          .split(",")
+                          .map((s) => s.trim().toLowerCase() === "true")
+                          .filter((s) => typeof s === "boolean");
+                        setEvaluationConfig((prev) => ({
+                          ...prev,
+                          preserve_structure_options: options,
+                        }));
+                      }}
+                    />
+                    <div className="form-text small">
+                      可選值: true(啟用), false(停用)
+                    </div>
+                  </div>
+                )}
+
+                {selectedStrategy === "hierarchical" && (
+                  <div className="mb-3">
+                    <div className="row g-2">
+                      <div className="col-6">
+                        <label className="form-label small">層次深度選項</label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="層次深度 (逗號分隔: 2,3,4)"
+                          value={evaluationConfig.level_depth_options.join(",")}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseInt(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              level_depth_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                      <div className="col-6">
+                        <label className="form-label small">
+                          最小分塊大小選項
+                        </label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="最小分塊大小 (逗號分隔: 100,200,300)"
+                          value={evaluationConfig.min_chunk_size_options.join(
+                            ","
+                          )}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseInt(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              min_chunk_size_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedStrategy === "semantic" && (
+                  <div className="mb-3">
+                    <div className="row g-2">
+                      <div className="col-6">
+                        <label className="form-label small">
+                          相似度閾值選項
+                        </label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="相似度閾值 (逗號分隔: 0.5,0.6,0.7)"
+                          value={evaluationConfig.similarity_threshold_options.join(
+                            ","
+                          )}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseFloat(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              similarity_threshold_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                      <div className="col-6">
+                        <label className="form-label small">
+                          上下文窗口選項
+                        </label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="上下文窗口 (逗號分隔: 50,100,150)"
+                          value={evaluationConfig.context_window_options.join(
+                            ","
+                          )}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseInt(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              context_window_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedStrategy === "llm_semantic" && (
+                  <div className="mb-3">
+                    <div className="row g-2">
+                      <div className="col-6">
+                        <label className="form-label small">語義閾值選項</label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="語義閾值 (逗號分隔: 0.6,0.7,0.8)"
+                          value={evaluationConfig.semantic_threshold_options.join(
+                            ","
+                          )}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseFloat(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              semantic_threshold_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                      <div className="col-6">
+                        <label className="form-label small">
+                          上下文窗口選項
+                        </label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="上下文窗口 (逗號分隔: 50,100,150)"
+                          value={evaluationConfig.context_window_options.join(
+                            ","
+                          )}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseInt(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              context_window_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedStrategy === "sliding_window" && (
+                  <div className="mb-3">
+                    <label className="form-label fw-bold">步長選項</label>
+                    <input
+                      type="text"
+                      className="form-control form-control-sm"
+                      placeholder="步長選項 (逗號分隔: 200,250,300)"
+                      value={evaluationConfig.step_size_options.join(",")}
+                      onChange={(e) => {
+                        const options = e.target.value
+                          .split(",")
+                          .map((s) => parseInt(s.trim()))
+                          .filter((n) => !isNaN(n));
+                        setEvaluationConfig((prev) => ({
+                          ...prev,
+                          step_size_options: options,
+                        }));
+                      }}
+                    />
+                  </div>
+                )}
+
+                {selectedStrategy === "hybrid" && (
+                  <div className="mb-3">
+                    <div className="row g-2">
+                      <div className="col-6">
+                        <label className="form-label small">切換閾值選項</label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="切換閾值 (逗號分隔: 0.3,0.5,0.7)"
+                          value={evaluationConfig.switch_threshold_options.join(
+                            ","
+                          )}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseFloat(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              switch_threshold_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                      <div className="col-6">
+                        <label className="form-label small">次要大小選項</label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="次要大小 (逗號分隔: 300,400,500)"
+                          value={evaluationConfig.secondary_size_options.join(
+                            ","
+                          )}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseInt(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              secondary_size_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1636,6 +1927,149 @@ export function ChunkPage() {
                           </div>
                         </div>
                       </div>
+
+                      {/* 策略特定參數分析 */}
+                      {evaluationComparison.strategy_specific_analysis &&
+                        Object.keys(
+                          evaluationComparison.strategy_specific_analysis
+                        ).length > 0 && (
+                          <div className="row g-4 mt-3">
+                            <div className="col-12">
+                              <h6>策略特定參數分析</h6>
+                              <div className="table-responsive">
+                                <table className="table table-sm">
+                                  <thead>
+                                    <tr>
+                                      <th>參數類型</th>
+                                      <th>參數值</th>
+                                      <th>Precision@3</th>
+                                      <th>Recall@3</th>
+                                      <th>PrecisionΩ</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {Object.entries(
+                                      evaluationComparison.strategy_specific_analysis
+                                    ).map(
+                                      ([paramKey, metrics]: [string, any]) => {
+                                        // 解析參數鍵和值
+                                        let paramType = "";
+                                        let paramValue = "";
+
+                                        if (paramKey.startsWith("chunk_by_")) {
+                                          paramType = "分割單位";
+                                          const chunkBy = paramKey.replace(
+                                            "chunk_by_",
+                                            ""
+                                          );
+                                          paramValue =
+                                            chunkBy === "article"
+                                              ? "按條文分割"
+                                              : chunkBy === "item"
+                                              ? "按項分割"
+                                              : chunkBy === "section"
+                                              ? "按節分割"
+                                              : chunkBy === "chapter"
+                                              ? "按章分割"
+                                              : chunkBy;
+                                        } else if (
+                                          paramKey === "preserve_structure"
+                                        ) {
+                                          paramType = "保持結構";
+                                          paramValue = "是";
+                                        } else if (
+                                          paramKey === "no_preserve_structure"
+                                        ) {
+                                          paramType = "保持結構";
+                                          paramValue = "否";
+                                        } else if (
+                                          paramKey.startsWith("level_depth_")
+                                        ) {
+                                          paramType = "層次深度";
+                                          paramValue = paramKey.replace(
+                                            "level_depth_",
+                                            ""
+                                          );
+                                        } else if (
+                                          paramKey.startsWith(
+                                            "similarity_threshold_"
+                                          )
+                                        ) {
+                                          paramType = "相似度閾值";
+                                          paramValue = paramKey.replace(
+                                            "similarity_threshold_",
+                                            ""
+                                          );
+                                        } else if (
+                                          paramKey.startsWith(
+                                            "semantic_threshold_"
+                                          )
+                                        ) {
+                                          paramType = "語義閾值";
+                                          paramValue = paramKey.replace(
+                                            "semantic_threshold_",
+                                            ""
+                                          );
+                                        } else if (
+                                          paramKey.startsWith("step_size_")
+                                        ) {
+                                          paramType = "步長";
+                                          paramValue = paramKey.replace(
+                                            "step_size_",
+                                            ""
+                                          );
+                                        } else if (
+                                          paramKey.startsWith(
+                                            "switch_threshold_"
+                                          )
+                                        ) {
+                                          paramType = "切換閾值";
+                                          paramValue = paramKey.replace(
+                                            "switch_threshold_",
+                                            ""
+                                          );
+                                        } else if (
+                                          paramKey.startsWith("secondary_size_")
+                                        ) {
+                                          paramType = "次要大小";
+                                          paramValue = paramKey.replace(
+                                            "secondary_size_",
+                                            ""
+                                          );
+                                        } else {
+                                          paramType = paramKey;
+                                          paramValue = "";
+                                        }
+
+                                        return (
+                                          <tr key={paramKey}>
+                                            <td>{paramType}</td>
+                                            <td>{paramValue}</td>
+                                            <td>
+                                              {metrics.precision_at_k?.[3]?.toFixed(
+                                                3
+                                              ) || "0.000"}
+                                            </td>
+                                            <td>
+                                              {metrics.recall_at_k?.[3]?.toFixed(
+                                                3
+                                              ) || "0.000"}
+                                            </td>
+                                            <td>
+                                              {metrics.precision_omega?.toFixed(
+                                                3
+                                              ) || "0.000"}
+                                            </td>
+                                          </tr>
+                                        );
+                                      }
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </div>
+                        )}
 
                       {/* 推薦 */}
                       <div className="mt-4">

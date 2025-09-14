@@ -18,6 +18,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+from .models import ChunkConfig
 try:
     from rank_bm25 import BM25Okapi  # type: ignore
     BM25_AVAILABLE = True
@@ -162,10 +164,7 @@ class MetadataOptions(BaseModel):
 
 
 # 評測相關的數據模型
-class ChunkConfig(BaseModel):
-    chunk_size: int
-    overlap: int
-    overlap_ratio: float  # overlap / chunk_size
+# ChunkConfig 已移至 models.py
 
 
 class EvaluationMetrics(BaseModel):
@@ -178,7 +177,7 @@ class EvaluationMetrics(BaseModel):
 
 
 class EvaluationResult(BaseModel):
-    config: ChunkConfig
+    config: Dict[str, Any]  # 改為字典以支援動態參數
     metrics: EvaluationMetrics
     test_queries: List[str]
     retrieval_results: Dict[str, List[Dict]]  # query -> results
@@ -255,7 +254,19 @@ class FixedSizeEvaluationRequest(BaseModel):
         "著作權的保護期限是多久？",
         "如何申請著作權登記？"
     ]
-    k_values: List[int] = [1, 3, 5, 10]  # 用於計算recall@K
+    k_values: List[int] = [1, 3, 5, 10]
+    
+    # 策略特定參數選項 - 預設包含所有排列組合
+    chunk_by_options: List[str] = ["article", "item", "section", "chapter"]  # 結構化層次分割選項
+    preserve_structure_options: List[bool] = [True, False]  # RCTS層次分割選項
+    level_depth_options: List[int] = [2, 3, 4]  # 層次分割選項
+    similarity_threshold_options: List[float] = [0.5, 0.6, 0.7]  # 語義分割選項
+    semantic_threshold_options: List[float] = [0.6, 0.7, 0.8]  # LLM語義分割選項
+    switch_threshold_options: List[float] = [0.3, 0.5, 0.7]  # 混合分割選項
+    min_chunk_size_options: List[int] = [100, 200, 300]  # 層次分割選項
+    context_window_options: List[int] = [50, 100, 150]  # 語義分割選項
+    step_size_options: List[int] = [200, 250, 300]  # 滑動視窗選項
+    secondary_size_options: List[int] = [300, 400, 500]  # 混合分割選項  # 用於計算recall@K
 
 
 class GenerateQuestionsRequest(BaseModel):
@@ -1567,18 +1578,55 @@ def evaluate_chunk_config(doc: DocRecord, config: ChunkConfig,
     """
     評估單個chunk配置
     """
-    # 根據策略生成chunks
+    # 根據策略生成chunks，傳遞策略特定參數
     if strategy == "fixed_size":
         chunks = sliding_window_chunks(doc.text, config.chunk_size, config.overlap)
     elif strategy == "hierarchical":
         from .chunking import chunk_text
-        chunks = chunk_text(doc.text, strategy="hierarchical", max_chunk_size=config.chunk_size, overlap_ratio=config.overlap_ratio)
+        chunks = chunk_text(doc.text, strategy="hierarchical", 
+                           max_chunk_size=config.chunk_size, 
+                           overlap_ratio=config.overlap_ratio,
+                           min_chunk_size=config.min_chunk_size,
+                           level_depth=config.level_depth)
     elif strategy == "rcts_hierarchical":
         from .chunking import chunk_text
-        chunks = chunk_text(doc.text, strategy="rcts_hierarchical", max_chunk_size=config.chunk_size, overlap_ratio=config.overlap_ratio)
+        chunks = chunk_text(doc.text, strategy="rcts_hierarchical", 
+                           max_chunk_size=config.chunk_size, 
+                           overlap_ratio=config.overlap_ratio,
+                           preserve_structure=config.preserve_structure)
     elif strategy == "structured_hierarchical":
         from .chunking import chunk_text
-        chunks = chunk_text(doc.text, strategy="structured_hierarchical", json_data=doc.json_data, max_chunk_size=config.chunk_size, overlap_ratio=config.overlap_ratio)
+        chunks = chunk_text(doc.text, strategy="structured_hierarchical", 
+                           json_data=doc.json_data, 
+                           max_chunk_size=config.chunk_size, 
+                           overlap_ratio=config.overlap_ratio,
+                           chunk_by=config.chunk_by)
+    elif strategy == "semantic":
+        from .chunking import chunk_text
+        chunks = chunk_text(doc.text, strategy="semantic", 
+                           max_chunk_size=config.chunk_size, 
+                           similarity_threshold=config.similarity_threshold,
+                           context_window=config.context_window,
+                           overlap_ratio=config.overlap_ratio)
+    elif strategy == "sliding_window":
+        from .chunking import chunk_text
+        chunks = chunk_text(doc.text, strategy="sliding_window", 
+                           window_size=config.chunk_size, 
+                           step_size=config.step_size)
+    elif strategy == "llm_semantic":
+        from .chunking import chunk_text
+        chunks = chunk_text(doc.text, strategy="llm_semantic", 
+                           max_chunk_size=config.chunk_size, 
+                           semantic_threshold=config.semantic_threshold,
+                           context_window=config.context_window,
+                           overlap_ratio=config.overlap_ratio)
+    elif strategy == "hybrid":
+        from .chunking import chunk_text
+        chunks = chunk_text(doc.text, strategy="hybrid", 
+                           primary_size=config.chunk_size, 
+                           secondary_size=config.secondary_size,
+                           switch_threshold=config.switch_threshold,
+                           overlap_ratio=config.overlap_ratio)
     else:
         # 默認使用固定大小分塊
         chunks = sliding_window_chunks(doc.text, config.chunk_size, config.overlap)
@@ -1682,8 +1730,36 @@ def evaluate_chunk_config(doc: DocRecord, config: ChunkConfig,
         length_variance=length_variance,
     )
 
+    # 創建詳細的配置信息，包含所有策略特定參數
+    detailed_config = {
+        "chunk_size": config.chunk_size,
+        "overlap": config.overlap,
+        "overlap_ratio": config.overlap_ratio,
+        "strategy": strategy,
+    }
+    
+    # 根據策略添加特定參數
+    if strategy == "structured_hierarchical":
+        detailed_config["chunk_by"] = config.chunk_by
+    elif strategy == "rcts_hierarchical":
+        detailed_config["preserve_structure"] = config.preserve_structure
+    elif strategy == "hierarchical":
+        detailed_config["level_depth"] = config.level_depth
+        detailed_config["min_chunk_size"] = config.min_chunk_size
+    elif strategy == "semantic":
+        detailed_config["similarity_threshold"] = config.similarity_threshold
+        detailed_config["context_window"] = config.context_window
+    elif strategy == "llm_semantic":
+        detailed_config["semantic_threshold"] = config.semantic_threshold
+        detailed_config["context_window"] = config.context_window
+    elif strategy == "sliding_window":
+        detailed_config["step_size"] = config.step_size
+    elif strategy == "hybrid":
+        detailed_config["switch_threshold"] = config.switch_threshold
+        detailed_config["secondary_size"] = config.secondary_size
+
     return EvaluationResult(
-        config=config,
+        config=detailed_config,
         metrics=metrics,
         test_queries=test_queries,
         retrieval_results=retrieval_results,
@@ -2707,17 +2783,99 @@ def start_fixed_size_evaluation(req: FixedSizeEvaluationRequest, background_task
     # 使用文檔中存儲的問題而不是預設問題
     req.test_queries = doc.generated_questions
     
-    # 生成所有配置組合
+    # 生成所有配置組合，包括策略特定參數
     configs = []
     for chunk_size in req.chunk_sizes:
         for overlap_ratio in req.overlap_ratios:
             overlap = int(chunk_size * overlap_ratio)
-            config = ChunkConfig(
-                chunk_size=chunk_size,
-                overlap=overlap,
-                overlap_ratio=overlap_ratio
-            )
-            configs.append(config)
+            
+            # 根據策略生成不同的參數組合
+            if req.strategy == "structured_hierarchical":
+                for chunk_by in req.chunk_by_options:
+                    config = ChunkConfig(
+                        chunk_size=chunk_size,
+                        overlap=overlap,
+                        overlap_ratio=overlap_ratio,
+                        chunk_by=chunk_by
+                    )
+                    configs.append(config)
+            elif req.strategy == "rcts_hierarchical":
+                for preserve_structure in req.preserve_structure_options:
+                    config = ChunkConfig(
+                        chunk_size=chunk_size,
+                        overlap=overlap,
+                        overlap_ratio=overlap_ratio,
+                        preserve_structure=preserve_structure,
+                        chunk_by="article"  # 默認值
+                    )
+                    configs.append(config)
+            elif req.strategy == "hierarchical":
+                for level_depth in req.level_depth_options:
+                    for min_chunk_size in req.min_chunk_size_options:
+                        config = ChunkConfig(
+                            chunk_size=chunk_size,
+                            overlap=overlap,
+                            overlap_ratio=overlap_ratio,
+                            level_depth=level_depth,
+                            min_chunk_size=min_chunk_size,
+                            chunk_by="article"  # 默認值
+                        )
+                        configs.append(config)
+            elif req.strategy == "semantic":
+                for similarity_threshold in req.similarity_threshold_options:
+                    for context_window in req.context_window_options:
+                        config = ChunkConfig(
+                            chunk_size=chunk_size,
+                            overlap=overlap,
+                            overlap_ratio=overlap_ratio,
+                            similarity_threshold=similarity_threshold,
+                            context_window=context_window,
+                            chunk_by="article"  # 默認值
+                        )
+                        configs.append(config)
+            elif req.strategy == "llm_semantic":
+                for semantic_threshold in req.semantic_threshold_options:
+                    for context_window in req.context_window_options:
+                        config = ChunkConfig(
+                            chunk_size=chunk_size,
+                            overlap=overlap,
+                            overlap_ratio=overlap_ratio,
+                            semantic_threshold=semantic_threshold,
+                            context_window=context_window,
+                            chunk_by="article"  # 默認值
+                        )
+                        configs.append(config)
+            elif req.strategy == "sliding_window":
+                for step_size in req.step_size_options:
+                    config = ChunkConfig(
+                        chunk_size=chunk_size,
+                        overlap=overlap,
+                        overlap_ratio=overlap_ratio,
+                        step_size=step_size,
+                        chunk_by="article"  # 默認值
+                    )
+                    configs.append(config)
+            elif req.strategy == "hybrid":
+                for switch_threshold in req.switch_threshold_options:
+                    for secondary_size in req.secondary_size_options:
+                        config = ChunkConfig(
+                            chunk_size=chunk_size,
+                            overlap=overlap,
+                            overlap_ratio=overlap_ratio,
+                            switch_threshold=switch_threshold,
+                            secondary_size=secondary_size,
+                            chunk_by="article"  # 默認值
+                        )
+                        configs.append(config)
+            else:
+                # 默認配置（fixed_size等）
+                config = ChunkConfig(
+                    chunk_size=chunk_size,
+                    overlap=overlap,
+                    overlap_ratio=overlap_ratio,
+                    chunk_by="article"  # 默認值
+                )
+                configs.append(config)
     
     # 獲取分割策略（從請求中獲取，默認為fixed_size）
     strategy = getattr(req, 'strategy', 'fixed_size')
@@ -2779,12 +2937,7 @@ def get_evaluation_results(task_id: str):
     results = []
     for result in task.results:
         result_dict = {
-            "config": {
-                "chunk_size": result.config.chunk_size,
-                "overlap": result.config.overlap,
-                "overlap_ratio": result.config.overlap_ratio,
-                "strategy": task.strategy
-            },
+            "config": result.config,  # 現在 config 已經是字典了
             "metrics": {
                 "precision_omega": result.metrics.precision_omega,
                 "precision_at_k": result.metrics.precision_at_k,
@@ -2830,13 +2983,14 @@ def get_evaluation_comparison(task_id: str):
     comparison = {
         "chunk_size_analysis": {},
         "overlap_analysis": {},
+        "strategy_specific_analysis": {},
         "recommendations": []
     }
     
     # 按chunk size分組分析
     chunk_size_groups = {}
     for result in task.results:
-        size = result.config.chunk_size
+        size = result.config["chunk_size"]
         if size not in chunk_size_groups:
             chunk_size_groups[size] = []
         chunk_size_groups[size].append(result)
@@ -2865,7 +3019,7 @@ def get_evaluation_comparison(task_id: str):
     # 按overlap ratio分組分析
     overlap_groups = {}
     for result in task.results:
-        ratio = result.config.overlap_ratio
+        ratio = result.config["overlap_ratio"]
         if ratio not in overlap_groups:
             overlap_groups[ratio] = []
         overlap_groups[ratio].append(result)
@@ -2891,6 +3045,101 @@ def get_evaluation_comparison(task_id: str):
         }
         comparison["overlap_analysis"][ratio] = avg_metrics
     
+    # 按策略特定參數分組分析
+    if task.results:
+        strategy = task.results[0].config.get("strategy", "fixed_size")
+        
+        if strategy == "structured_hierarchical":
+            # 按分割單位分組
+            chunk_by_groups = {}
+            for result in task.results:
+                chunk_by = result.config.get("chunk_by", "article")
+                if chunk_by not in chunk_by_groups:
+                    chunk_by_groups[chunk_by] = []
+                chunk_by_groups[chunk_by].append(result)
+            
+            for chunk_by, results in chunk_by_groups.items():
+                avg_metrics = {
+                    "precision_omega": sum(r.metrics.precision_omega for r in results) / len(results),
+                    "precision_at_k": {
+                        "1": sum(r.metrics.precision_at_k.get(1, 0) for r in results) / len(results),
+                        "3": sum(r.metrics.precision_at_k.get(3, 0) for r in results) / len(results),
+                        "5": sum(r.metrics.precision_at_k.get(5, 0) for r in results) / len(results),
+                        "10": sum(r.metrics.precision_at_k.get(10, 0) for r in results) / len(results)
+                    },
+                    "recall_at_k": {
+                        "1": sum(r.metrics.recall_at_k.get(1, 0) for r in results) / len(results),
+                        "3": sum(r.metrics.recall_at_k.get(3, 0) for r in results) / len(results),
+                        "5": sum(r.metrics.recall_at_k.get(5, 0) for r in results) / len(results),
+                        "10": sum(r.metrics.recall_at_k.get(10, 0) for r in results) / len(results)
+                    },
+                    "avg_chunk_count": sum(r.metrics.chunk_count for r in results) / len(results),
+                    "avg_chunk_length": sum(r.metrics.avg_chunk_length for r in results) / len(results),
+                    "length_variance": sum(r.metrics.length_variance for r in results) / len(results)
+                }
+                comparison["strategy_specific_analysis"][f"chunk_by_{chunk_by}"] = avg_metrics
+        
+        elif strategy == "rcts_hierarchical":
+            # 按保持結構分組
+            preserve_groups = {}
+            for result in task.results:
+                preserve = result.config.get("preserve_structure", True)
+                key = "preserve_structure" if preserve else "no_preserve_structure"
+                if key not in preserve_groups:
+                    preserve_groups[key] = []
+                preserve_groups[key].append(result)
+            
+            for key, results in preserve_groups.items():
+                avg_metrics = {
+                    "precision_omega": sum(r.metrics.precision_omega for r in results) / len(results),
+                    "precision_at_k": {
+                        "1": sum(r.metrics.precision_at_k.get(1, 0) for r in results) / len(results),
+                        "3": sum(r.metrics.precision_at_k.get(3, 0) for r in results) / len(results),
+                        "5": sum(r.metrics.precision_at_k.get(5, 0) for r in results) / len(results),
+                        "10": sum(r.metrics.precision_at_k.get(10, 0) for r in results) / len(results)
+                    },
+                    "recall_at_k": {
+                        "1": sum(r.metrics.recall_at_k.get(1, 0) for r in results) / len(results),
+                        "3": sum(r.metrics.recall_at_k.get(3, 0) for r in results) / len(results),
+                        "5": sum(r.metrics.recall_at_k.get(5, 0) for r in results) / len(results),
+                        "10": sum(r.metrics.recall_at_k.get(10, 0) for r in results) / len(results)
+                    },
+                    "avg_chunk_count": sum(r.metrics.chunk_count for r in results) / len(results),
+                    "avg_chunk_length": sum(r.metrics.avg_chunk_length for r in results) / len(results),
+                    "length_variance": sum(r.metrics.length_variance for r in results) / len(results)
+                }
+                comparison["strategy_specific_analysis"][key] = avg_metrics
+        
+        elif strategy == "hierarchical":
+            # 按層次深度分組
+            level_groups = {}
+            for result in task.results:
+                level = result.config.get("level_depth", 3)
+                if level not in level_groups:
+                    level_groups[level] = []
+                level_groups[level].append(result)
+            
+            for level, results in level_groups.items():
+                avg_metrics = {
+                    "precision_omega": sum(r.metrics.precision_omega for r in results) / len(results),
+                    "precision_at_k": {
+                        "1": sum(r.metrics.precision_at_k.get(1, 0) for r in results) / len(results),
+                        "3": sum(r.metrics.precision_at_k.get(3, 0) for r in results) / len(results),
+                        "5": sum(r.metrics.precision_at_k.get(5, 0) for r in results) / len(results),
+                        "10": sum(r.metrics.precision_at_k.get(10, 0) for r in results) / len(results)
+                    },
+                    "recall_at_k": {
+                        "1": sum(r.metrics.recall_at_k.get(1, 0) for r in results) / len(results),
+                        "3": sum(r.metrics.recall_at_k.get(3, 0) for r in results) / len(results),
+                        "5": sum(r.metrics.recall_at_k.get(5, 0) for r in results) / len(results),
+                        "10": sum(r.metrics.recall_at_k.get(10, 0) for r in results) / len(results)
+                    },
+                    "avg_chunk_count": sum(r.metrics.chunk_count for r in results) / len(results),
+                    "avg_chunk_length": sum(r.metrics.avg_chunk_length for r in results) / len(results),
+                    "length_variance": sum(r.metrics.length_variance for r in results) / len(results)
+                }
+                comparison["strategy_specific_analysis"][f"level_depth_{level}"] = avg_metrics
+    
     # 生成推薦
     best_overall = max(task.results, key=lambda r: (
         r.metrics.precision_omega * 0.4 + 
@@ -2898,8 +3147,46 @@ def get_evaluation_comparison(task_id: str):
         r.metrics.recall_at_k.get(5, 0) * 0.3
     ))
     
+    # 生成詳細的推薦配置
+    config_parts = []
+    config_parts.append(f"chunk_size={best_overall.config['chunk_size']}")
+    config_parts.append(f"overlap_ratio={best_overall.config['overlap_ratio']}")
+    
+    # 添加策略特定參數
+    strategy = best_overall.config.get("strategy", "fixed_size")
+    if strategy == "structured_hierarchical":
+        chunk_by = best_overall.config.get("chunk_by", "article")
+        chunk_by_label = {"article": "按條文分割", "item": "按項分割", "section": "按節分割", "chapter": "按章分割"}.get(chunk_by, chunk_by)
+        config_parts.append(f"chunk_by={chunk_by}({chunk_by_label})")
+    elif strategy == "rcts_hierarchical":
+        preserve = best_overall.config.get("preserve_structure", True)
+        config_parts.append(f"preserve_structure={preserve}({'保持結構' if preserve else '不保持結構'})")
+    elif strategy == "hierarchical":
+        level = best_overall.config.get("level_depth", 3)
+        min_size = best_overall.config.get("min_chunk_size", 200)
+        config_parts.append(f"level_depth={level}")
+        config_parts.append(f"min_chunk_size={min_size}")
+    elif strategy == "semantic":
+        threshold = best_overall.config.get("similarity_threshold", 0.6)
+        context = best_overall.config.get("context_window", 100)
+        config_parts.append(f"similarity_threshold={threshold}")
+        config_parts.append(f"context_window={context}")
+    elif strategy == "llm_semantic":
+        threshold = best_overall.config.get("semantic_threshold", 0.7)
+        context = best_overall.config.get("context_window", 100)
+        config_parts.append(f"semantic_threshold={threshold}")
+        config_parts.append(f"context_window={context}")
+    elif strategy == "sliding_window":
+        step = best_overall.config.get("step_size", 250)
+        config_parts.append(f"step_size={step}")
+    elif strategy == "hybrid":
+        switch = best_overall.config.get("switch_threshold", 0.5)
+        secondary = best_overall.config.get("secondary_size", 400)
+        config_parts.append(f"switch_threshold={switch}")
+        config_parts.append(f"secondary_size={secondary}")
+    
     comparison["recommendations"] = [
-        f"最佳配置：chunk_size={best_overall.config.chunk_size}, overlap_ratio={best_overall.config.overlap_ratio}",
+        f"最佳配置：{', '.join(config_parts)}",
         f"該配置的precision omega: {best_overall.metrics.precision_omega:.3f}",
         f"該配置的precision@5: {best_overall.metrics.precision_at_k.get(5, 0):.3f}",
         f"該配置的recall@5: {best_overall.metrics.recall_at_k.get(5, 0):.3f}",
