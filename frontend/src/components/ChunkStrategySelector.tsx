@@ -4,6 +4,7 @@ import React from "react";
 export type ChunkStrategy =
   | "fixed_size"
   | "hierarchical"
+  | "structured_hierarchical"
   | "adaptive"
   | "hybrid"
   | "semantic";
@@ -19,6 +20,11 @@ export interface ChunkParams {
     min_chunk_size: number;
     overlap: number;
     level_depth: number;
+  };
+  structured_hierarchical: {
+    max_chunk_size: number;
+    overlap_ratio: number;
+    chunk_by: "chapter" | "section" | "article";
   };
   adaptive: {
     target_size: number;
@@ -55,6 +61,14 @@ export const strategyInfo = {
     pros: ["保持語義完整", "符合文檔結構", "可讀性好"],
     cons: ["依賴文檔格式", "長度不均勻"],
     metrics: ["結構完整性", "語義連貫性", "分塊均勻度"],
+  },
+  structured_hierarchical: {
+    name: "結構化層次分割",
+    description:
+      "基於JSON結構數據，按照法律文檔的章-節-條-項結構進行智能分割。",
+    pros: ["精確結構識別", "保持法律邏輯", "支持條文引用", "適合法律文檔"],
+    cons: ["需要結構化數據", "依賴PDF解析質量"],
+    metrics: ["結構準確性", "條文完整性", "引用關係保持"],
   },
   adaptive: {
     name: "自適應分割",
@@ -218,6 +232,73 @@ export const ChunkStrategySelector: React.FC<ChunkStrategySelectorProps> = ({
                 min="1"
                 max="5"
               />
+            </div>
+          </div>
+        );
+
+      case "structured_hierarchical":
+        return (
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                最大分塊大小
+              </label>
+              <input
+                type="number"
+                value={params.structured_hierarchical.max_chunk_size}
+                onChange={(e) =>
+                  handleParamChange(
+                    "structured_hierarchical",
+                    "max_chunk_size",
+                    parseInt(e.target.value)
+                  )
+                }
+                className="w-full px-3 py-2 border rounded-md"
+                min="200"
+                max="2000"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">重疊比例</label>
+              <input
+                type="number"
+                step="0.1"
+                value={params.structured_hierarchical.overlap_ratio}
+                onChange={(e) =>
+                  handleParamChange(
+                    "structured_hierarchical",
+                    "overlap_ratio",
+                    parseFloat(e.target.value)
+                  )
+                }
+                className="w-full px-3 py-2 border rounded-md"
+                min="0"
+                max="0.5"
+              />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium mb-1">分割單位</label>
+              <select
+                value={params.structured_hierarchical.chunk_by}
+                onChange={(e) => {
+                  const newParams = { ...params };
+                  newParams.structured_hierarchical.chunk_by = e.target
+                    .value as "chapter" | "section" | "article";
+                  onParamsChange(newParams);
+                }}
+                className="w-full px-3 py-2 border rounded-md"
+              >
+                <option value="article">按條文分割</option>
+                <option value="section">按節分割</option>
+                <option value="chapter">按章分割</option>
+              </select>
+              <div className="text-xs text-gray-500 mt-1">
+                按條文分割：每條法律條文獨立成塊（推薦）
+                <br />
+                按節分割：每個章節獨立成塊
+                <br />
+                按章分割：每個章獨立成塊
+              </div>
             </div>
           </div>
         );

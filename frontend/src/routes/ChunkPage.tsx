@@ -244,6 +244,14 @@ export function ChunkPage() {
   const { canChunk, chunk, docId, chunkMeta } = useRag();
   const [selectedStrategy, setSelectedStrategy] =
     useState<ChunkStrategy>("fixed_size");
+
+  // 當策略變化時，更新評測配置
+  useEffect(() => {
+    setEvaluationConfig((prev) => ({
+      ...prev,
+      strategy: selectedStrategy,
+    }));
+  }, [selectedStrategy]);
   const [params, setParams] = useState<ChunkParams>({
     fixed_size: { chunk_size: 500, overlap: 50 },
     hierarchical: {
@@ -279,6 +287,7 @@ export function ChunkPage() {
   const [evaluationConfig, setEvaluationConfig] = useState({
     chunk_sizes: [300, 500, 800],
     overlap_ratios: [0.0, 0.1, 0.2],
+    strategy: "fixed_size", // 新增：分割策略
     test_queries: [
       "著作權的定義是什麼？",
       "什麼情況下可以合理使用他人作品？",

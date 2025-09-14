@@ -40,9 +40,10 @@ except ImportError:
     jieba = None  # type: ignore
 
 try:
-    import google.generativeai as genai
+    import google.generativeai as genai  # type: ignore
     GEMINI_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover - optional dependency
+    genai = None  # type: ignore
     GEMINI_AVAILABLE = False
 
 load_dotenv()
@@ -76,13 +77,16 @@ class DocRecord:
     overlap: int
     json_data: Optional[Dict[str, Any]] = None  # 存儲結構化JSON數據
     structured_chunks: Optional[List[Dict[str, Any]]] = None  # 存儲結構化chunks
+    generated_questions: Optional[List[str]] = None  # 存儲生成的問題
 
 
 class InMemoryStore:
     def __init__(self) -> None:
         self.docs: Dict[str, DocRecord] = {}
         self.tfidf: Optional[TfidfVectorizer] = None
-        self.embeddings = None  # matrix for chunks (numpy array or list)
+        # embeddings can be: List[List[float]] (dense) or scipy.sparse.spmatrix (tf-idf)
+        from typing import Any as _Any
+        self.embeddings: _Any = None
         self.chunk_doc_ids: List[str] = []
         self.chunks_flat: List[str] = []
 
@@ -94,59 +98,11 @@ class InMemoryStore:
         self.chunks_flat = []
 
 
-@dataclass
-class EvaluationTask:
-    id: str
-    doc_id: str
-    configs: List[ChunkConfig]
-    test_queries: List[str]
-    k_values: List[int]
-    status: str  # "pending", "running", "completed", "failed"
-    results: List[EvaluationResult]
-    created_at: datetime
-    completed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
 
 
-class EvaluationStore:
-    def __init__(self) -> None:
-        self.tasks: Dict[str, EvaluationTask] = {}
-        self.executor = ThreadPoolExecutor(max_workers=2)
-
-    def create_task(self, doc_id: str, configs: List[ChunkConfig], 
-                   test_queries: List[str], k_values: List[int]) -> str:
-        task_id = str(uuid.uuid4())
-        task = EvaluationTask(
-            id=task_id,
-            doc_id=doc_id,
-            configs=configs,
-            test_queries=test_queries,
-            k_values=k_values,
-            status="pending",
-            results=[],
-            created_at=datetime.now()
-        )
-        self.tasks[task_id] = task
-        return task_id
-
-    def get_task(self, task_id: str) -> Optional[EvaluationTask]:
-        return self.tasks.get(task_id)
-
-    def update_task_status(self, task_id: str, status: str, 
-                          results: List[EvaluationResult] = None,
-                          error_message: str = None):
-        if task_id in self.tasks:
-            self.tasks[task_id].status = status
-            if results is not None:
-                self.tasks[task_id].results = results
-            if error_message is not None:
-                self.tasks[task_id].error_message = error_message
-            if status == "completed":
-                self.tasks[task_id].completed_at = datetime.now()
 
 
 store = InMemoryStore()
-eval_store = EvaluationStore()
 
 
 app = FastAPI(title="RAG Visualizer API", version="0.1.0")
@@ -158,6 +114,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 暫時停用routes.py的包含，避免循環導入問題
+# from .routes import router
+# app.include_router(router)
 
 
 class ChunkRequest(BaseModel):
@@ -215,10 +175,69 @@ class EvaluationResult(BaseModel):
     timestamp: datetime
 
 
+@dataclass
+class EvaluationTask:
+    id: str
+    doc_id: str
+    configs: List[ChunkConfig]
+    test_queries: List[str]
+    k_values: List[int]
+    status: str  # "pending", "running", "completed", "failed"
+    results: List[EvaluationResult]
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    strategy: str = "fixed_size"  # 新增：分割策略
+
+
+class EvaluationStore:
+    def __init__(self) -> None:
+        self.tasks: Dict[str, EvaluationTask] = {}
+        self.executor = ThreadPoolExecutor(max_workers=2)
+
+    def create_task(self, doc_id: str, configs: List[ChunkConfig], 
+                   test_queries: List[str], k_values: List[int], 
+                   strategy: str = "fixed_size") -> str:
+        task_id = str(uuid.uuid4())
+        task = EvaluationTask(
+            id=task_id,
+            doc_id=doc_id,
+            configs=configs,
+            test_queries=test_queries,
+            k_values=k_values,
+            strategy=strategy,
+            status="pending",
+            results=[],
+            created_at=datetime.now()
+        )
+        self.tasks[task_id] = task
+        return task_id
+
+    def get_task(self, task_id: str) -> Optional[EvaluationTask]:
+        return self.tasks.get(task_id)
+
+    def update_task_status(self, task_id: str, status: str, 
+                          results: Optional[List[EvaluationResult]] = None,
+                          error_message: Optional[str] = None):
+        if task_id in self.tasks:
+            self.tasks[task_id].status = status
+            if results is not None:
+                self.tasks[task_id].results = results
+            if error_message is not None:
+                self.tasks[task_id].error_message = error_message
+            if status == "completed":
+                self.tasks[task_id].completed_at = datetime.now()
+
+
+# 創建評估存儲實例
+eval_store = EvaluationStore()
+
+
 class FixedSizeEvaluationRequest(BaseModel):
     doc_id: str
     chunk_sizes: List[int] = [300, 500, 800]
     overlap_ratios: List[float] = [0.0, 0.1, 0.2]
+    strategy: str = "fixed_size"  # 新增：分割策略
     test_queries: List[str] = [
         "著作權的定義是什麼？",
         "什麼情況下可以合理使用他人作品？",
@@ -253,7 +272,7 @@ class QuestionGenerationResult(BaseModel):
     timestamp: datetime
 
 
-def generate_unique_id(law_name: str, chapter: str, section: str, article: str, item: str = None) -> str:
+def generate_unique_id(law_name: str, chapter: str, section: str, article: str, item: Optional[str] = None) -> str:
     """生成id"""
     # 清理法規名稱
     law_clean = re.sub(r'[^\w]', '', law_name.lower())
@@ -286,12 +305,18 @@ def extract_keywords_with_gemini(text: str, top_k: int = 5) -> List[str]:
     
     try:
         # 配置Gemini API
-        api_key = os.getenv('GEMINI_API_KEY')
+        api_key = GOOGLE_API_KEY  # Use the already defined GOOGLE_API_KEY variable
         if not api_key:
             return extract_keywords_fallback(text, top_k)
         
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        # Configure API key using getattr to avoid static export issues
+        cfg = getattr(genai, "configure", None)
+        if callable(cfg):
+            cfg(api_key=api_key)  # type: ignore[misc]
+        ModelCls = getattr(genai, "GenerativeModel", None)
+        if ModelCls is None:
+            return extract_keywords_fallback(text, top_k)
+        model = ModelCls('gemini-2.0-flash-exp')
         
         prompt = f"""
         請從以下法律條文內容中提取{top_k}個最重要的關鍵詞。
@@ -322,9 +347,11 @@ def extract_keywords_fallback(text: str, top_k: int = 5) -> List[str]:
         return list(set(words))[:top_k]
     
     try:
-        # 使用jieba提取關鍵詞
-        keywords = jieba.analyse.extract_tags(text, topK=top_k, withWeight=False)
-        return keywords
+        # 使用jieba提取關鍵詞；部分版本型別為 List[Tuple[str, float]] | List[str]
+        from typing import cast, List as _List
+        kws = jieba.analyse.extract_tags(text, topK=top_k, withWeight=False)  # type: ignore[call-arg]
+        keywords = cast(_List[str], list(kws))
+        return keywords[:top_k] if keywords else []
     except:
         # 如果jieba失敗，使用簡單的正則表達式
         words = re.findall(r'[\u4e00-\u9fff]+', text)
@@ -423,8 +450,8 @@ def calculate_tfidf_importance(texts: List[str], target_text: str) -> float:
         all_texts = processed_texts + [processed_target]
         tfidf_matrix = vectorizer.fit_transform(all_texts)
         
-        # 獲取目標文本的TF-IDF向量
-        target_vector = tfidf_matrix[-1]
+        # 獲取目標文本的TF-IDF向量（避免稀疏矩陣的切片警告）
+        target_vector = tfidf_matrix.getrow(tfidf_matrix.shape[0] - 1)
         
         # 計算與其他文本的平均相似度
         similarities = cosine_similarity(target_vector, tfidf_matrix[:-1])
@@ -841,7 +868,7 @@ async def upload(file: UploadFile = File(...)):
     return {"doc_id": doc_id, "filename": file.filename, "num_chars": len(text)}
 
 
-@app.post("/update-json")
+@app.post("/api/update-json")
 async def update_json(request: dict):
     """更新文檔的JSON結構化數據"""
     doc_id = request.get("doc_id")
@@ -1380,8 +1407,13 @@ def generate_questions_with_gemini(text_content: str, num_questions: int,
         if not api_key:
             return generate_questions_fallback(text_content, num_questions)
         
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        cfg = getattr(genai, "configure", None)
+        if callable(cfg):
+            cfg(api_key=api_key)  # type: ignore[misc]
+        ModelCls = getattr(genai, "GenerativeModel", None)
+        if ModelCls is None:
+            return generate_questions_fallback(text_content, num_questions)
+        model = ModelCls('gemini-2.0-flash-exp')
         
         # 從文本中隨機選擇4000 tokens的內容（模擬ihower的做法）
         import random
@@ -1520,12 +1552,23 @@ def generate_questions_fallback(text_content: str, num_questions: int) -> List[G
 
 
 def evaluate_chunk_config(doc: DocRecord, config: ChunkConfig, 
-                         test_queries: List[str], k_values: List[int]) -> EvaluationResult:
+                         test_queries: List[str], k_values: List[int], 
+                         strategy: str = "fixed_size") -> EvaluationResult:
     """
     評估單個chunk配置
     """
-    # 生成chunks（固定大小滑動窗口）
-    chunks = sliding_window_chunks(doc.text, config.chunk_size, config.overlap)
+    # 根據策略生成chunks
+    if strategy == "fixed_size":
+        chunks = sliding_window_chunks(doc.text, config.chunk_size, config.overlap)
+    elif strategy == "hierarchical":
+        from .chunking import chunk_text
+        chunks = chunk_text(doc.text, strategy="hierarchical", max_chunk_size=config.chunk_size, overlap_ratio=config.overlap_ratio)
+    elif strategy == "structured_hierarchical":
+        from .chunking import chunk_text
+        chunks = chunk_text(doc.text, strategy="structured_hierarchical", json_data=doc.json_data, max_chunk_size=config.chunk_size, overlap_ratio=config.overlap_ratio)
+    else:
+        # 默認使用固定大小分塊
+        chunks = sliding_window_chunks(doc.text, config.chunk_size, config.overlap)
 
     # 計算基本統計
     chunk_count = len(chunks)
@@ -1635,7 +1678,7 @@ def evaluate_chunk_config(doc: DocRecord, config: ChunkConfig,
     )
 
 
-@app.post("/chunk")
+@app.post("/api/chunk")
 def chunk(req: ChunkRequest):
     doc = store.docs.get(req.doc_id)
     if not doc:
@@ -1757,7 +1800,7 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
     return out
 
 
-@app.post("/embed")
+@app.post("/api/embed")
 async def embed(req: EmbedRequest):
     # gather chunks across selected docs
     selected = req.doc_ids or list(store.docs.keys())
@@ -1824,7 +1867,7 @@ def asyncio_run(coro):
     return asyncio.run(coro)
 
 
-@app.post("/retrieve")
+@app.post("/api/retrieve")
 def retrieve(req: RetrieveRequest):
     if store.embeddings is None:
         return JSONResponse(status_code=400, content={"error": "run /embed first"})
@@ -1921,7 +1964,7 @@ def simple_extractive_answer(query: str, contexts: List[str]) -> str:
     return " \n".join(best) if best else "No relevant answer found in context."
 
 
-@app.post("/generate")
+@app.post("/api/generate")
 def generate(req: GenerateRequest):
     # retrieve first
     r = retrieve(RetrieveRequest(query=req.query, k=req.top_k))
@@ -2008,33 +2051,17 @@ def generate(req: GenerateRequest):
     }
 
 
-@app.post("/convert")
-async def convert(file: UploadFile = File(...), metadata_options: str = Form("{}")):
+def convert_pdf_structured(file_content: bytes, filename: str, options: MetadataOptions) -> Dict[str, Any]:
+    """將PDF轉換為結構化格式"""
     import time
     start_time = time.time()
     
     try:
-        # Parse metadata options
-        try:
-            metadata_config = json.loads(metadata_options)
-            options = MetadataOptions(**metadata_config)
-        except:
-            options = MetadataOptions()  # 使用默認選項
-        
-        # Validate file type
-        if not file.filename or not file.filename.lower().endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="只支持PDF文件格式")
-        
-        # Reset file pointer to beginning
-        await file.seek(0)
-        
-        print(f"開始轉換PDF: {file.filename}")
-        
         # Read PDF content safely; skip pages with no text
         try:
-            reader = PdfReader(file.file)
+            reader = PdfReader(io.BytesIO(file_content))
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"無法讀取PDF文件: {str(e)}")
+            raise Exception(f"無法讀取PDF文件: {str(e)}")
         
         # 批量提取文本，顯示進度
         texts = []
@@ -2053,7 +2080,7 @@ async def convert(file: UploadFile = File(...), metadata_options: str = Form("{}
                 print(f"已處理 {i + 1}/{total_pages} 頁")
         
         if not any(texts):  # No text extracted
-            raise HTTPException(status_code=400, detail="PDF文件中没有找到可提取的文本内容")
+            raise Exception("PDF文件中没有找到可提取的文本内容")
             
         full_text = "\n".join(texts)
         print(f"文本提取完成，總長度: {len(full_text)} 字符")
@@ -2074,7 +2101,7 @@ async def convert(file: UploadFile = File(...), metadata_options: str = Form("{}
                 law_name = ln
                 break
         if not law_name:
-            base = os.path.splitext(file.filename or "document")[0]
+            base = os.path.splitext(filename or "document")[0]
             law_name = base or "未命名法規"
 
         chapter_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)\s*章[\u3000\s]*(.*)$")
@@ -2358,27 +2385,259 @@ async def convert(file: UploadFile = File(...), metadata_options: str = Form("{}
             
             metadata_time = time.time() - metadata_start
             print(f"Metadata處理完成，耗時: {metadata_time:.2f}秒")
-            return structure
-            
-            return structure
         
         # 添加metadata（使用優化版本）
         if any([options.include_id, options.include_keywords, options.include_cross_references, 
                 options.include_importance, options.include_length, options.include_spans]):
-            structure = add_metadata_to_structure_optimized(structure, options, full_text)
+            add_metadata_to_structure_optimized(structure, options, full_text)
         else:
             print("跳過metadata處理（未啟用）")
 
         total_time = time.time() - start_time
         print(f"總轉換時間: {total_time:.2f}秒")
         
-        return structure
-    except HTTPException:
-        # Re-raise HTTPExceptions with their original status codes
-        raise
+        return {
+            "text": full_text,
+            "metadata": structure,
+            "processing_time": total_time,
+            "success": True
+        }
+        
     except Exception as e:
-        # For other unexpected errors, return 500
-        raise HTTPException(status_code=500, detail=f"處理PDF時發生意外錯誤: {str(e)}")
+        return {
+            "text": "",
+            "metadata": {"error": str(e)},
+            "processing_time": time.time() - start_time,
+            "success": False,
+            "error": str(e)
+        }
+
+
+# 異步任務存儲
+conversion_tasks = {}
+
+# PDF緩存存儲 (基於文件內容哈希)
+pdf_cache = {}
+
+# 清理舊任務的後台任務
+async def cleanup_old_tasks():
+    """清理超過1小時的舊任務"""
+    while True:
+        try:
+            current_time = time.time()
+            expired_tasks = []
+            
+            for task_id, task in conversion_tasks.items():
+                if current_time - task["created_at"] > 3600:  # 1小時
+                    expired_tasks.append(task_id)
+            
+            for task_id in expired_tasks:
+                del conversion_tasks[task_id]
+                print(f"清理過期任務: {task_id}")
+            
+            # 每5分鐘清理一次
+            await asyncio.sleep(300)
+        except Exception as e:
+            print(f"清理任務時發生錯誤: {e}")
+            await asyncio.sleep(60)  # 出錯時等待1分鐘再重試
+
+# 清理任務將在應用啟動時啟動
+@app.on_event("startup")
+async def startup_event():
+    """應用啟動時的事件"""
+    import asyncio
+    asyncio.create_task(cleanup_old_tasks())
+
+@app.post("/api/convert")
+async def convert(file: UploadFile = File(...), metadata_options: str = Form("{}")):
+    """啟動PDF轉換任務"""
+    try:
+        # Parse metadata options
+        try:
+            metadata_config = json.loads(metadata_options)
+            options = MetadataOptions(**metadata_config)
+        except:
+            options = MetadataOptions()  # 使用默認選項
+        
+        # Validate file type
+        if not file.filename or not file.filename.lower().endswith('.pdf'):
+            return JSONResponse(
+                status_code=400, 
+                content={"error": "只支持PDF文件格式", "detail": "Invalid file type"}
+            )
+        
+        # Reset file pointer to beginning
+        await file.seek(0)
+        
+        # 生成任務ID
+        task_id = f"convert_{int(time.time() * 1000)}_{hash(file.filename) % 10000}"
+        
+        # 讀取文件內容
+        file_content = await file.read()
+        
+        # 檢查緩存（基於文件內容哈希）
+        import hashlib
+        file_hash = hashlib.md5(file_content).hexdigest()
+        
+        # 檢查是否已緩存
+        cache_key = f"{file_hash}_{json.dumps(options.__dict__, sort_keys=True)}"
+        if cache_key in pdf_cache:
+            cached_result = pdf_cache[cache_key]
+            print(f"使用緩存的PDF轉換結果: {file.filename}")
+            
+            # 生成新的doc_id
+            doc_id = f"doc_{int(time.time() * 1000)}_{hash(file.filename) % 10000}"
+            
+            # 將文檔存儲到store中
+            store.docs[doc_id] = DocRecord(
+                id=doc_id,
+                filename=file.filename,
+                text=cached_result["text"],
+                json_data=cached_result["metadata"],
+                chunks=[],
+                chunk_size=0,
+                overlap=0,
+            )
+            
+            return {
+                "doc_id": doc_id,
+                "filename": file.filename,
+                "text_length": cached_result["text_length"],
+                "metadata": cached_result["metadata"],
+                "processing_time": 0.1,  # 緩存命中，幾乎瞬間完成
+                "cached": True
+            }
+        
+        # 創建任務
+        conversion_tasks[task_id] = {
+            "status": "pending",
+            "progress": 0,
+            "filename": file.filename,
+            "created_at": time.time(),
+            "result": None,
+            "error": None,
+            "file_hash": file_hash,
+            "cache_key": cache_key
+        }
+        
+        # 啟動後台任務
+        import asyncio
+        asyncio.create_task(process_pdf_conversion(task_id, file_content, options))
+        
+        return {
+            "task_id": task_id,
+            "status": "pending",
+            "message": "PDF轉換任務已啟動，請使用task_id查詢進度"
+        }
+        
+    except Exception as e:
+        print(f"Convert endpoint error: {e}")
+        return JSONResponse(
+            status_code=500, 
+            content={"error": "啟動PDF轉換任務失敗", "detail": str(e)}
+        )
+
+
+async def process_pdf_conversion(task_id: str, file_content: bytes, options: MetadataOptions):
+    """後台處理PDF轉換"""
+    import time
+    start_time = time.time()
+    
+    try:
+        # 更新任務狀態
+        conversion_tasks[task_id]["status"] = "processing"
+        conversion_tasks[task_id]["progress"] = 10
+        
+        print(f"開始轉換PDF: {conversion_tasks[task_id]['filename']}")
+        
+        # 直接調用convert_pdf_structured函數
+        conversion_tasks[task_id]["progress"] = 20
+        result = convert_pdf_structured(file_content, conversion_tasks[task_id]['filename'], options)
+        
+        if not result["success"]:
+            conversion_tasks[task_id]["status"] = "failed"
+            conversion_tasks[task_id]["error"] = result.get("error", "PDF轉換失敗")
+            return
+        
+        # 提取結果
+        full_text = result["text"]
+        structure = result["metadata"]
+        total_time = result["processing_time"]
+        
+        conversion_tasks[task_id]["progress"] = 80
+        print(f"PDF轉換完成，文本長度: {len(full_text)} 字符")
+        
+        # 生成文檔ID
+        doc_id = f"doc_{int(time.time() * 1000)}_{hash(conversion_tasks[task_id]['filename']) % 10000}"
+        
+        # 將文檔存儲到store中
+        store.docs[doc_id] = DocRecord(
+            id=doc_id,
+            filename=conversion_tasks[task_id]['filename'],
+            text=full_text,
+            json_data=structure,
+            chunks=[],
+            chunk_size=0,
+            overlap=0,
+        )
+        
+        # 重置嵌入狀態
+        store.reset_embeddings()
+        
+        # 保存到緩存
+        cache_data = {
+            "text": full_text,
+            "metadata": structure,
+            "text_length": len(full_text),
+            "processing_time": total_time
+        }
+        pdf_cache[conversion_tasks[task_id]["cache_key"]] = cache_data
+        
+        # 限制緩存大小（最多保存100個轉換結果）
+        if len(pdf_cache) > 100:
+            # 刪除最舊的緩存項
+            oldest_key = next(iter(pdf_cache))
+            del pdf_cache[oldest_key]
+        
+        # 更新任務狀態為完成
+        conversion_tasks[task_id]["status"] = "completed"
+        conversion_tasks[task_id]["progress"] = 100
+        conversion_tasks[task_id]["result"] = {
+            "doc_id": doc_id,
+            "filename": conversion_tasks[task_id]['filename'],
+            "text_length": len(full_text),
+            "metadata": structure,
+            "processing_time": total_time
+        }
+        
+    except Exception as e:
+        # 更新任務狀態為失敗
+        conversion_tasks[task_id]["status"] = "failed"
+        conversion_tasks[task_id]["error"] = str(e)
+        print(f"PDF轉換失敗: {str(e)}")
+
+
+@app.get("/api/convert/status/{task_id}")
+async def get_convert_status(task_id: str):
+    """查詢PDF轉換任務狀態"""
+    if task_id not in conversion_tasks:
+        raise HTTPException(status_code=404, detail="任務不存在")
+    
+    task = conversion_tasks[task_id]
+    
+    # 清理超過1小時的舊任務
+    if time.time() - task["created_at"] > 3600:
+        del conversion_tasks[task_id]
+        raise HTTPException(status_code=404, detail="任務已過期")
+    
+    return {
+        "task_id": task_id,
+        "status": task["status"],
+        "progress": task["progress"],
+        "filename": task["filename"],
+        "result": task.get("result"),
+        "error": task.get("error")
+    }
 
 
 def run_evaluation_task(task_id: str):
@@ -2399,7 +2658,7 @@ def run_evaluation_task(task_id: str):
         
         results = []
         for config in task.configs:
-            result = evaluate_chunk_config(doc, config, task.test_queries, task.k_values)
+            result = evaluate_chunk_config(doc, config, task.test_queries, task.k_values, task.strategy)
             results.append(result)
         
         eval_store.update_task_status(task_id, "completed", results=results)
@@ -2408,7 +2667,7 @@ def run_evaluation_task(task_id: str):
         eval_store.update_task_status(task_id, "failed", error_message=str(e))
 
 
-@app.post("/evaluate/fixed-size")
+@app.post("/api/evaluate/fixed-size")
 def start_fixed_size_evaluation(req: FixedSizeEvaluationRequest, background_tasks: BackgroundTasks):
     """
     開始固定大小分割策略評測
@@ -2416,6 +2675,16 @@ def start_fixed_size_evaluation(req: FixedSizeEvaluationRequest, background_task
     doc = store.docs.get(req.doc_id)
     if not doc:
         return JSONResponse(status_code=404, content={"error": "Document not found"})
+    
+    # 檢查是否已有生成的問題
+    if not hasattr(doc, 'generated_questions') or not doc.generated_questions:
+        return JSONResponse(
+            status_code=400, 
+            content={"error": "請先使用「生成問題」功能為文檔生成測試問題，然後再進行評測"}
+        )
+    
+    # 使用文檔中存儲的問題而不是預設問題
+    req.test_queries = doc.generated_questions
     
     # 生成所有配置組合
     configs = []
@@ -2429,12 +2698,16 @@ def start_fixed_size_evaluation(req: FixedSizeEvaluationRequest, background_task
             )
             configs.append(config)
     
+    # 獲取分割策略（從請求中獲取，默認為fixed_size）
+    strategy = getattr(req, 'strategy', 'fixed_size')
+    
     # 創建評測任務
     task_id = eval_store.create_task(
         doc_id=req.doc_id,
         configs=configs,
         test_queries=req.test_queries,
-        k_values=req.k_values
+        k_values=req.k_values,
+        strategy=strategy
     )
     
     # 在後台運行評測
@@ -2448,7 +2721,7 @@ def start_fixed_size_evaluation(req: FixedSizeEvaluationRequest, background_task
     }
 
 
-@app.get("/evaluate/status/{task_id}")
+@app.get("/api/evaluate/status/{task_id}")
 def get_evaluation_status(task_id: str):
     """
     獲取評測任務狀態
@@ -2469,7 +2742,7 @@ def get_evaluation_status(task_id: str):
     }
 
 
-@app.get("/evaluate/results/{task_id}")
+@app.get("/api/evaluate/results/{task_id}")
 def get_evaluation_results(task_id: str):
     """
     獲取評測結果
@@ -2488,7 +2761,8 @@ def get_evaluation_results(task_id: str):
             "config": {
                 "chunk_size": result.config.chunk_size,
                 "overlap": result.config.overlap,
-                "overlap_ratio": result.config.overlap_ratio
+                "overlap_ratio": result.config.overlap_ratio,
+                "strategy": task.strategy
             },
             "metrics": {
                 "precision_omega": result.metrics.precision_omega,
@@ -2519,7 +2793,7 @@ def get_evaluation_results(task_id: str):
     }
 
 
-@app.get("/evaluate/comparison/{task_id}")
+@app.get("/api/evaluate/comparison/{task_id}")
 def get_evaluation_comparison(task_id: str):
     """
     獲取評測結果對比分析
@@ -2615,7 +2889,7 @@ def get_evaluation_comparison(task_id: str):
     return comparison
 
 
-@app.post("/generate-questions")
+@app.post("/api/generate-questions")
 def generate_questions(req: GenerateQuestionsRequest):
     """
     生成繁體中文法律考古題從法律文本中生成問題
@@ -2636,6 +2910,11 @@ def generate_questions(req: GenerateQuestionsRequest):
         )
         
         generation_time = time.time() - start_time
+        
+        # 將生成的問題存儲到文檔記錄中
+        question_texts = [q.question for q in questions]
+        doc.generated_questions = question_texts
+        store.docs[req.doc_id] = doc  # 更新文檔記錄
         
         result = QuestionGenerationResult(
             doc_id=req.doc_id,

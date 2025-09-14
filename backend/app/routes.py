@@ -11,18 +11,18 @@ from fastapi.responses import JSONResponse
 
 from .models import (
     DocRecord, EvaluationTask, ChunkConfig, EvaluationRequest, 
-    GenerateQuestionsRequest, MetadataOptions
+    GenerateQuestionsRequest
 )
 from .store import InMemoryStore
 from .pdf_processor import convert_pdf_to_text, convert_pdf_fallback
 from .chunking import chunk_text
 from .evaluation import evaluate_chunk_config
-from .question_generator import generate_questions
+# from .question_generator import generate_questions  # 使用main.py中的函數
 
 # 創建路由器
 router = APIRouter()
 
-# 全局存儲實例
+# 創建store實例
 store = InMemoryStore()
 
 
@@ -41,6 +41,9 @@ async def convert_pdf(
 ):
     """轉換PDF文檔"""
     try:
+        # 使用 main.py 中的結構化解析
+        from .main import convert_pdf_structured, MetadataOptions
+        
         # 解析元數據選項
         try:
             metadata_config = json.loads(metadata_options)
@@ -55,14 +58,8 @@ async def convert_pdf(
         # 讀取文件內容
         file_content = await file.read()
         
-        # 轉換PDF
-        result = convert_pdf_to_text(file_content, options)
-        
-        if not result["success"]:
-            # 嘗試備用方法
-            result = convert_pdf_fallback(file_content, options)
-            if not result["success"]:
-                raise HTTPException(status_code=400, detail=f"PDF轉換失敗: {result.get('error', '未知錯誤')}")
+        # 轉換PDF為結構化格式
+        result = convert_pdf_structured(file_content, file.filename, options)
         
         # 生成文檔ID
         doc_id = str(uuid.uuid4())
@@ -105,12 +102,23 @@ async def chunk_document(request: ChunkConfig):
         
         doc = docs[0]  # 使用第一個文檔
         
+        # 準備分塊參數
+        chunk_kwargs = {
+            "chunk_size": request.chunk_size if request.strategy == "fixed_size" else request.chunk_size,
+            "max_chunk_size": request.chunk_size,
+            "overlap_ratio": request.overlap_ratio
+        }
+        
+        # 如果是結構化層次分割，添加額外參數
+        if request.strategy == "structured_hierarchical":
+            chunk_kwargs["chunk_by"] = request.chunk_by
+        
         # 生成分塊
         chunks = chunk_text(
             doc.text,
-            strategy="fixed_size",
-            chunk_size=request.chunk_size,
-            overlap_ratio=request.overlap_ratio
+            strategy=request.strategy,
+            json_data=doc.json_data,
+            **chunk_kwargs
         )
         
         # 更新文檔記錄
@@ -125,9 +133,12 @@ async def chunk_document(request: ChunkConfig):
         return {
             "chunks": chunks,
             "chunk_count": len(chunks),
+            "strategy": request.strategy,
             "chunk_size": request.chunk_size,
             "overlap_ratio": request.overlap_ratio,
-            "avg_chunk_length": sum(len(chunk) for chunk in chunks) / len(chunks) if chunks else 0
+            "chunk_by": request.chunk_by if request.strategy == "structured_hierarchical" else None,
+            "avg_chunk_length": sum(len(chunk) for chunk in chunks) / len(chunks) if chunks else 0,
+            "chunk_lengths": [len(chunk) for chunk in chunks]
         }
         
     except Exception as e:
@@ -144,21 +155,35 @@ async def generate_questions_endpoint(request: GenerateQuestionsRequest):
         if not doc:
             raise HTTPException(status_code=404, detail="文檔不存在")
         
-        # 生成問題
-        result = generate_questions(
+        # 獲取main.py中的函數
+        from .main import generate_questions_with_gemini
+        
+        questions = generate_questions_with_gemini(
             doc.text,
-            request.question_types,
             request.num_questions,
+            request.question_types,
             request.difficulty_levels
         )
         
-        if not result["success"]:
-            raise HTTPException(status_code=500, detail=result.get("error", "問題生成失敗"))
+        # 提取問題文本並存儲到文檔記錄中
+        question_texts = [q.question for q in questions]
+        doc.generated_questions = question_texts
+        store.add_doc(doc)
         
         return {
             "doc_id": request.doc_id,
-            "questions": result["questions"],
-            "total_generated": result["total_generated"]
+            "questions": [
+                {
+                    "question": q.question,
+                    "references": q.references,
+                    "question_type": q.question_type,
+                    "difficulty": q.difficulty,
+                    "keywords": q.keywords,
+                    "estimated_tokens": q.estimated_tokens
+                }
+                for q in questions
+            ],
+            "total_generated": len(questions)
         }
         
     except Exception as e:
@@ -175,18 +200,14 @@ async def evaluate_chunking(request: EvaluationRequest):
         if not doc:
             raise HTTPException(status_code=404, detail="文檔不存在")
         
-        # 生成問題
-        questions_result = generate_questions(
-            doc.text,
-            request.question_types,
-            request.num_questions,
-            ["基礎", "進階", "應用"]
-        )
+        # 檢查是否已有生成的問題
+        if not hasattr(doc, 'generated_questions') or not doc.generated_questions:
+            raise HTTPException(
+                status_code=400, 
+                detail="請先使用「生成問題」功能為文檔生成測試問題，然後再進行評測"
+            )
         
-        if not questions_result["success"]:
-            raise HTTPException(status_code=500, detail="問題生成失敗")
-        
-        questions = [q["question"] for q in questions_result["questions"]]
+        questions = doc.generated_questions
         
         # 創建評估任務
         task_id = str(uuid.uuid4())
@@ -270,19 +291,12 @@ async def execute_evaluation_task(task_id: str):
             store.update_evaluation_task(task_id, status="failed", error_message="文檔不存在")
             return
         
-        # 生成問題
-        questions_result = generate_questions(
-            doc.text,
-            ["案例應用", "情境分析", "實務處理", "法律後果", "合規判斷"],
-            10,
-            ["基礎", "進階", "應用"]
-        )
-        
-        if not questions_result["success"]:
-            store.update_evaluation_task(task_id, status="failed", error_message="問題生成失敗")
+        # 檢查是否已有生成的問題
+        if not hasattr(doc, 'generated_questions') or not doc.generated_questions:
+            store.update_evaluation_task(task_id, status="failed", error_message="請先生成問題再進行評測")
             return
         
-        questions = [q["question"] for q in questions_result["questions"]]
+        questions = doc.generated_questions
         results = []
         
         # 評估每個配置

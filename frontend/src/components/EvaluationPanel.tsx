@@ -34,9 +34,10 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
   docId,
   onEvaluationComplete,
 }) => {
-  const [isEvaluationMode, setIsEvaluationMode] = useState(false);
-  const [chunkSizes, setChunkSizes] = useState<number[]>([300, 500, 800]);
-  const [overlapRatios, setOverlapRatios] = useState<number[]>([0.0, 0.1, 0.2]);
+  // Default evaluation mode ON and tuned defaults
+  const [isEvaluationMode, setIsEvaluationMode] = useState(true);
+  const [chunkSizes, setChunkSizes] = useState<number[]>([300, 600, 900]);
+  const [overlapRatios, setOverlapRatios] = useState<number[]>([0.0, 0.1]);
   const [questionTypes, setQuestionTypes] = useState<string[]>([
     "案例應用",
     "情境分析",
@@ -44,7 +45,7 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
     "法律後果",
     "合規判斷",
   ]);
-  const [numQuestions, setNumQuestions] = useState<number>(10);
+  const [numQuestions, setNumQuestions] = useState<number>(20);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [evaluationTaskId, setEvaluationTaskId] = useState<string | null>(null);
   const [evaluationProgress, setEvaluationProgress] = useState(0);
@@ -52,8 +53,15 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
     useState<EvaluationResults | null>(null);
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
 
+  const totalCombos = chunkSizes.length * overlapRatios.length;
+  const tooManyCombos = totalCombos > 8; // guardrail
+
   const startEvaluation = async () => {
     if (!docId) return;
+    if (tooManyCombos) {
+      setEvaluationError("參數組合過多，請減少選項（上限 8 組）");
+      return;
+    }
 
     setIsEvaluating(true);
     setEvaluationError(null);
@@ -152,6 +160,9 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
           />
           <span className="font-medium">啟用評測模式</span>
         </label>
+        <span className="text-sm text-gray-600">
+          組合數：{totalCombos}（上限 8）
+        </span>
       </div>
 
       {isEvaluationMode && (
@@ -166,7 +177,7 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
                   分塊大小
                 </label>
                 <div className="flex flex-wrap gap-2">
-                  {[200, 300, 400, 500, 600, 800, 1000].map((size) => (
+                  {[200, 300, 400, 500, 600, 800, 900, 1000].map((size) => (
                     <label key={size} className="flex items-center">
                       <input
                         type="checkbox"
@@ -255,7 +266,7 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
                 onChange={(e) => setNumQuestions(parseInt(e.target.value))}
                 className="w-32 px-3 py-2 border rounded-md"
                 min="5"
-                max="20"
+                max="50"
               />
             </div>
 

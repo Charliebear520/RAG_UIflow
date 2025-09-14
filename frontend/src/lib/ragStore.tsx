@@ -61,47 +61,93 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
   );
 
   async function upload(file: File) {
-    setLoading(true);
-    try {
-      const res = await api.upload(file);
-      setDocId(res.doc_id);
-      // reset downstream state
-      setChunkMeta(null);
-      setEmbedProvider(null);
-      setRetrieval(null);
-      setAnswer(null);
-      setSteps(null);
-      setFileName(file.name);
-    } finally {
-      setLoading(false);
-    }
+    // upload函數現在只負責設置文件名，實際轉換由convert函數處理
+    setFileName(file.name);
+    // reset downstream state
+    setDocId(null);
+    setChunkMeta(null);
+    setEmbedProvider(null);
+    setRetrieval(null);
+    setAnswer(null);
+    setSteps(null);
+    setJsonData(null);
   }
 
   async function convert(file: File, metadataOptions?: any) {
     setLoading(true);
     try {
       const res = await api.convert(file, metadataOptions);
-      setJsonData(res);
-      setFileName(file.name);
 
-      // 如果有docId，同步JSON數據到後端
-      if (docId) {
-        try {
-          await api.updateJson(docId, res);
-          console.log("JSON data synchronized to backend");
-        } catch (error) {
-          console.warn("Failed to sync JSON data to backend:", error);
-        }
+      // 檢查是否直接返回結果（緩存命中）
+      if (res.doc_id) {
+        setDocId(res.doc_id);
+        setJsonData(res.metadata);
+        setFileName(file.name);
+
+        // 重置下游狀態
+        setChunkMeta(null);
+        setEmbedProvider(null);
+        setRetrieval(null);
+        setAnswer(null);
+        setSteps(null);
+        return;
+      }
+
+      // 異步任務，需要輪詢狀態
+      if (res.task_id) {
+        await pollConvertStatus(res.task_id, file.name);
       }
     } catch (error) {
       console.error("Convert error:", error);
       // Reset state on error
+      setDocId(null);
       setJsonData(null);
       setFileName(null);
-      // You could also set an error state here if needed
       throw error;
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function pollConvertStatus(taskId: string, filename: string) {
+    const maxAttempts = 120; // 最多等待2分鐘
+    let attempts = 0;
+
+    while (attempts < maxAttempts) {
+      try {
+        const status = await api.getConvertStatus(taskId);
+
+        if (status.status === "completed") {
+          // 轉換完成
+          setDocId(status.result.doc_id);
+          setJsonData(status.result.metadata);
+          setFileName(filename);
+
+          // 重置下游狀態
+          setChunkMeta(null);
+          setEmbedProvider(null);
+          setRetrieval(null);
+          setAnswer(null);
+          setSteps(null);
+          break;
+        } else if (status.status === "failed") {
+          throw new Error(status.error || "PDF轉換失敗");
+        }
+
+        // 等待1秒後重試
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        attempts++;
+      } catch (error) {
+        if (attempts >= maxAttempts - 1) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        attempts++;
+      }
+    }
+
+    if (attempts >= maxAttempts) {
+      throw new Error("PDF轉換超時");
     }
   }
 
