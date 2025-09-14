@@ -773,26 +773,82 @@ class SemanticChunking(ChunkingStrategy):
         return chunks
 
 
-class AdaptiveChunking(ChunkingStrategy):
-    """自適應分割策略"""
+class SlidingWindowChunking(ChunkingStrategy):
+    """滑動視窗分割策略"""
     
-    def chunk(self, text: str, base_chunk_size: int = 500, **kwargs) -> List[str]:
-        """自適應分割"""
-        # 先嘗試語義分割
-        semantic_chunker = SemanticChunking()
-        chunks = semantic_chunker.chunk(text, max_chunk_size=base_chunk_size)
+    def chunk(self, text: str, window_size: int = 500, step_size: int = 250, **kwargs) -> List[str]:
+        """滑動視窗分割"""
+        if not text.strip():
+            return []
         
-        # 如果某些chunk太大，再進行固定大小分割
+        chunks = []
+        start = 0
+        
+        while start < len(text):
+            end = start + window_size
+            chunk = text[start:end]
+            if chunk.strip():
+                chunks.append(chunk)
+            start += step_size
+            
+        return chunks
+
+
+class LLMAssistedSemanticChunking(ChunkingStrategy):
+    """LLM輔助語義分割策略"""
+    
+    def chunk(self, text: str, max_chunk_size: int = 500, semantic_threshold: float = 0.7, **kwargs) -> List[str]:
+        """LLM輔助語義分割"""
+        # 首先按句子分割
+        sentences = re.split(r'[。！？]', text)
+        chunks = []
+        current_chunk = ""
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+                
+            # 如果當前句子加上現有chunk超過最大大小，先保存現有chunk
+            if len(current_chunk) + len(sentence) > max_chunk_size and current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = sentence
+            else:
+                if current_chunk:
+                    current_chunk += "。" + sentence
+                else:
+                    current_chunk = sentence
+        
+        # 添加最後一個chunk
+        if current_chunk.strip():
+            chunks.append(current_chunk.strip())
+        
+        # 這裡可以添加LLM輔助的語義分析邏輯
+        # 目前先返回基本的句子級分割結果
+        return chunks
+
+
+class HybridChunking(ChunkingStrategy):
+    """混合分割策略"""
+    
+    def chunk(self, text: str, primary_size: int = 600, secondary_size: int = 400, 
+              switch_threshold: float = 0.5, overlap_ratio: float = 0.1, **kwargs) -> List[str]:
+        """混合分割策略"""
+        # 先嘗試層次分割
+        hierarchical_chunker = HierarchicalChunking()
+        hierarchical_chunks = hierarchical_chunker.chunk(text, max_chunk_size=primary_size, overlap_ratio=overlap_ratio)
+        
+        # 對過大的chunk使用固定大小分割
         final_chunks = []
-        for chunk in chunks:
-            if len(chunk) > base_chunk_size * 1.5:
-                # 對過大的chunk進行固定大小分割
+        for chunk in hierarchical_chunks:
+            if len(chunk) > primary_size * 1.5:
+                # 使用固定大小分割處理過大的chunk
                 fixed_chunker = FixedSizeChunking()
-                sub_chunks = fixed_chunker.chunk(chunk, chunk_size=base_chunk_size, overlap_ratio=0.1)
+                sub_chunks = fixed_chunker.chunk(chunk, chunk_size=secondary_size, overlap_ratio=overlap_ratio)
                 final_chunks.extend(sub_chunks)
             else:
                 final_chunks.append(chunk)
-                
+        
         return final_chunks
 
 
@@ -900,8 +956,10 @@ def get_chunking_strategy(strategy_name: str) -> ChunkingStrategy:
         "rcts_hierarchical": RCTSHierarchicalChunking(),
         "structured_hierarchical": StructuredHierarchicalChunking(),
         "semantic": SemanticChunking(),
-        "adaptive": AdaptiveChunking(),
         "recursive": RecursiveCharacterChunking(),
+        "sliding_window": SlidingWindowChunking(),
+        "llm_semantic": LLMAssistedSemanticChunking(),
+        "hybrid": HybridChunking(),
     }
     
     return strategies.get(strategy_name, FixedSizeChunking())

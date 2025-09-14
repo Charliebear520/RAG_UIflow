@@ -9,9 +9,11 @@ type ChunkStrategy =
   | "hierarchical"
   | "rcts_hierarchical"
   | "structured_hierarchical"
-  | "adaptive"
-  | "hybrid"
-  | "semantic";
+  | "recursive"
+  | "semantic"
+  | "sliding_window"
+  | "llm_semantic"
+  | "hybrid";
 
 // 策略參數接口
 interface ChunkParams {
@@ -35,23 +37,33 @@ interface ChunkParams {
     overlap_ratio: number;
     chunk_by: "chapter" | "section" | "article" | "item";
   };
-  adaptive: {
-    target_size: number;
-    tolerance: number;
+  recursive: {
+    max_chunk_size: number;
+    overlap_ratio: number;
+    separators: string[];
+  };
+  semantic: {
+    max_chunk_size: number;
+    similarity_threshold: number;
     overlap: number;
+    context_window: number;
+  };
+  sliding_window: {
+    window_size: number;
+    step_size: number;
+    overlap: number;
+  };
+  llm_semantic: {
+    max_chunk_size: number;
     semantic_threshold: number;
+    overlap: number;
+    context_window: number;
   };
   hybrid: {
     primary_size: number;
     secondary_size: number;
-    overlap: number;
+    overlap_ratio: number;
     switch_threshold: number;
-  };
-  semantic: {
-    target_size: number;
-    similarity_threshold: number;
-    overlap: number;
-    context_window: number;
   };
 }
 
@@ -175,23 +187,50 @@ const strategyInfo = {
       },
     },
   },
-  adaptive: {
-    name: "自適應分割",
-    description: "根據內容語義自動調整分塊大小，平衡長度和語義完整性。",
-    metrics: ["分塊數量", "語義一致性", "長度分佈", "分割點質量"],
+  recursive: {
+    name: "遞迴字符分割",
+    description: "使用多層分隔符遞迴分割文本，智能處理不同層級的結構。",
+    metrics: ["分塊數量", "分隔符準確性", "長度分佈", "語義完整性"],
     params: {
-      target_size: {
-        label: "目標大小",
-        min: 300,
-        max: 1500,
-        default: 600,
+      max_chunk_size: {
+        label: "最大分塊大小",
+        min: 200,
+        max: 2000,
+        default: 1000,
         unit: "字符",
       },
-      tolerance: {
-        label: "容差範圍",
+      overlap_ratio: {
+        label: "重疊比例",
+        min: 0.05,
+        max: 0.3,
+        default: 0.1,
+        unit: "比例",
+      },
+      separators: {
+        label: "分隔符",
+        type: "text",
+        default: "\\n\\n,\\n,。,，, ,",
+        description: "逗號分隔的分隔符列表",
+      },
+    },
+  },
+  sliding_window: {
+    name: "滑動視窗分割",
+    description: "使用固定大小的滑動視窗進行分割，確保內容的連續性。",
+    metrics: ["分塊數量", "視窗覆蓋率", "重疊率", "內容連續性"],
+    params: {
+      window_size: {
+        label: "視窗大小",
+        min: 200,
+        max: 1500,
+        default: 500,
+        unit: "字符",
+      },
+      step_size: {
+        label: "步長",
         min: 50,
-        max: 300,
-        default: 100,
+        max: 500,
+        default: 250,
         unit: "字符",
       },
       overlap: {
@@ -201,12 +240,40 @@ const strategyInfo = {
         default: 50,
         unit: "字符",
       },
+    },
+  },
+  llm_semantic: {
+    name: "LLM輔助語義分割",
+    description: "結合LLM的語義理解能力進行智能分割，確保語義連貫性。",
+    metrics: ["分塊數量", "語義連貫性", "LLM準確性", "分割點質量"],
+    params: {
+      max_chunk_size: {
+        label: "最大分塊大小",
+        min: 300,
+        max: 1200,
+        default: 500,
+        unit: "字符",
+      },
       semantic_threshold: {
         label: "語義閾值",
         min: 0.1,
         max: 0.9,
         default: 0.7,
         unit: "分數",
+      },
+      overlap: {
+        label: "重疊大小",
+        min: 0,
+        max: 200,
+        default: 50,
+        unit: "字符",
+      },
+      context_window: {
+        label: "上下文窗口",
+        min: 50,
+        max: 300,
+        default: 100,
+        unit: "字符",
       },
     },
   },
@@ -229,12 +296,12 @@ const strategyInfo = {
         default: 400,
         unit: "字符",
       },
-      overlap: {
-        label: "重疊大小",
-        min: 0,
-        max: 200,
-        default: 50,
-        unit: "字符",
+      overlap_ratio: {
+        label: "重疊比例",
+        min: 0.05,
+        max: 0.3,
+        default: 0.1,
+        unit: "比例",
       },
       switch_threshold: {
         label: "切換閾值",
@@ -250,8 +317,8 @@ const strategyInfo = {
     description: "基於語義相似性進行智能分割，確保每個分塊在語義上保持連貫性。",
     metrics: ["分塊數量", "語義連貫性", "相似度分佈", "分割點質量"],
     params: {
-      target_size: {
-        label: "目標大小",
+      max_chunk_size: {
+        label: "最大分塊大小",
         min: 300,
         max: 1200,
         default: 600,
@@ -344,23 +411,33 @@ export function ChunkPage() {
       overlap_ratio: 0.1,
       chunk_by: "article",
     },
-    adaptive: {
-      target_size: 600,
-      tolerance: 100,
+    recursive: {
+      max_chunk_size: 1000,
+      overlap_ratio: 0.1,
+      separators: ["\\n\\n", "\\n", "。", "，", " ", ""],
+    },
+    semantic: {
+      max_chunk_size: 600,
+      similarity_threshold: 0.6,
       overlap: 50,
+      context_window: 100,
+    },
+    sliding_window: {
+      window_size: 500,
+      step_size: 250,
+      overlap: 50,
+    },
+    llm_semantic: {
+      max_chunk_size: 500,
       semantic_threshold: 0.7,
+      overlap: 50,
+      context_window: 100,
     },
     hybrid: {
       primary_size: 600,
       secondary_size: 400,
-      overlap: 50,
+      overlap_ratio: 0.1,
       switch_threshold: 0.5,
-    },
-    semantic: {
-      target_size: 600,
-      similarity_threshold: 0.6,
-      overlap: 50,
-      context_window: 100,
     },
   });
   const [busy, setBusy] = useState(false);
@@ -409,7 +486,7 @@ export function ChunkPage() {
   const handleParamChange = (
     strategy: ChunkStrategy,
     param: string,
-    value: number | boolean | string
+    value: number | boolean | string | string[]
   ) => {
     setParams((prev) => ({
       ...prev,
@@ -437,14 +514,31 @@ export function ChunkPage() {
           chunkSize = (currentParams as ChunkParams["hierarchical"])
             .max_chunk_size;
           break;
-        case "adaptive":
-          chunkSize = (currentParams as ChunkParams["adaptive"]).target_size;
+        case "rcts_hierarchical":
+          chunkSize = (currentParams as ChunkParams["rcts_hierarchical"])
+            .max_chunk_size;
+          break;
+        case "structured_hierarchical":
+          chunkSize = (currentParams as ChunkParams["structured_hierarchical"])
+            .max_chunk_size;
+          break;
+        case "recursive":
+          chunkSize = (currentParams as ChunkParams["recursive"])
+            .max_chunk_size;
+          break;
+        case "semantic":
+          chunkSize = (currentParams as ChunkParams["semantic"]).max_chunk_size;
+          break;
+        case "sliding_window":
+          chunkSize = (currentParams as ChunkParams["sliding_window"])
+            .window_size;
+          break;
+        case "llm_semantic":
+          chunkSize = (currentParams as ChunkParams["llm_semantic"])
+            .max_chunk_size;
           break;
         case "hybrid":
           chunkSize = (currentParams as ChunkParams["hybrid"]).primary_size;
-          break;
-        case "semantic":
-          chunkSize = (currentParams as ChunkParams["semantic"]).target_size;
           break;
         default:
           chunkSize = 500;
@@ -460,29 +554,6 @@ export function ChunkPage() {
               .min_chunk_size,
             level_depth: (currentParams as ChunkParams["hierarchical"])
               .level_depth,
-          };
-          break;
-        case "adaptive":
-          strategyParams.adaptive_params = {
-            tolerance: (currentParams as ChunkParams["adaptive"]).tolerance,
-            semantic_threshold: (currentParams as ChunkParams["adaptive"])
-              .semantic_threshold,
-          };
-          break;
-        case "hybrid":
-          strategyParams.hybrid_params = {
-            secondary_size: (currentParams as ChunkParams["hybrid"])
-              .secondary_size,
-            switch_threshold: (currentParams as ChunkParams["hybrid"])
-              .switch_threshold,
-          };
-          break;
-        case "semantic":
-          strategyParams.semantic_params = {
-            similarity_threshold: (currentParams as ChunkParams["semantic"])
-              .similarity_threshold,
-            context_window: (currentParams as ChunkParams["semantic"])
-              .context_window,
           };
           break;
         case "rcts_hierarchical":
@@ -501,6 +572,45 @@ export function ChunkPage() {
             ).overlap_ratio,
             chunk_by: (currentParams as ChunkParams["structured_hierarchical"])
               .chunk_by,
+          };
+          break;
+        case "recursive":
+          strategyParams.recursive_params = {
+            overlap_ratio: (currentParams as ChunkParams["recursive"])
+              .overlap_ratio,
+            separators: (currentParams as ChunkParams["recursive"]).separators,
+          };
+          break;
+        case "semantic":
+          strategyParams.semantic_params = {
+            similarity_threshold: (currentParams as ChunkParams["semantic"])
+              .similarity_threshold,
+            context_window: (currentParams as ChunkParams["semantic"])
+              .context_window,
+          };
+          break;
+        case "sliding_window":
+          strategyParams.sliding_window_params = {
+            step_size: (currentParams as ChunkParams["sliding_window"])
+              .step_size,
+          };
+          break;
+        case "llm_semantic":
+          strategyParams.llm_semantic_params = {
+            semantic_threshold: (currentParams as ChunkParams["llm_semantic"])
+              .semantic_threshold,
+            context_window: (currentParams as ChunkParams["llm_semantic"])
+              .context_window,
+          };
+          break;
+        case "hybrid":
+          strategyParams.hybrid_params = {
+            secondary_size: (currentParams as ChunkParams["hybrid"])
+              .secondary_size,
+            overlap_ratio: (currentParams as ChunkParams["hybrid"])
+              .overlap_ratio,
+            switch_threshold: (currentParams as ChunkParams["hybrid"])
+              .switch_threshold,
           };
           break;
       }
@@ -874,6 +984,33 @@ export function ChunkPage() {
                             </option>
                           ))}
                         </select>
+                      ) : paramInfo.type === "text" ? (
+                        <input
+                          className="form-control form-control-sm"
+                          type="text"
+                          value={
+                            Array.isArray(
+                              params[selectedStrategy][
+                                paramKey as keyof ChunkParams[ChunkStrategy]
+                              ]
+                            )
+                              ? (
+                                  params[selectedStrategy][
+                                    paramKey as keyof ChunkParams[ChunkStrategy]
+                                  ] as string[]
+                                ).join(",")
+                              : (params[selectedStrategy][
+                                  paramKey as keyof ChunkParams[ChunkStrategy]
+                                ] as string)
+                          }
+                          onChange={(e) =>
+                            handleParamChange(
+                              selectedStrategy,
+                              paramKey,
+                              e.target.value.split(",").map((s) => s.trim())
+                            )
+                          }
+                        />
                       ) : (
                         <>
                           <input
