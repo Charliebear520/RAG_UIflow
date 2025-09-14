@@ -9,7 +9,6 @@ type ChunkStrategy =
   | "hierarchical"
   | "rcts_hierarchical"
   | "structured_hierarchical"
-  | "recursive"
   | "semantic"
   | "sliding_window"
   | "llm_semantic"
@@ -36,11 +35,6 @@ interface ChunkParams {
     max_chunk_size: number;
     overlap_ratio: number;
     chunk_by: "chapter" | "section" | "article" | "item";
-  };
-  recursive: {
-    max_chunk_size: number;
-    overlap_ratio: number;
-    separators: string[];
   };
   semantic: {
     max_chunk_size: number;
@@ -184,33 +178,6 @@ const strategyInfo = {
         ],
         default: "article",
         description: "選擇分割的粒度級別",
-      },
-    },
-  },
-  recursive: {
-    name: "遞迴字符分割",
-    description: "使用多層分隔符遞迴分割文本，智能處理不同層級的結構。",
-    metrics: ["分塊數量", "分隔符準確性", "長度分佈", "語義完整性"],
-    params: {
-      max_chunk_size: {
-        label: "最大分塊大小",
-        min: 200,
-        max: 2000,
-        default: 1000,
-        unit: "字符",
-      },
-      overlap_ratio: {
-        label: "重疊比例",
-        min: 0.05,
-        max: 0.3,
-        default: 0.1,
-        unit: "比例",
-      },
-      separators: {
-        label: "分隔符",
-        type: "text",
-        default: "\\n\\n,\\n,。,，, ,",
-        description: "逗號分隔的分隔符列表",
       },
     },
   },
@@ -411,11 +378,6 @@ export function ChunkPage() {
       overlap_ratio: 0.1,
       chunk_by: "article",
     },
-    recursive: {
-      max_chunk_size: 1000,
-      overlap_ratio: 0.1,
-      separators: ["\\n\\n", "\\n", "。", "，", " ", ""],
-    },
     semantic: {
       max_chunk_size: 600,
       similarity_threshold: 0.6,
@@ -522,10 +484,6 @@ export function ChunkPage() {
           chunkSize = (currentParams as ChunkParams["structured_hierarchical"])
             .max_chunk_size;
           break;
-        case "recursive":
-          chunkSize = (currentParams as ChunkParams["recursive"])
-            .max_chunk_size;
-          break;
         case "semantic":
           chunkSize = (currentParams as ChunkParams["semantic"]).max_chunk_size;
           break;
@@ -572,13 +530,6 @@ export function ChunkPage() {
             ).overlap_ratio,
             chunk_by: (currentParams as ChunkParams["structured_hierarchical"])
               .chunk_by,
-          };
-          break;
-        case "recursive":
-          strategyParams.recursive_params = {
-            overlap_ratio: (currentParams as ChunkParams["recursive"])
-              .overlap_ratio,
-            separators: (currentParams as ChunkParams["recursive"]).separators,
           };
           break;
         case "semantic":

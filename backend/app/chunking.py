@@ -334,8 +334,8 @@ class RCTSHierarchicalChunking(ChunkingStrategy):
             )
             self.use_langchain = True
         else:
-            # 使用自定義的RecursiveCharacterChunking作為替代
-            self.rcts_splitter = RecursiveCharacterChunking()
+            # 使用自定義的RCTS替代方案
+            self.rcts_splitter = CustomRCTS()
             self.use_langchain = False
     
     def chunk(self, text: str, max_chunk_size: int = 1000, overlap_ratio: float = 0.1, 
@@ -852,100 +852,105 @@ class HybridChunking(ChunkingStrategy):
         return final_chunks
 
 
-class RecursiveCharacterChunking(ChunkingStrategy):
-    """遞迴字符分割策略（RCTS 近似）
-
-    以多層分隔符（段落/行/句子/逗號/空白）逐層遞迴切分，
-    最終將片段合併為不超過 max_chunk_size 的塊，並加入重疊。
+class CustomRCTS:
+    """自定義的 Recursive Character Text Splitter 替代方案
+    
+    當 langchain 不可用時，提供類似的遞迴字符分割功能
     """
-
-    def chunk(
-        self,
-        text: str,
-        max_chunk_size: int = 1000,
-        overlap_ratio: float = 0.1,
-        separators: list[str] | None = None,
-        **kwargs,
-    ) -> List[str]:
+    
+    def __init__(self, chunk_size=1000, chunk_overlap=100, length_function=len, 
+                 separators=None, is_separator_regex=False):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.length_function = length_function
+        self.separators = separators or [
+            "\n\n",  # 段落分隔
+            "\n",    # 行分隔
+            "。",    # 句號
+            "；",    # 分號
+            "，",    # 逗號
+            "、",    # 頓號
+            " ",     # 空格
+            ""       # 字符級別
+        ]
+        self.is_separator_regex = is_separator_regex
+    
+    def split_text(self, text: str) -> List[str]:
+        """分割文本，模擬 langchain 的 RecursiveCharacterTextSplitter.split_text 方法"""
         if not text.strip():
             return []
-
-        seps = separators or ["\n\n", "\n", "。", "，", " ", ""]
-        pieces = self._recursive_split(text, seps, max_chunk_size)
-        # 合併片段並加入重疊
-        overlap = int(max_chunk_size * overlap_ratio)
-        chunks: List[str] = []
-        current = ""
-
-        for seg in pieces:
-            seg = seg.strip()
-            if not seg:
-                continue
-            if not current:
-                current = seg
-                continue
-            if len(current) + 1 + len(seg) <= max_chunk_size:
-                current = f"{current}\n{seg}" if "\n" in seg else f"{current} {seg}".strip()
+        
+        # 使用遞迴分割邏輯
+        return self._recursive_split(text, self.separators, self.chunk_size, self.chunk_overlap)
+    
+    def _recursive_split(self, text: str, separators: List[str], chunk_size: int, chunk_overlap: int) -> List[str]:
+        """遞迴分割文本"""
+        if self.length_function(text) <= chunk_size:
+            return [text]
+        
+        if not separators:
+            # 如果沒有分隔符，使用固定長度分割
+            return self._split_by_length(text, chunk_size, chunk_overlap)
+        
+        # 嘗試使用第一個分隔符分割
+        separator = separators[0]
+        remaining_separators = separators[1:]
+        
+        if separator == "":
+            # 空字符串表示字符級別分割
+            return self._split_by_length(text, chunk_size, chunk_overlap)
+        
+        # 分割文本
+        splits = text.split(separator)
+        
+        if len(splits) == 1:
+            # 無法用當前分隔符分割，嘗試下一個分隔符
+            return self._recursive_split(text, remaining_separators, chunk_size, chunk_overlap)
+        
+        # 合併分割結果
+        chunks = []
+        current_chunk = ""
+        
+        for split in splits:
+            # 嘗試將當前分割添加到當前chunk
+            test_chunk = current_chunk + separator + split if current_chunk else split
+            
+            if self.length_function(test_chunk) <= chunk_size:
+                current_chunk = test_chunk
             else:
-                chunks.append(current)
-                prefix = current[-overlap:] if overlap > 0 else ""
-                current = (prefix + ("\n" if "\n" in seg else " ") + seg).strip()
-                # 若仍超長，直接窗口切分
-                while len(current) > max_chunk_size:
-                    chunk = current[:max_chunk_size]
-                    chunks.append(chunk)
-                    step = max_chunk_size - overlap if overlap > 0 else max_chunk_size
-                    current = current[step:]
-
-        if current.strip():
-            chunks.append(current.strip())
-
+                # 當前chunk已滿，保存它
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    # 添加重疊內容
+                    overlap_text = current_chunk[-chunk_overlap:] if chunk_overlap > 0 else ""
+                    current_chunk = overlap_text + separator + split if overlap_text else split
+                else:
+                    # 如果單個split就超過chunk_size，遞迴分割它
+                    sub_chunks = self._recursive_split(split, remaining_separators, chunk_size, chunk_overlap)
+                    chunks.extend(sub_chunks)
+                    current_chunk = ""
+        
+        # 添加最後一個chunk
+        if current_chunk:
+            chunks.append(current_chunk)
+        
+        return chunks
+    
+    def _split_by_length(self, text: str, chunk_size: int, chunk_overlap: int) -> List[str]:
+        """按固定長度分割文本"""
+        chunks = []
+        start = 0
+        
+        while start < len(text):
+            end = start + chunk_size
+            chunk = text[start:end]
+            if chunk.strip():
+                chunks.append(chunk)
+            start = end - chunk_overlap if chunk_overlap > 0 else end
+            
         return chunks
 
-    def _recursive_split(self, text: str, separators: list[str], max_size: int) -> List[str]:
-        """按分隔符遞迴分割，直到片段不超過 max_size。
-        最後一層 separators 包含空字串，代表強制按固定字元長度切分。
-        """
-        if len(text) <= max_size:
-            return [text]
-        if not separators:
-            # 沒有分隔符，固定長度切分
-            return [text[i : i + max_size] for i in range(0, len(text), max_size)]
 
-        sep = separators[0]
-        rest = separators[1:]
-
-        if sep == "":
-            # 最後兜底：固定長度
-            return [text[i : i + max_size] for i in range(0, len(text), max_size)]
-
-        parts = text.split(sep)
-        if len(parts) == 1:
-            # 無法用當前分隔符切分，遞迴到下一層
-            return self._recursive_split(text, rest, max_size)
-
-        results: List[str] = []
-        buffer = ""
-        for part in parts:
-            candidate = (buffer + sep + part) if buffer else part
-            if len(candidate) <= max_size:
-                buffer = candidate
-            else:
-                if buffer:
-                    # buffer 太大就遞迴再切
-                    if len(buffer) > max_size:
-                        results.extend(self._recursive_split(buffer, rest, max_size))
-                    else:
-                        results.append(buffer)
-                buffer = part
-
-        if buffer:
-            if len(buffer) > max_size:
-                results.extend(self._recursive_split(buffer, rest, max_size))
-            else:
-                results.append(buffer)
-
-        return results
 
 
 def get_chunking_strategy(strategy_name: str) -> ChunkingStrategy:
@@ -956,7 +961,6 @@ def get_chunking_strategy(strategy_name: str) -> ChunkingStrategy:
         "rcts_hierarchical": RCTSHierarchicalChunking(),
         "structured_hierarchical": StructuredHierarchicalChunking(),
         "semantic": SemanticChunking(),
-        "recursive": RecursiveCharacterChunking(),
         "sliding_window": SlidingWindowChunking(),
         "llm_semantic": LLMAssistedSemanticChunking(),
         "hybrid": HybridChunking(),
