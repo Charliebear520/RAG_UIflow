@@ -51,6 +51,9 @@ class EvaluationResult:
     """評估結果"""
     config: Dict[str, Any]
     metrics: EvaluationMetrics
+    test_queries: List[str]
+    retrieval_results: Dict[str, List[Dict]]  # query -> results
+    timestamp: Any  # datetime object
 
 
 # Pydantic 模型
@@ -71,6 +74,11 @@ class ChunkConfig(BaseModel):
     min_chunk_size: int = 200  # 層次分割
     context_window: int = 100  # 語義分割
     step_size: int = 250  # 滑動視窗
+    window_size: int = 500  # 滑動視窗
+    boundary_aware: bool = True  # 滑動視窗
+    min_chunk_size_sw: int = 100  # 滑動視窗專用
+    max_chunk_size_sw: int = 1000  # 滑動視窗專用
+    preserve_sentences: bool = True  # 滑動視窗
     secondary_size: int = 400  # 混合分割
 
 
@@ -78,8 +86,8 @@ class EvaluationRequest(BaseModel):
     """評估請求"""
     doc_id: str
     # Adjusted defaults to focus the sweep and reduce grid size while keeping coverage
-    chunk_sizes: List[int] = [300, 600, 900]
-    overlap_ratios: List[float] = [0.0, 0.1]
+    chunk_sizes: List[int] = [300, 500, 800]
+    overlap_ratios: List[float] = [0.0, 0.1, 0.2]
     question_types: List[str] = [
         "案例應用",
         "情境分析",

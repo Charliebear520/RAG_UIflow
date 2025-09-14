@@ -774,11 +774,11 @@ class SemanticChunking(ChunkingStrategy):
 
 
 class SlidingWindowChunking(ChunkingStrategy):
-    """滑動視窗分割策略 - 支援多種配置和邊界感知"""
+    """增強版滑動視窗分割策略 - 支援智能邊界感知和自適應重疊"""
     
     def __init__(self):
-        """初始化滑動視窗分割器"""
-        # 中文詞語邊界標記
+        """初始化增強版滑動視窗分割器"""
+        # 中文詞語邊界標記（按優先級排序）
         self.word_boundaries = [
             '。', '！', '？', '；', '：',  # 句號、感嘆號、問號、分號、冒號
             '，', '、', '．', '·',        # 逗號、頓號、句點、間隔號
@@ -790,15 +790,33 @@ class SlidingWindowChunking(ChunkingStrategy):
             '《', '》', '<', '>',         # 書名號
         ]
         
+        # 法律文檔結構標記（高優先級邊界）
+        self.legal_boundaries = [
+            r'^第\s*([一二三四五六七八九十百千0-9]+)\s*條',  # 條文標記
+            r'^第\s*([一二三四五六七八九十百千0-9]+)\s*章',  # 章節標記
+            r'^第\s*([一二三四五六七八九十百千0-9]+)\s*節',  # 節標記
+            r'^[（(]([0-9０-９一二三四五六七八九十]+)[）)]',  # 項目標記
+            r'^([一二三四五六七八九十]+)[、．\.）)]',        # 項目標記
+        ]
+        
         # 編譯邊界正則表達式
         self.boundary_pattern = re.compile('|'.join(re.escape(b) for b in self.word_boundaries))
+        self.legal_patterns = [re.compile(pattern, re.MULTILINE) for pattern in self.legal_boundaries]
+        
+        # 語義連貫性關鍵詞
+        self.coherence_keywords = [
+            '因此', '所以', '但是', '然而', '另外', '此外', '同時', '並且',
+            '如果', '當', '除非', '只要', '只有', '不論', '無論',
+            '根據', '依據', '按照', '依照'
+        ]
     
     def chunk(self, text: str, window_size: int = 500, step_size: int = 250, 
               overlap_ratio: float = 0.1, boundary_aware: bool = True, 
               min_chunk_size: int = 100, max_chunk_size: int = 1000,
-              preserve_sentences: bool = True, **kwargs) -> List[str]:
+              preserve_sentences: bool = True, adaptive_overlap: bool = True,
+              legal_structure_aware: bool = True, **kwargs) -> List[str]:
         """
-        滑動視窗分割
+        增強版滑動視窗分割
         
         Args:
             text: 原始文本
@@ -809,9 +827,17 @@ class SlidingWindowChunking(ChunkingStrategy):
             min_chunk_size: 最小chunk大小
             max_chunk_size: 最大chunk大小
             preserve_sentences: 是否保持句子完整性
+            adaptive_overlap: 是否啟用自適應重疊
+            legal_structure_aware: 是否啟用法律結構感知
         """
         if not text.strip():
             return []
+        
+        # 預處理：分析文本結構
+        if legal_structure_aware:
+            structure_info = self._analyze_legal_structure(text)
+        else:
+            structure_info = None
         
         # 如果未指定step_size，根據overlap_ratio計算
         if step_size is None or step_size <= 0:
@@ -832,12 +858,21 @@ class SlidingWindowChunking(ChunkingStrategy):
             chunk = text[start:end]
             
             if boundary_aware:
-                # 邊界感知調整
-                chunk = self._adjust_boundary(chunk, text, start, end, preserve_sentences)
+                # 智能邊界感知調整
+                chunk, adjusted_end = self._smart_boundary_adjustment(
+                    chunk, text, start, end, preserve_sentences, legal_structure_aware, structure_info
+                )
+                end = adjusted_end
             
             # 檢查chunk大小
             if len(chunk) >= min_chunk_size:
                 chunks.append(chunk)
+            
+            # 自適應步長調整
+            if adaptive_overlap:
+                step_size = self._calculate_adaptive_step_size(
+                    text, start, end, window_size, overlap_ratio, structure_info
+                )
             
             # 移動到下一個位置
             start += step_size
@@ -860,9 +895,133 @@ class SlidingWindowChunking(ChunkingStrategy):
         
         return final_chunks
     
+    def _analyze_legal_structure(self, text: str) -> Dict[str, Any]:
+        """分析法律文檔結構"""
+        structure_info = {
+            'articles': [],  # 條文位置
+            'chapters': [],  # 章節位置
+            'sections': [],  # 節位置
+            'items': [],     # 項目標記位置
+            'density': 0.0   # 結構密度
+        }
+        
+        lines = text.split('\n')
+        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 檢測條文
+            for pattern in self.legal_patterns:
+                if pattern.match(line):
+                    if '條' in line:
+                        structure_info['articles'].append(i)
+                    elif '章' in line:
+                        structure_info['chapters'].append(i)
+                    elif '節' in line:
+                        structure_info['sections'].append(i)
+                    elif any(marker in line for marker in ['（', '(', '一', '二', '三', '四', '五']):
+                        structure_info['items'].append(i)
+                    break
+        
+        # 計算結構密度
+        total_structures = len(structure_info['articles']) + len(structure_info['chapters']) + len(structure_info['sections'])
+        structure_info['density'] = total_structures / len(non_empty_lines) if non_empty_lines else 0.0
+        
+        return structure_info
+    
+    def _smart_boundary_adjustment(self, chunk: str, full_text: str, start: int, end: int,
+                                 preserve_sentences: bool, legal_structure_aware: bool,
+                                 structure_info: Dict[str, Any]) -> Tuple[str, int]:
+        """智能邊界調整，優先考慮法律結構"""
+        if not preserve_sentences:
+            return chunk, end
+        
+        # 1. 優先檢查法律結構邊界
+        if legal_structure_aware and structure_info:
+            legal_boundary = self._find_legal_boundary(full_text, start, end, structure_info)
+            if legal_boundary is not None:
+                return full_text[start:legal_boundary], legal_boundary
+        
+        # 2. 檢查句子邊界
+        sentence_endings = ['。', '！', '？', '；']
+        for i in range(end - 1, start, -1):
+            if full_text[i] in sentence_endings:
+                return full_text[start:i + 1], i + 1
+        
+        # 3. 檢查語義連貫性
+        coherence_boundary = self._find_coherence_boundary(full_text, start, end)
+        if coherence_boundary is not None:
+            return full_text[start:coherence_boundary], coherence_boundary
+        
+        # 4. 檢查其他邊界
+        for i in range(end - 1, start, -1):
+            if full_text[i] in self.word_boundaries:
+                return full_text[start:i + 1], i + 1
+        
+        # 如果都沒找到合適邊界，返回原始chunk
+        return chunk, end
+    
+    def _find_legal_boundary(self, text: str, start: int, end: int, structure_info: Dict[str, Any]) -> Optional[int]:
+        """查找法律結構邊界"""
+        # 在當前chunk範圍內查找最近的結構邊界
+        chunk_text = text[start:end]
+        lines = chunk_text.split('\n')
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 檢查是否為結構標記
+            for pattern in self.legal_patterns:
+                if pattern.match(line):
+                    # 找到結構邊界，返回該行的結束位置
+                    line_end = start + chunk_text.find(line) + len(line)
+                    # 確保不超過原始end位置
+                    return min(line_end, end)
+        
+        return None
+    
+    def _find_coherence_boundary(self, text: str, start: int, end: int) -> Optional[int]:
+        """查找語義連貫性邊界"""
+        chunk_text = text[start:end]
+        
+        # 查找語義連貫性關鍵詞
+        for keyword in self.coherence_keywords:
+            keyword_pos = chunk_text.rfind(keyword)
+            if keyword_pos != -1:
+                # 找到關鍵詞，在其後尋找合適的切分點
+                search_start = start + keyword_pos + len(keyword)
+                # 使用更高效的字符查找
+                punctuation_chars = {'。', '！', '？', '；', '，', '、'}
+                for i in range(search_start, end):
+                    if text[i] in punctuation_chars:
+                        return i + 1
+        
+        return None
+    
+    def _calculate_adaptive_step_size(self, text: str, start: int, end: int, 
+                                    window_size: int, overlap_ratio: float,
+                                    structure_info: Dict[str, Any]) -> int:
+        """計算自適應步長"""
+        base_step_size = int(window_size * (1 - overlap_ratio))
+        
+        # 根據結構密度調整步長
+        if structure_info and structure_info['density'] > 0.1:
+            # 高結構密度，減少步長以保持結構完整性
+            return int(base_step_size * 0.8)
+        elif structure_info and structure_info['density'] < 0.05:
+            # 低結構密度，可以增加步長
+            return int(base_step_size * 1.2)
+        
+        return base_step_size
+    
     def _adjust_boundary(self, chunk: str, full_text: str, start: int, end: int, 
                         preserve_sentences: bool = True) -> str:
-        """調整chunk邊界，避免在詞語中間切分"""
+        """調整chunk邊界，避免在詞語中間切分（向後兼容）"""
         if not preserve_sentences:
             return chunk
         
@@ -889,12 +1048,13 @@ class SlidingWindowChunking(ChunkingStrategy):
         
         merged_chunks = []
         current_chunk = chunks[0]
+        max_merge_size = min_size * 2
         
         for i in range(1, len(chunks)):
             next_chunk = chunks[i]
             
             # 如果當前chunk太小，嘗試與下一個合併
-            if len(current_chunk) < min_size and len(current_chunk + next_chunk) <= min_size * 2:
+            if len(current_chunk) < min_size and len(current_chunk + next_chunk) <= max_merge_size:
                 current_chunk += next_chunk
             else:
                 merged_chunks.append(current_chunk)
@@ -996,6 +1156,8 @@ class SlidingWindowChunking(ChunkingStrategy):
                 break
         
         return chunks
+
+
 
 
 class LLMAssistedSemanticChunking(ChunkingStrategy):
@@ -1176,6 +1338,10 @@ def get_chunking_strategy(strategy_name: str) -> ChunkingStrategy:
 def chunk_text(text: str, strategy: str = "fixed_size", json_data: Dict[str, Any] | None = None, **kwargs) -> List[str]:
     """分割文本"""
     chunker = get_chunking_strategy(strategy)
+    
+    # 參數映射：將通用的chunk_size映射到策略特定的參數名
+    if strategy == "sliding_window" and "chunk_size" in kwargs:
+        kwargs["window_size"] = kwargs.pop("chunk_size")
     
     # 如果使用結構化層次分割，傳遞JSON數據
     if strategy == "structured_hierarchical" and json_data:

@@ -352,6 +352,13 @@ interface EvaluationResult {
     chunk_size: number;
     overlap: number;
     overlap_ratio: number;
+    strategy?: string;
+    window_size?: number;
+    step_size?: number;
+    boundary_aware?: boolean;
+    preserve_sentences?: boolean;
+    min_chunk_size_sw?: number;
+    max_chunk_size_sw?: number;
   };
   metrics: {
     precision_omega: number;
@@ -463,6 +470,11 @@ export function ChunkPage() {
     min_chunk_size_options: [100, 200, 300], // 層次分割
     context_window_options: [50, 100, 150], // 語義分割
     step_size_options: [200, 250, 300], // 滑動視窗
+    window_size_options: [400, 500, 600, 800], // 滑動視窗
+    boundary_aware_options: [true, false], // 滑動視窗
+    preserve_sentences_options: [true, false], // 滑動視窗
+    min_chunk_size_options_sw: [50, 100, 150], // 滑動視窗專用
+    max_chunk_size_options_sw: [800, 1000, 1200], // 滑動視窗專用
     secondary_size_options: [300, 400, 500], // 混合分割
   });
   const [currentTask, setCurrentTask] = useState<EvaluationTask | null>(null);
@@ -472,11 +484,78 @@ export function ChunkPage() {
   const [evaluationComparison, setEvaluationComparison] = useState<any>(null);
   const [evaluationLoading, setEvaluationLoading] = useState(false);
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
+  const [showAllResults, setShowAllResults] = useState(false);
+  const [progressInterval, setProgressInterval] =
+    useState<NodeJS.Timeout | null>(null);
 
   // 問題生成相關狀態
   const [generatedQuestions, setGeneratedQuestions] = useState<any[]>([]);
   const [questionLoading, setQuestionLoading] = useState(false);
+  const [questionError, setQuestionError] = useState<string | null>(null);
   const [numQuestions, setNumQuestions] = useState(10);
+
+  // 輪詢進度更新的函數
+  const pollProgress = async (taskId: string) => {
+    try {
+      const response = await fetch(`/api/evaluate/status/${taskId}`);
+      if (response.ok) {
+        const taskData = await response.json();
+        setCurrentTask(taskData);
+
+        // 如果任務完成或失敗，停止輪詢
+        if (taskData.status === "completed" || taskData.status === "failed") {
+          if (progressInterval) {
+            clearInterval(progressInterval);
+            setProgressInterval(null);
+          }
+
+          // 如果完成，獲取結果
+          if (taskData.status === "completed") {
+            const resultsResponse = await fetch(
+              `/api/evaluate/results/${taskId}`
+            );
+            if (resultsResponse.ok) {
+              const resultsData = await resultsResponse.json();
+              setEvaluationResults(resultsData.results || []);
+              setEvaluationComparison(resultsData.comparison || null);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("輪詢進度時出錯:", error);
+    }
+  };
+
+  // 清理輪詢的函數
+  const clearProgressPolling = () => {
+    if (progressInterval) {
+      clearInterval(progressInterval);
+      setProgressInterval(null);
+    }
+  };
+
+  // 組件卸載時清理輪詢
+  useEffect(() => {
+    return () => {
+      clearProgressPolling();
+    };
+  }, []);
+
+  // 計算預計剩餘時間
+  const calculateEstimatedTime = (task: EvaluationTask) => {
+    if (task.progress === 0 || task.progress === 1) {
+      return task.progress === 1 ? "已完成" : "計算中...";
+    }
+
+    const elapsedTime = Date.now() - new Date(task.created_at).getTime();
+    const avgTimePerProgress = elapsedTime / task.progress;
+    const remainingProgress = 1 - task.progress;
+    const estimatedRemainingMs = remainingProgress * avgTimePerProgress;
+    const estimatedMinutes = Math.ceil(estimatedRemainingMs / (1000 * 60));
+
+    return estimatedMinutes > 0 ? estimatedMinutes.toString() : "< 1";
+  };
   const [questionTypes, setQuestionTypes] = useState<string[]>([
     "案例應用",
     "情境分析",
@@ -688,6 +767,13 @@ export function ChunkPage() {
         completed_configs: 0,
         progress: 0,
       });
+
+      // 開始輪詢進度更新
+      clearProgressPolling(); // 清理之前的輪詢
+      const interval = setInterval(() => {
+        pollProgress(response.task_id);
+      }, 1000); // 每秒輪詢一次
+      setProgressInterval(interval);
     } catch (err) {
       setEvaluationError(`啟動評測失敗: ${err}`);
     } finally {
@@ -711,12 +797,12 @@ export function ChunkPage() {
 
   const generateQuestions = async () => {
     if (!docId) {
-      setEvaluationError("請先上傳文檔");
+      setQuestionError("請先上傳文檔");
       return;
     }
 
     setQuestionLoading(true);
-    setEvaluationError(null);
+    setQuestionError(null);
     setGeneratedQuestions([]);
 
     try {
@@ -727,7 +813,10 @@ export function ChunkPage() {
         difficulty_levels: difficultyLevels,
       });
 
+      console.log("問題生成響應:", response); // 調試用
+
       if (response.success) {
+        console.log("成功生成問題:", response.result.questions.length, "個"); // 調試用
         setGeneratedQuestions(response.result.questions);
         // 將生成的問題添加到測試查詢中
         const newQueries = response.result.questions.map(
@@ -738,13 +827,32 @@ export function ChunkPage() {
           test_queries: [...prev.test_queries, ...newQueries],
         }));
       } else {
-        setEvaluationError("問題生成失敗");
+        console.log("響應顯示失敗:", response); // 調試用
+        setQuestionError("問題生成失敗");
       }
     } catch (err) {
-      setEvaluationError(`問題生成失敗: ${err}`);
+      console.error("問題生成異常:", err); // 調試用
+      setQuestionError(`問題生成失敗: ${err}`);
     } finally {
       setQuestionLoading(false);
     }
+  };
+
+  // 計算最佳配置
+  const getBestConfig = () => {
+    if (!evaluationResults.length) return null;
+
+    return evaluationResults.reduce((best, current) => {
+      const currentScore =
+        (current.metrics.precision_at_k[3] || 0) * 0.3 +
+        (current.metrics.recall_at_k[3] || 0) * 0.3 +
+        (current.metrics.precision_omega || 0) * 0.4;
+      const bestScore =
+        (best.metrics.precision_at_k[3] || 0) * 0.3 +
+        (best.metrics.recall_at_k[3] || 0) * 0.3 +
+        (best.metrics.precision_omega || 0) * 0.4;
+      return currentScore > bestScore ? current : best;
+    }, evaluationResults[0]);
   };
 
   const exportEvaluationReport = () => {
@@ -1087,6 +1195,13 @@ export function ChunkPage() {
                   </div>
                 </div>
 
+                {/* 問題生成錯誤顯示 */}
+                {questionError && (
+                  <div className="alert alert-danger" role="alert">
+                    {questionError}
+                  </div>
+                )}
+
                 {/* 評測參數 */}
                 <div className="mb-3">
                   <label className="form-label fw-bold">評測參數</label>
@@ -1113,7 +1228,7 @@ export function ChunkPage() {
                       <input
                         type="text"
                         className="form-control form-control-sm"
-                        placeholder="Overlap Ratios (逗號分隔)"
+                        placeholder="重疊比例 (逗號分隔: 0.0,0.1,0.2)"
                         value={evaluationConfig.overlap_ratios.join(",")}
                         onChange={(e) => {
                           const ratios = e.target.value
@@ -1341,23 +1456,140 @@ export function ChunkPage() {
 
                 {selectedStrategy === "sliding_window" && (
                   <div className="mb-3">
-                    <label className="form-label fw-bold">步長選項</label>
-                    <input
-                      type="text"
-                      className="form-control form-control-sm"
-                      placeholder="步長選項 (逗號分隔: 200,250,300)"
-                      value={evaluationConfig.step_size_options.join(",")}
-                      onChange={(e) => {
-                        const options = e.target.value
-                          .split(",")
-                          .map((s) => parseInt(s.trim()))
-                          .filter((n) => !isNaN(n));
-                        setEvaluationConfig((prev) => ({
-                          ...prev,
-                          step_size_options: options,
-                        }));
-                      }}
-                    />
+                    <div className="row g-2">
+                      <div className="col-6">
+                        <label className="form-label small">視窗大小選項</label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="視窗大小 (逗號分隔: 400,500,600,800)"
+                          value={evaluationConfig.window_size_options.join(",")}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseInt(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              window_size_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                      <div className="col-6">
+                        <label className="form-label small">步長選項</label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="步長 (逗號分隔: 200,250,300)"
+                          value={evaluationConfig.step_size_options.join(",")}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseInt(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              step_size_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="row g-2 mt-2">
+                      <div className="col-6">
+                        <label className="form-label small">
+                          最小分塊大小選項
+                        </label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="最小分塊大小 (逗號分隔: 50,100,150)"
+                          value={evaluationConfig.min_chunk_size_options_sw.join(
+                            ","
+                          )}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseInt(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              min_chunk_size_options_sw: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                      <div className="col-6">
+                        <label className="form-label small">
+                          最大分塊大小選項
+                        </label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="最大分塊大小 (逗號分隔: 800,1000,1200)"
+                          value={evaluationConfig.max_chunk_size_options_sw.join(
+                            ","
+                          )}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => parseInt(s.trim()))
+                              .filter((n) => !isNaN(n));
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              max_chunk_size_options_sw: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="row g-2 mt-2">
+                      <div className="col-6">
+                        <label className="form-label small">邊界感知選項</label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="邊界感知 (逗號分隔: true,false)"
+                          value={evaluationConfig.boundary_aware_options.join(
+                            ","
+                          )}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => s.trim().toLowerCase() === "true")
+                              .filter((s) => typeof s === "boolean");
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              boundary_aware_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                      <div className="col-6">
+                        <label className="form-label small">
+                          保持句子完整性選項
+                        </label>
+                        <input
+                          type="text"
+                          className="form-control form-control-sm"
+                          placeholder="保持句子完整性 (逗號分隔: true,false)"
+                          value={evaluationConfig.preserve_sentences_options.join(
+                            ","
+                          )}
+                          onChange={(e) => {
+                            const options = e.target.value
+                              .split(",")
+                              .map((s) => s.trim().toLowerCase() === "true")
+                              .filter((s) => typeof s === "boolean");
+                            setEvaluationConfig((prev) => ({
+                              ...prev,
+                              preserve_sentences_options: options,
+                            }));
+                          }}
+                        />
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -1678,7 +1910,7 @@ export function ChunkPage() {
                           <div className="text-center">
                             <div className="small text-muted">進度</div>
                             <div className="fw-bold">
-                              {currentTask.progress.toFixed(1)}%
+                              {(currentTask.progress * 100).toFixed(1)}%
                             </div>
                           </div>
                         </div>
@@ -1703,13 +1935,83 @@ export function ChunkPage() {
 
                       {currentTask.status === "running" && (
                         <div className="mt-3">
-                          <div className="progress">
+                          {/* 評測狀態指示器 */}
+                          <div
+                            className="alert alert-info d-flex align-items-center mb-3"
+                            role="alert"
+                          >
                             <div
-                              className="progress-bar progress-bar-striped progress-bar-animated"
-                              role="progressbar"
-                              style={{ width: `${currentTask.progress}%` }}
+                              className="spinner-border spinner-border-sm me-2"
+                              role="status"
                             >
-                              {currentTask.progress.toFixed(1)}%
+                              <span className="visually-hidden">
+                                Loading...
+                              </span>
+                            </div>
+                            <div>
+                              <strong>評測進行中</strong>
+                              <div className="small">
+                                正在評估 {selectedStrategy} 分割策略的{" "}
+                                {currentTask.total_configs} 個配置組合
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="progress" style={{ height: "25px" }}>
+                            <div
+                              className="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+                              role="progressbar"
+                              style={{
+                                width: `${currentTask.progress * 100}%`,
+                              }}
+                              aria-valuenow={currentTask.progress * 100}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                            >
+                              <span className="fw-bold text-white">
+                                {(currentTask.progress * 100).toFixed(1)}%
+                              </span>
+                            </div>
+                          </div>
+                          <div className="mt-2 d-flex justify-content-between align-items-center">
+                            <small className="text-muted">
+                              正在處理配置 {currentTask.completed_configs} /{" "}
+                              {currentTask.total_configs}
+                            </small>
+                            <div className="d-flex align-items-center gap-2">
+                              <small className="text-muted">
+                                預計剩餘時間:{" "}
+                                {calculateEstimatedTime(currentTask)} 分鐘
+                              </small>
+                              <button
+                                className="btn btn-sm btn-outline-danger"
+                                onClick={() => {
+                                  clearProgressPolling();
+                                  setCurrentTask(null);
+                                  setEvaluationError("評測已取消");
+                                }}
+                                title="取消評測"
+                              >
+                                <i className="bi bi-x-circle"></i> 取消
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {currentTask.status === "completed" && (
+                        <div className="mt-3">
+                          <div
+                            className="alert alert-success d-flex align-items-center"
+                            role="alert"
+                          >
+                            <i className="bi bi-check-circle-fill me-2"></i>
+                            <div>
+                              <strong>評測完成！</strong>
+                              <div className="small">
+                                成功評估了 {currentTask.total_configs}{" "}
+                                個配置組合
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1726,18 +2028,220 @@ export function ChunkPage() {
                   </div>
                 )}
 
+                {/* 最佳配置 */}
+                {evaluationResults.length > 0 && getBestConfig() && (
+                  <div className="card mb-3">
+                    <div className="card-header bg-success text-white">
+                      <h6 className="mb-0">
+                        <i className="bi bi-trophy me-2"></i>
+                        最佳配置 (綜合評比)
+                      </h6>
+                    </div>
+                    <div className="card-body">
+                      {(() => {
+                        const bestConfig = getBestConfig();
+                        if (!bestConfig) return null;
+
+                        const score =
+                          (bestConfig.metrics.precision_at_k[3] || 0) * 0.3 +
+                          (bestConfig.metrics.recall_at_k[3] || 0) * 0.3 +
+                          (bestConfig.metrics.precision_omega || 0) * 0.4;
+
+                        return (
+                          <div className="row">
+                            <div className="col-md-6">
+                              <h6>配置參數</h6>
+                              <div className="table-responsive">
+                                <table className="table table-sm">
+                                  <tbody>
+                                    <tr>
+                                      <td>
+                                        <strong>分塊大小:</strong>
+                                      </td>
+                                      <td>{bestConfig.config.chunk_size}</td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <strong>重疊比例:</strong>
+                                      </td>
+                                      <td>
+                                        {(
+                                          bestConfig.config.overlap_ratio * 100
+                                        ).toFixed(0)}
+                                        %
+                                      </td>
+                                    </tr>
+                                    {bestConfig.config.strategy ===
+                                      "sliding_window" && (
+                                      <>
+                                        <tr>
+                                          <td>
+                                            <strong>視窗大小:</strong>
+                                          </td>
+                                          <td>
+                                            {bestConfig.config.window_size ||
+                                              bestConfig.config.chunk_size}
+                                          </td>
+                                        </tr>
+                                        <tr>
+                                          <td>
+                                            <strong>步長:</strong>
+                                          </td>
+                                          <td>
+                                            {bestConfig.config.step_size ||
+                                              "N/A"}
+                                          </td>
+                                        </tr>
+                                        <tr>
+                                          <td>
+                                            <strong>邊界感知:</strong>
+                                          </td>
+                                          <td>
+                                            {bestConfig.config.boundary_aware
+                                              ? "是"
+                                              : "否"}
+                                          </td>
+                                        </tr>
+                                        <tr>
+                                          <td>
+                                            <strong>保持句子完整:</strong>
+                                          </td>
+                                          <td>
+                                            {bestConfig.config
+                                              .preserve_sentences
+                                              ? "是"
+                                              : "否"}
+                                          </td>
+                                        </tr>
+                                        {bestConfig.config
+                                          .min_chunk_size_sw && (
+                                          <tr>
+                                            <td>
+                                              <strong>最小分塊大小:</strong>
+                                            </td>
+                                            <td>
+                                              {
+                                                bestConfig.config
+                                                  .min_chunk_size_sw
+                                              }
+                                            </td>
+                                          </tr>
+                                        )}
+                                        {bestConfig.config
+                                          .max_chunk_size_sw && (
+                                          <tr>
+                                            <td>
+                                              <strong>最大分塊大小:</strong>
+                                            </td>
+                                            <td>
+                                              {
+                                                bestConfig.config
+                                                  .max_chunk_size_sw
+                                              }
+                                            </td>
+                                          </tr>
+                                        )}
+                                      </>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                            <div className="col-md-6">
+                              <h6>評估指標</h6>
+                              <div className="table-responsive">
+                                <table className="table table-sm">
+                                  <tbody>
+                                    <tr>
+                                      <td>
+                                        <strong>Precision@3:</strong>
+                                      </td>
+                                      <td>
+                                        <span className="badge bg-success">
+                                          {(
+                                            bestConfig.metrics
+                                              .precision_at_k[3] || 0
+                                          ).toFixed(3)}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <strong>Recall@3:</strong>
+                                      </td>
+                                      <td>
+                                        <span className="badge bg-success">
+                                          {(
+                                            bestConfig.metrics.recall_at_k[3] ||
+                                            0
+                                          ).toFixed(3)}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <strong>PrecisionΩ:</strong>
+                                      </td>
+                                      <td>
+                                        <span className="badge bg-success">
+                                          {(
+                                            bestConfig.metrics
+                                              .precision_omega || 0
+                                          ).toFixed(3)}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                    <tr>
+                                      <td>
+                                        <strong>綜合評分:</strong>
+                                      </td>
+                                      <td>
+                                        <span className="badge bg-primary fs-6">
+                                          {score.toFixed(3)}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+
                 {/* 評測結果 */}
                 {evaluationResults.length > 0 && (
                   <div className="card mb-3">
                     <div className="card-header d-flex justify-content-between align-items-center">
-                      <h6 className="mb-0">評測結果</h6>
-                      <button
-                        className="btn btn-outline-primary btn-sm"
-                        onClick={exportEvaluationReport}
-                      >
-                        <i className="bi bi-download me-1"></i>
-                        導出報告
-                      </button>
+                      <h6 className="mb-0">
+                        評測結果
+                        <span className="badge bg-secondary ms-2">
+                          {evaluationResults.length} 個配置
+                        </span>
+                      </h6>
+                      <div className="d-flex gap-2">
+                        <button
+                          className="btn btn-outline-secondary btn-sm"
+                          onClick={() => setShowAllResults(!showAllResults)}
+                        >
+                          <i
+                            className={`bi bi-chevron-${
+                              showAllResults ? "up" : "down"
+                            } me-1`}
+                          ></i>
+                          {showAllResults ? "收起" : "展開全部"}
+                        </button>
+                        <button
+                          className="btn btn-outline-primary btn-sm"
+                          onClick={exportEvaluationReport}
+                        >
+                          <i className="bi bi-download me-1"></i>
+                          導出報告
+                        </button>
+                      </div>
                     </div>
                     <div className="card-body">
                       <div className="table-responsive">
@@ -1755,7 +2259,10 @@ export function ChunkPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {evaluationResults.map((result, index) => (
+                            {(showAllResults
+                              ? evaluationResults
+                              : evaluationResults.slice(0, 10)
+                            ).map((result, index) => (
                               <tr key={index}>
                                 <td>
                                   <div className="small">
@@ -1879,6 +2386,17 @@ export function ChunkPage() {
                           </tbody>
                         </table>
                       </div>
+                      {!showAllResults && evaluationResults.length > 10 && (
+                        <div className="mt-3 text-center">
+                          <div className="alert alert-info mb-0">
+                            <i className="bi bi-info-circle me-2"></i>
+                            顯示前 10 筆結果，共 {evaluationResults.length}{" "}
+                            筆配置
+                            <br />
+                            <small>點擊「展開全部」按鈕查看所有結果</small>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

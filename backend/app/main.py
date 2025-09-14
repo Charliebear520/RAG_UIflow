@@ -194,6 +194,7 @@ class EvaluationTask:
     status: str  # "pending", "running", "completed", "failed"
     results: List[EvaluationResult]
     created_at: datetime
+    progress: float = 0.0  # 新增：進度 0.0 to 1.0
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
     strategy: str = "fixed_size"  # 新增：分割策略
@@ -227,15 +228,19 @@ class EvaluationStore:
 
     def update_task_status(self, task_id: str, status: str, 
                           results: Optional[List[EvaluationResult]] = None,
-                          error_message: Optional[str] = None):
+                          error_message: Optional[str] = None,
+                          progress: Optional[float] = None):
         if task_id in self.tasks:
             self.tasks[task_id].status = status
             if results is not None:
                 self.tasks[task_id].results = results
             if error_message is not None:
                 self.tasks[task_id].error_message = error_message
+            if progress is not None:
+                self.tasks[task_id].progress = progress
             if status == "completed":
                 self.tasks[task_id].completed_at = datetime.now()
+                self.tasks[task_id].progress = 1.0
 
 
 # 創建評估存儲實例
@@ -266,6 +271,11 @@ class FixedSizeEvaluationRequest(BaseModel):
     min_chunk_size_options: List[int] = [100, 200, 300]  # 層次分割選項
     context_window_options: List[int] = [50, 100, 150]  # 語義分割選項
     step_size_options: List[int] = [200, 250, 300]  # 滑動視窗選項
+    window_size_options: List[int] = [400, 500, 600, 800]  # 滑動視窗選項
+    boundary_aware_options: List[bool] = [True, False]  # 滑動視窗選項
+    preserve_sentences_options: List[bool] = [True, False]  # 滑動視窗選項
+    min_chunk_size_options_sw: List[int] = [50, 100, 150]  # 滑動視窗專用選項
+    max_chunk_size_options_sw: List[int] = [800, 1000, 1200]  # 滑動視窗專用選項
     secondary_size_options: List[int] = [300, 400, 500]  # 混合分割選項  # 用於計算recall@K
 
 
@@ -1426,6 +1436,7 @@ def generate_questions_with_gemini(text_content: str, num_questions: int,
     try:
         api_key = os.getenv('GEMINI_API_KEY')
         if not api_key:
+            print("警告：GEMINI_API_KEY 未設置，使用備用方法")
             return generate_questions_fallback(text_content, num_questions)
         
         cfg = getattr(genai, "configure", None)
@@ -1433,6 +1444,7 @@ def generate_questions_with_gemini(text_content: str, num_questions: int,
             cfg(api_key=api_key)  # type: ignore[misc]
         ModelCls = getattr(genai, "GenerativeModel", None)
         if ModelCls is None:
+            print("警告：無法獲取 GenerativeModel 類，使用備用方法")
             return generate_questions_fallback(text_content, num_questions)
         model = ModelCls('gemini-2.0-flash-exp')
         
@@ -1524,7 +1536,7 @@ def generate_questions_with_gemini(text_content: str, num_questions: int,
             
         except json.JSONDecodeError as e:
             print(f"JSON解析錯誤: {e}")
-            print(f"響應內容: {response_text}")
+            print(f"響應內容: {response_text[:500]}...")  # 只顯示前500字符
             return generate_questions_fallback(text_content, num_questions)
         
     except Exception as e:
@@ -1542,6 +1554,8 @@ def generate_questions_fallback(text_content: str, num_questions: int) -> List[G
     import re
     articles = re.findall(r'第[一二三四五六七八九十百千0-9]+條[^。]*。', text_content)
     
+    print(f"備用方法：從文本中找到 {len(articles)} 個法條")
+    
     # 生成基礎問題
     question_templates = [
         ("{article}的定義是什麼？", "定義", "基礎"),
@@ -1551,24 +1565,48 @@ def generate_questions_fallback(text_content: str, num_questions: int) -> List[G
         ("{article}的保護期限是多久？", "期限", "基礎"),
     ]
     
-    for i in range(min(num_questions, len(articles))):
-        article = articles[i % len(articles)]
-        template, q_type, difficulty = question_templates[i % len(question_templates)]
+    if articles:
+        # 如果有法條，基於法條生成問題
+        for i in range(min(num_questions, len(articles))):
+            article = articles[i % len(articles)]
+            template, q_type, difficulty = question_templates[i % len(question_templates)]
+            
+            # 提取條文號碼
+            article_match = re.search(r'第([一二三四五六七八九十百千0-9]+)條', article)
+            article_num = article_match.group(1) if article_match else str(i+1)
+            
+            question = GeneratedQuestion(
+                question=template.format(article=f"第{article_num}條"),
+                references=[f"第{article_num}條"],
+                question_type=q_type,
+                difficulty=difficulty,
+                keywords=extract_keywords(article, 3),
+                estimated_tokens=len(article) + 50
+            )
+            questions.append(question)
+    else:
+        # 如果沒有找到法條，生成通用問題
+        print("警告：沒有找到法條，生成通用問題")
+        generic_questions = [
+            "請說明本法律文檔的主要內容和目的？",
+            "本法律文檔適用於哪些情況？",
+            "違反本法律規定會產生什麼後果？",
+            "如何申請本法律規定的相關權利？",
+            "本法律規定的保護期限是多久？"
+        ]
         
-        # 提取條文號碼
-        article_match = re.search(r'第([一二三四五六七八九十百千0-9]+)條', article)
-        article_num = article_match.group(1) if article_match else str(i+1)
-        
-        question = GeneratedQuestion(
-            question=template.format(article=f"第{article_num}條"),
-            references=[f"第{article_num}條"],
-            question_type=q_type,
-            difficulty=difficulty,
-            keywords=extract_keywords(article, 3),
-            estimated_tokens=len(article) + 50
-        )
-        questions.append(question)
+        for i in range(min(num_questions, len(generic_questions))):
+            question = GeneratedQuestion(
+                question=generic_questions[i],
+                references=["相關法條"],
+                question_type="基礎概念",
+                difficulty="基礎",
+                keywords=extract_keywords(text_content[:200], 3),
+                estimated_tokens=100
+            )
+            questions.append(question)
     
+    print(f"備用方法生成了 {len(questions)} 個問題")
     return questions
 
 
@@ -1611,8 +1649,13 @@ def evaluate_chunk_config(doc: DocRecord, config: ChunkConfig,
     elif strategy == "sliding_window":
         from .chunking import chunk_text
         chunks = chunk_text(doc.text, strategy="sliding_window", 
-                           window_size=config.chunk_size, 
-                           step_size=config.step_size)
+                           window_size=config.window_size, 
+                           step_size=config.step_size,
+                           overlap_ratio=config.overlap_ratio,
+                           boundary_aware=config.boundary_aware,
+                           min_chunk_size_sw=config.min_chunk_size_sw,
+                           max_chunk_size_sw=config.max_chunk_size_sw,
+                           preserve_sentences=config.preserve_sentences)
     elif strategy == "llm_semantic":
         from .chunking import chunk_text
         chunks = chunk_text(doc.text, strategy="llm_semantic", 
@@ -1753,7 +1796,12 @@ def evaluate_chunk_config(doc: DocRecord, config: ChunkConfig,
         detailed_config["semantic_threshold"] = config.semantic_threshold
         detailed_config["context_window"] = config.context_window
     elif strategy == "sliding_window":
+        detailed_config["window_size"] = config.window_size
         detailed_config["step_size"] = config.step_size
+        detailed_config["boundary_aware"] = config.boundary_aware
+        detailed_config["preserve_sentences"] = config.preserve_sentences
+        detailed_config["min_chunk_size_sw"] = config.min_chunk_size_sw
+        detailed_config["max_chunk_size_sw"] = config.max_chunk_size_sw
     elif strategy == "hybrid":
         detailed_config["switch_threshold"] = config.switch_threshold
         detailed_config["secondary_size"] = config.secondary_size
@@ -2754,9 +2802,15 @@ def run_evaluation_task(task_id: str):
             return
         
         results = []
-        for config in task.configs:
+        total_configs = len(task.configs)
+        
+        for i, config in enumerate(task.configs):
             result = evaluate_chunk_config(doc, config, task.test_queries, task.k_values, task.strategy)
             results.append(result)
+            
+            # 更新進度
+            progress = (i + 1) / total_configs
+            eval_store.update_task_status(task_id, "running", progress=progress)
         
         eval_store.update_task_status(task_id, "completed", results=results)
         
@@ -2846,15 +2900,26 @@ def start_fixed_size_evaluation(req: FixedSizeEvaluationRequest, background_task
                         )
                         configs.append(config)
             elif req.strategy == "sliding_window":
-                for step_size in req.step_size_options:
-                    config = ChunkConfig(
-                        chunk_size=chunk_size,
-                        overlap=overlap,
-                        overlap_ratio=overlap_ratio,
-                        step_size=step_size,
-                        chunk_by="article"  # 默認值
-                    )
-                    configs.append(config)
+                for window_size in req.window_size_options:
+                    for step_size in req.step_size_options:
+                        for boundary_aware in req.boundary_aware_options:
+                            for preserve_sentences in req.preserve_sentences_options:
+                                for min_chunk_size_sw in req.min_chunk_size_options_sw:
+                                    for max_chunk_size_sw in req.max_chunk_size_options_sw:
+                                        config = ChunkConfig(
+                                            chunk_size=window_size,  # 使用window_size作為chunk_size
+                                            overlap=overlap,
+                                            overlap_ratio=overlap_ratio,
+                                            strategy="sliding_window",
+                                            step_size=step_size,
+                                            window_size=window_size,
+                                            boundary_aware=boundary_aware,
+                                            preserve_sentences=preserve_sentences,
+                                            min_chunk_size_sw=min_chunk_size_sw,
+                                            max_chunk_size_sw=max_chunk_size_sw,
+                                            chunk_by="article"  # 默認值
+                                        )
+                                        configs.append(config)
             elif req.strategy == "hybrid":
                 for switch_threshold in req.switch_threshold_options:
                     for secondary_size in req.secondary_size_options:
@@ -2909,15 +2974,18 @@ def get_evaluation_status(task_id: str):
     if not task:
         return JSONResponse(status_code=404, content={"error": "Task not found"})
     
+    total_configs = len(task.configs)
+    completed_configs = int(task.progress * total_configs) if task.progress > 0 else 0
+    
     return {
         "task_id": task_id,
         "status": task.status,
         "created_at": task.created_at.isoformat(),
         "completed_at": task.completed_at.isoformat() if task.completed_at else None,
         "error_message": task.error_message,
-        "total_configs": len(task.configs),
-        "completed_configs": len(task.results) if task.results else 0,
-        "progress": len(task.results) / len(task.configs) * 100 if task.configs else 0
+        "total_configs": total_configs,
+        "completed_configs": completed_configs,
+        "progress": task.progress
     }
 
 
@@ -3224,6 +3292,14 @@ def generate_questions(req: GenerateQuestionsRequest):
         doc.generated_questions = question_texts
         store.docs[req.doc_id] = doc  # 更新文檔記錄
         
+        # 檢查是否生成了問題
+        if not questions:
+            print("警告：沒有生成任何問題")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "無法從文檔中生成問題，請檢查文檔內容是否包含法律條文"}
+            )
+        
         result = QuestionGenerationResult(
             doc_id=req.doc_id,
             total_questions=len(questions),
@@ -3232,7 +3308,7 @@ def generate_questions(req: GenerateQuestionsRequest):
             timestamp=datetime.now()
         )
         
-        return {
+        response_data = {
             "success": True,
             "result": {
                 "doc_id": result.doc_id,
@@ -3253,7 +3329,11 @@ def generate_questions(req: GenerateQuestionsRequest):
             }
         }
         
+        print(f"返回響應數據: success={response_data['success']}, questions_count={len(response_data['result']['questions'])}")
+        return response_data
+        
     except Exception as e:
+        print(f"問題生成異常: {str(e)}")  # 添加日誌
         return JSONResponse(
             status_code=500, 
             content={"error": f"問題生成失敗: {str(e)}"}

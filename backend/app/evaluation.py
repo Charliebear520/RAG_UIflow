@@ -4,6 +4,7 @@
 
 import re
 from typing import List, Dict, Any, Tuple
+from datetime import datetime
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from .models import EvaluationMetrics, EvaluationResult
@@ -147,10 +148,10 @@ def calculate_chunk_metrics(chunks: List[str]) -> Dict[str, float]:
     }
 
 
-def evaluate_chunk_config(text: str, questions: List[str], chunk_size: int, overlap_ratio: float) -> EvaluationResult:
+def evaluate_chunk_config(text: str, questions: List[str], chunk_size: int, overlap_ratio: float, strategy: str = "fixed_size", **kwargs) -> EvaluationResult:
     """評估單個分塊配置"""
     # 生成分塊
-    chunks = chunk_text(text, strategy="fixed_size", chunk_size=chunk_size, overlap_ratio=overlap_ratio)
+    chunks = chunk_text(text, strategy=strategy, chunk_size=chunk_size, overlap_ratio=overlap_ratio, **kwargs)
     
     # 計算指標
     chunk_metrics = calculate_chunk_metrics(chunks)
@@ -182,4 +183,32 @@ def evaluate_chunk_config(text: str, questions: List[str], chunk_size: int, over
         "overlap_ratio": overlap_ratio
     }
     
-    return EvaluationResult(config=config, metrics=metrics)
+    # 模擬檢索結果（為每個問題生成相關的chunk結果）
+    retrieval_results = {}
+    for question in questions:
+        # 簡單的相似度計算來模擬檢索結果
+        vectorizer = TfidfVectorizer()
+        try:
+            question_vector = vectorizer.fit_transform([question])
+            chunk_vectors = vectorizer.transform(chunks)
+            similarities = cosine_similarity(question_vector, chunk_vectors)[0]
+            
+            # 獲取最相關的chunks
+            chunk_scores = [(chunks[i], similarities[i]) for i in range(len(chunks))]
+            chunk_scores.sort(key=lambda x: x[1], reverse=True)
+            
+            retrieval_results[question] = [
+                {"chunk": chunk, "score": float(score), "index": i}
+                for i, (chunk, score) in enumerate(chunk_scores[:5])  # 返回前5個最相關的chunks
+            ]
+        except:
+            # 如果向量化失敗，返回空結果
+            retrieval_results[question] = []
+    
+    return EvaluationResult(
+        config=config, 
+        metrics=metrics,
+        test_queries=questions,
+        retrieval_results=retrieval_results,
+        timestamp=datetime.now()
+    )
