@@ -774,23 +774,227 @@ class SemanticChunking(ChunkingStrategy):
 
 
 class SlidingWindowChunking(ChunkingStrategy):
-    """滑動視窗分割策略"""
+    """滑動視窗分割策略 - 支援多種配置和邊界感知"""
     
-    def chunk(self, text: str, window_size: int = 500, step_size: int = 250, **kwargs) -> List[str]:
-        """滑動視窗分割"""
+    def __init__(self):
+        """初始化滑動視窗分割器"""
+        # 中文詞語邊界標記
+        self.word_boundaries = [
+            '。', '！', '？', '；', '：',  # 句號、感嘆號、問號、分號、冒號
+            '，', '、', '．', '·',        # 逗號、頓號、句點、間隔號
+            '\n', '\r\n', '\r',           # 換行符
+            ' ', '\t',                    # 空格、制表符
+            '（', '）', '(', ')',         # 括號
+            '「', '」', '"', '"',         # 引號
+            '【', '】', '[', ']',         # 方括號
+            '《', '》', '<', '>',         # 書名號
+        ]
+        
+        # 編譯邊界正則表達式
+        self.boundary_pattern = re.compile('|'.join(re.escape(b) for b in self.word_boundaries))
+    
+    def chunk(self, text: str, window_size: int = 500, step_size: int = 250, 
+              overlap_ratio: float = 0.1, boundary_aware: bool = True, 
+              min_chunk_size: int = 100, max_chunk_size: int = 1000,
+              preserve_sentences: bool = True, **kwargs) -> List[str]:
+        """
+        滑動視窗分割
+        
+        Args:
+            text: 原始文本
+            window_size: 視窗大小（字符數）
+            step_size: 步長（字符數）
+            overlap_ratio: 重疊比例（當step_size未指定時使用）
+            boundary_aware: 是否啟用邊界感知
+            min_chunk_size: 最小chunk大小
+            max_chunk_size: 最大chunk大小
+            preserve_sentences: 是否保持句子完整性
+        """
         if not text.strip():
             return []
         
+        # 如果未指定step_size，根據overlap_ratio計算
+        if step_size is None or step_size <= 0:
+            step_size = int(window_size * (1 - overlap_ratio))
+        
+        # 確保step_size不超過window_size
+        step_size = min(step_size, window_size)
+        
         chunks = []
         start = 0
+        text_length = len(text)
         
-        while start < len(text):
-            end = start + window_size
+        while start < text_length:
+            # 計算視窗結束位置
+            end = min(start + window_size, text_length)
+            
+            # 提取基本chunk
             chunk = text[start:end]
-            if chunk.strip():
+            
+            if boundary_aware:
+                # 邊界感知調整
+                chunk = self._adjust_boundary(chunk, text, start, end, preserve_sentences)
+            
+            # 檢查chunk大小
+            if len(chunk) >= min_chunk_size:
                 chunks.append(chunk)
+            
+            # 移動到下一個位置
             start += step_size
             
+            # 避免無限循環
+            if step_size <= 0:
+                break
+        
+        # 後處理：合併過小的chunk
+        chunks = self._merge_small_chunks(chunks, min_chunk_size)
+        
+        # 後處理：分割過大的chunk
+        final_chunks = []
+        for chunk in chunks:
+            if len(chunk) > max_chunk_size:
+                sub_chunks = self._split_large_chunk(chunk, max_chunk_size, step_size)
+                final_chunks.extend(sub_chunks)
+            else:
+                final_chunks.append(chunk)
+        
+        return final_chunks
+    
+    def _adjust_boundary(self, chunk: str, full_text: str, start: int, end: int, 
+                        preserve_sentences: bool = True) -> str:
+        """調整chunk邊界，避免在詞語中間切分"""
+        if not preserve_sentences:
+            return chunk
+        
+        # 嘗試在句子邊界切分
+        sentence_endings = ['。', '！', '？', '；']
+        
+        # 向前查找最近的句子結束符
+        for i in range(end - 1, start, -1):
+            if full_text[i] in sentence_endings:
+                return full_text[start:i + 1]
+        
+        # 如果沒找到句子邊界，嘗試其他邊界
+        for i in range(end - 1, start, -1):
+            if full_text[i] in self.word_boundaries:
+                return full_text[start:i + 1]
+        
+        # 如果都沒找到合適邊界，返回原始chunk
+        return chunk
+    
+    def _merge_small_chunks(self, chunks: List[str], min_size: int) -> List[str]:
+        """合併過小的chunk"""
+        if not chunks:
+            return chunks
+        
+        merged_chunks = []
+        current_chunk = chunks[0]
+        
+        for i in range(1, len(chunks)):
+            next_chunk = chunks[i]
+            
+            # 如果當前chunk太小，嘗試與下一個合併
+            if len(current_chunk) < min_size and len(current_chunk + next_chunk) <= min_size * 2:
+                current_chunk += next_chunk
+            else:
+                merged_chunks.append(current_chunk)
+                current_chunk = next_chunk
+        
+        # 添加最後一個chunk
+        merged_chunks.append(current_chunk)
+        
+        return merged_chunks
+    
+    def _split_large_chunk(self, chunk: str, max_size: int, step_size: int) -> List[str]:
+        """分割過大的chunk"""
+        if len(chunk) <= max_size:
+            return [chunk]
+        
+        sub_chunks = []
+        start = 0
+        
+        while start < len(chunk):
+            end = min(start + max_size, len(chunk))
+            sub_chunk = chunk[start:end]
+            
+            # 嘗試在句子邊界切分
+            if end < len(chunk):
+                for i in range(end - 1, start, -1):
+                    if sub_chunk[i] in ['。', '！', '？', '；']:
+                        sub_chunk = sub_chunk[:i + 1]
+                        break
+            
+            sub_chunks.append(sub_chunk)
+            start += step_size
+        
+        return sub_chunks
+    
+    def chunk_with_span(self, text: str, window_size: int = 500, step_size: int = 250,
+                       overlap_ratio: float = 0.1, **kwargs) -> List[Dict[str, Any]]:
+        """
+        帶span信息的滑動視窗分割
+        
+        Returns:
+            List[Dict]: 包含content、span、metadata的chunk列表
+        """
+        chunks = self.chunk(text, window_size, step_size, overlap_ratio, **kwargs)
+        
+        result = []
+        current_pos = 0
+        
+        for i, chunk in enumerate(chunks):
+            # 在原文中查找chunk位置
+            start_pos = text.find(chunk, current_pos)
+            if start_pos == -1:
+                start_pos = current_pos
+            end_pos = start_pos + len(chunk)
+            
+            result.append({
+                "content": chunk,
+                "span": {"start": start_pos, "end": end_pos},
+                "chunk_id": f"sliding_window_chunk_{i}",
+                "metadata": {
+                    "window_size": window_size,
+                    "step_size": step_size,
+                    "overlap_ratio": overlap_ratio,
+                    "length": len(chunk),
+                    "strategy": "sliding_window",
+                    "chunk_index": i
+                }
+            })
+            
+            current_pos = start_pos
+        
+        return result
+    
+    def chunk_with_overlap_control(self, text: str, window_size: int = 500, 
+                                 overlap_ratio: float = 0.1, **kwargs) -> List[str]:
+        """
+        精確控制重疊的滑動視窗分割
+        """
+        if not text.strip():
+            return []
+        
+        overlap_size = int(window_size * overlap_ratio)
+        step_size = window_size - overlap_size
+        
+        chunks = []
+        start = 0
+        text_length = len(text)
+        
+        while start < text_length:
+            end = min(start + window_size, text_length)
+            chunk = text[start:end]
+            
+            if chunk.strip():
+                chunks.append(chunk)
+            
+            start += step_size
+            
+            # 避免無限循環
+            if step_size <= 0:
+                break
+        
         return chunks
 
 

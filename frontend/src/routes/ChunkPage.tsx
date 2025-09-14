@@ -45,7 +45,11 @@ interface ChunkParams {
   sliding_window: {
     window_size: number;
     step_size: number;
-    overlap: number;
+    overlap_ratio: number;
+    boundary_aware: boolean;
+    min_chunk_size: number;
+    max_chunk_size: number;
+    preserve_sentences: boolean;
   };
   llm_semantic: {
     max_chunk_size: number;
@@ -183,8 +187,9 @@ const strategyInfo = {
   },
   sliding_window: {
     name: "滑動視窗分割",
-    description: "使用固定大小的滑動視窗進行分割，確保內容的連續性。",
-    metrics: ["分塊數量", "視窗覆蓋率", "重疊率", "內容連續性"],
+    description:
+      "使用固定大小的滑動視窗進行分割，支援邊界感知和重疊控制，確保內容的連續性。",
+    metrics: ["分塊數量", "視窗覆蓋率", "重疊率", "內容連續性", "邊界保持度"],
     params: {
       window_size: {
         label: "視窗大小",
@@ -200,12 +205,37 @@ const strategyInfo = {
         default: 250,
         unit: "字符",
       },
-      overlap: {
-        label: "重疊大小",
+      overlap_ratio: {
+        label: "重疊比例",
         min: 0,
-        max: 200,
-        default: 50,
+        max: 0.5,
+        default: 0.1,
+        unit: "比例",
+        step: 0.05,
+      },
+      boundary_aware: {
+        label: "邊界感知",
+        type: "boolean",
+        default: true,
+      },
+      min_chunk_size: {
+        label: "最小分塊大小",
+        min: 50,
+        max: 500,
+        default: 100,
         unit: "字符",
+      },
+      max_chunk_size: {
+        label: "最大分塊大小",
+        min: 500,
+        max: 2000,
+        default: 1000,
+        unit: "字符",
+      },
+      preserve_sentences: {
+        label: "保持句子完整性",
+        type: "boolean",
+        default: true,
       },
     },
   },
@@ -387,7 +417,11 @@ export function ChunkPage() {
     sliding_window: {
       window_size: 500,
       step_size: 250,
-      overlap: 50,
+      overlap_ratio: 0.1,
+      boundary_aware: true,
+      min_chunk_size: 100,
+      max_chunk_size: 1000,
+      preserve_sentences: true,
     },
     llm_semantic: {
       max_chunk_size: 500,
@@ -555,6 +589,16 @@ export function ChunkPage() {
           strategyParams.sliding_window_params = {
             step_size: (currentParams as ChunkParams["sliding_window"])
               .step_size,
+            overlap_ratio: (currentParams as ChunkParams["sliding_window"])
+              .overlap_ratio,
+            boundary_aware: (currentParams as ChunkParams["sliding_window"])
+              .boundary_aware,
+            min_chunk_size: (currentParams as ChunkParams["sliding_window"])
+              .min_chunk_size,
+            max_chunk_size: (currentParams as ChunkParams["sliding_window"])
+              .max_chunk_size,
+            preserve_sentences: (currentParams as ChunkParams["sliding_window"])
+              .preserve_sentences,
           };
           break;
         case "llm_semantic":
