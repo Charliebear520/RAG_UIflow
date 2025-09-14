@@ -320,6 +320,11 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
                   </h4>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
+                      <span className="font-medium">策略:</span>{" "}
+                      {evaluationResults.summary.best_config.config.strategy ||
+                        "固定大小分割"}
+                    </div>
+                    <div>
                       <span className="font-medium">Chunk Size:</span>{" "}
                       {evaluationResults.summary.best_config.config.chunk_size}
                     </div>
@@ -330,6 +335,12 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
                           .overlap_ratio
                       }
                     </div>
+                    {evaluationResults.summary.best_config.config.chunk_by && (
+                      <div>
+                        <span className="font-medium">分割單位:</span>{" "}
+                        {evaluationResults.summary.best_config.config.chunk_by}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -363,8 +374,15 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
                     {evaluationResults.results.map((result, index) => (
                       <tr key={index} className="hover:bg-gray-50">
                         <td className="px-4 py-3 text-sm">
-                          {result.config.chunk_size}/
-                          {result.config.overlap_ratio}
+                          <div className="font-medium">
+                            {result.config.strategy || "固定大小分割"}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {result.config.chunk_size}/
+                            {result.config.overlap_ratio}
+                            {result.config.chunk_by &&
+                              ` (${result.config.chunk_by})`}
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-sm">
                           <span

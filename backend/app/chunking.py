@@ -3,7 +3,15 @@
 """
 
 import re
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
+
+# 嘗試導入langchain，如果不可用則使用自定義實現
+try:
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    RecursiveCharacterTextSplitter = None
+    LANGCHAIN_AVAILABLE = False
 
 
 class ChunkingStrategy:
@@ -237,6 +245,285 @@ class HierarchicalChunking(ChunkingStrategy):
                     chunks.append(final_text)
         
         return chunks
+    
+    def chunk_with_span(self, text: str, max_chunk_size: int = 1000, overlap_ratio: float = 0.1, **kwargs) -> List[Dict[str, Any]]:
+        """
+        帶span信息的層次分割
+        
+        Returns:
+            List[Dict]: 包含content、span、metadata的chunk列表
+        """
+        chunks = self.chunk(text, max_chunk_size, overlap_ratio, **kwargs)
+        
+        result = []
+        current_pos = 0
+        
+        for i, chunk in enumerate(chunks):
+            # 在原文中查找chunk位置
+            start_pos = text.find(chunk, current_pos)
+            if start_pos == -1:
+                start_pos = current_pos
+            end_pos = start_pos + len(chunk)
+            
+            # 提取metadata
+            level, number, content = self._detect_structure_level(chunk.split('\n')[0])
+            
+            result.append({
+                "content": chunk,
+                "span": {"start": start_pos, "end": end_pos},
+                "chunk_id": f"hierarchical_chunk_{i}",
+                "metadata": {
+                    "level": level,
+                    "number": number,
+                    "content_preview": content,
+                    "length": len(chunk),
+                    "strategy": "hierarchical"
+                }
+            })
+            
+            current_pos = start_pos
+        
+        return result
+
+
+class RCTSHierarchicalChunking(ChunkingStrategy):
+    """基於RCTS的層次分割策略 - 結合層次結構識別和RCTS智能分割"""
+    
+    def __init__(self):
+        """初始化RCTS和層次識別模式"""
+        # 層次標記模式（繼承自HierarchicalChunking）
+        self.chapter_patterns = [
+            r'^第\s*([一二三四五六七八九十百千0-9]+)\s*章[\u3000\s]*(.*)$',
+            r'^第\s*([0-9]+)\s*章[\u3000\s]*(.*)$',
+            r'^(總則|附則|罰則|附錄)[\u3000\s]*(.*)$'
+        ]
+        
+        self.article_patterns = [
+            r'^第\s*([一二三四五六七八九十百千0-9]+(?:之[一二三四五六七八九十0-9]+)?)\s*條[\u3000\s]*(.*)$',
+            r'^第\s*([0-9]+(?:之[0-9]+)?)\s*條[\u3000\s]*(.*)$'
+        ]
+        
+        self.item_patterns = [
+            r'^[（(]([0-9０-９一二三四五六七八九十]+)[）)]\s*(.*)$',
+            r'^([一二三四五六七八九十]+)[、．\.）)]\s*(.*)$',
+            r'^([0-9０-９]+)[、．\.）)]\s*(.*)$'
+        ]
+        
+        # 編譯正則表達式
+        self.chapter_re = [re.compile(pattern, re.MULTILINE) for pattern in self.chapter_patterns]
+        self.article_re = [re.compile(pattern, re.MULTILINE) for pattern in self.article_patterns]
+        self.item_re = [re.compile(pattern, re.MULTILINE) for pattern in self.item_patterns]
+        
+        # RCTS分割器 - 針對中文法律文檔優化
+        if LANGCHAIN_AVAILABLE and RecursiveCharacterTextSplitter:
+            self.rcts_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=100,
+                length_function=len,
+                separators=[
+                    "\n\n",  # 段落分隔
+                    "\n",    # 行分隔
+                    "。",    # 句號
+                    "；",    # 分號
+                    "，",    # 逗號
+                    "、",    # 頓號
+                    " ",     # 空格
+                    ""       # 字符級別
+                ],
+                is_separator_regex=False
+            )
+            self.use_langchain = True
+        else:
+            # 使用自定義的RecursiveCharacterChunking作為替代
+            self.rcts_splitter = RecursiveCharacterChunking()
+            self.use_langchain = False
+    
+    def chunk(self, text: str, max_chunk_size: int = 1000, overlap_ratio: float = 0.1, 
+              preserve_structure: bool = True, **kwargs) -> List[str]:
+        """
+        使用RCTS進行層次分割
+        
+        Args:
+            text: 原始文本
+            max_chunk_size: 最大chunk大小
+            overlap_ratio: 重疊比例
+            preserve_structure: 是否保持層次結構
+        """
+        if not preserve_structure:
+            # 如果不需要保持結構，直接使用RCTS
+            if self.use_langchain:
+                self.rcts_splitter.chunk_size = max_chunk_size
+                self.rcts_splitter.chunk_overlap = int(max_chunk_size * overlap_ratio)
+                return self.rcts_splitter.split_text(text)
+            else:
+                # 使用自定義實現
+                return self.rcts_splitter.chunk(text, max_chunk_size, overlap_ratio)
+        
+        # 保持層次結構的RCTS分割
+        return self._hierarchical_rcts_split(text, max_chunk_size, overlap_ratio)
+    
+    def _hierarchical_rcts_split(self, text: str, max_chunk_size: int, overlap_ratio: float) -> List[str]:
+        """結合層次結構的RCTS分割"""
+        lines = text.split('\n')
+        chunks = []
+        current_chunk_lines = []
+        current_structure = {"chapter": "", "article": "", "items": []}
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                if current_chunk_lines:
+                    current_chunk_lines.append("")
+                continue
+            
+            # 檢測結構層級
+            level, number, content = self._detect_structure_level(line)
+            
+            # 更新當前結構
+            if level == "chapter":
+                current_structure["chapter"] = f"第{number}章 {content}"
+                current_structure["article"] = ""
+                current_structure["items"] = []
+            elif level == "article":
+                current_structure["article"] = f"第{number}條 {content}"
+                current_structure["items"] = []
+            elif level == "item":
+                current_structure["items"].append(f"{number}. {content}")
+            
+            # 檢查是否需要分割
+            current_text = "\n".join(current_chunk_lines)
+            should_split = False
+            
+            # 在條文邊界強制分割
+            if level == "article" and current_chunk_lines:
+                should_split = True
+            
+            # 檢查大小限制
+            elif len(current_text) + len(line) > max_chunk_size and current_chunk_lines:
+                should_split = True
+            
+            if should_split:
+                # 使用RCTS進一步分割過大的chunk
+                if len(current_text) > max_chunk_size:
+                    sub_chunks = self._rcts_split_with_structure(
+                        current_text, max_chunk_size, overlap_ratio, current_structure
+                    )
+                    chunks.extend(sub_chunks)
+                else:
+                    chunks.append(current_text)
+                
+                # 開始新chunk，添加重疊內容
+                overlap_lines = self._get_overlap_lines(current_chunk_lines, overlap_ratio, max_chunk_size)
+                current_chunk_lines = overlap_lines + [line]
+            else:
+                current_chunk_lines.append(line)
+        
+        # 處理最後一個chunk
+        if current_chunk_lines:
+            final_text = "\n".join(current_chunk_lines)
+            if len(final_text) > max_chunk_size:
+                sub_chunks = self._rcts_split_with_structure(
+                    final_text, max_chunk_size, overlap_ratio, current_structure
+                )
+                chunks.extend(sub_chunks)
+            else:
+                chunks.append(final_text)
+        
+        return chunks
+    
+    def _detect_structure_level(self, line: str) -> Tuple[str, str, str]:
+        """檢測行的結構層級"""
+        line = self._normalize_digits(line)
+        
+        # 檢查章
+        for regex in self.chapter_re:
+            match = regex.match(line)
+            if match:
+                return 'chapter', match.group(1), match.group(2) if len(match.groups()) > 1 else ""
+        
+        # 檢查條
+        for regex in self.article_re:
+            match = regex.match(line)
+            if match:
+                return 'article', match.group(1), match.group(2) if len(match.groups()) > 1 else ""
+        
+        # 檢查項
+        for regex in self.item_re:
+            match = regex.match(line)
+            if match:
+                return 'item', match.group(1), match.group(2) if len(match.groups()) > 1 else ""
+        
+        return 'content', None, line
+    
+    def _normalize_digits(self, text: str) -> str:
+        """標準化數字格式"""
+        digit_map = {
+            '０': '0', '１': '1', '２': '2', '３': '3', '４': '4',
+            '５': '5', '６': '6', '７': '7', '８': '8', '９': '9'
+        }
+        for full, half in digit_map.items():
+            text = text.replace(full, half)
+        return text
+    
+    def _rcts_split_with_structure(self, text: str, max_size: int, overlap_ratio: float, structure: dict) -> List[str]:
+        """使用RCTS分割並保持結構信息"""
+        # 構建結構前綴
+        structure_prefix = self._build_structure_prefix(structure)
+        
+        # 使用RCTS分割
+        if self.use_langchain:
+            self.rcts_splitter.chunk_size = max_size
+            self.rcts_splitter.chunk_overlap = int(max_size * overlap_ratio)
+            sub_chunks = self.rcts_splitter.split_text(text)
+        else:
+            # 使用自定義實現
+            sub_chunks = self.rcts_splitter.chunk(text, max_size, overlap_ratio)
+        
+        # 為每個sub-chunk添加結構前綴
+        result = []
+        for i, chunk in enumerate(sub_chunks):
+            if i == 0:
+                # 第一個chunk包含完整結構信息
+                result.append(structure_prefix + chunk)
+            else:
+                # 後續chunk只包含基本結構信息
+                basic_prefix = f"【{structure.get('chapter', '')}】\n" if structure.get('chapter') else ""
+                result.append(basic_prefix + chunk)
+        
+        return result
+    
+    def _build_structure_prefix(self, structure: dict) -> str:
+        """構建結構前綴"""
+        prefix_parts = []
+        
+        if structure.get('chapter'):
+            prefix_parts.append(f"【{structure['chapter']}】")
+        
+        if structure.get('article'):
+            prefix_parts.append(structure['article'])
+        
+        if structure.get('items'):
+            prefix_parts.extend(structure['items'][:3])  # 只顯示前3個項目
+        
+        return "\n".join(prefix_parts) + "\n" if prefix_parts else ""
+    
+    def _get_overlap_lines(self, lines: List[str], overlap_ratio: float, max_size: int) -> List[str]:
+        """獲取重疊行"""
+        if not lines:
+            return []
+        
+        overlap_size = int(max_size * overlap_ratio)
+        overlap_lines = []
+        current_size = 0
+        
+        # 從後往前添加行，直到達到重疊大小
+        for line in reversed(lines):
+            if current_size + len(line) > overlap_size:
+                break
+            overlap_lines.insert(0, line)
+            current_size += len(line) + 1  # +1 for newline
+        
+        return overlap_lines
 
 
 class StructuredHierarchicalChunking(ChunkingStrategy):
@@ -301,6 +588,20 @@ class StructuredHierarchicalChunking(ChunkingStrategy):
                             chunks.extend(sub_chunks)
                         else:
                             chunks.append(article_chunk)
+            
+            elif chunk_by == "item":
+                # 按項分割
+                for section_data in chapter_data.get("sections", []):
+                    section_title = section_data.get("section", "")
+                    for article_data in section_data.get("articles", []):
+                        article_title = article_data.get("article", "")
+                        for item_data in article_data.get("items", []):
+                            item_chunk = self._build_item_chunk(item_data, law_name, chapter_title, section_title, article_title)
+                            if len(item_chunk) > max_chunk_size:
+                                sub_chunks = self._split_large_chunk(item_chunk, max_chunk_size, overlap_ratio)
+                                chunks.extend(sub_chunks)
+                            else:
+                                chunks.append(item_chunk)
         
         return chunks
     
@@ -366,6 +667,22 @@ class StructuredHierarchicalChunking(ChunkingStrategy):
             chunk_parts.append(item_data.get("item", ""))
             if "content" in item_data:
                 chunk_parts.append(item_data["content"])
+        
+        return "\n".join(filter(None, chunk_parts))
+    
+    def _build_item_chunk(self, item_data: dict, law_name: str, chapter_title: str, section_title: str, article_title: str) -> str:
+        """構建項級chunk"""
+        chunk_parts = [
+            f"【{law_name}】",
+            chapter_title,
+            section_title,
+            article_title,
+            item_data.get("item", "")
+        ]
+        
+        # 添加項內容
+        if "content" in item_data:
+            chunk_parts.append(item_data["content"])
         
         return "\n".join(filter(None, chunk_parts))
     
@@ -580,10 +897,11 @@ def get_chunking_strategy(strategy_name: str) -> ChunkingStrategy:
     strategies = {
         "fixed_size": FixedSizeChunking(),
         "hierarchical": HierarchicalChunking(),
+        "rcts_hierarchical": RCTSHierarchicalChunking(),
         "structured_hierarchical": StructuredHierarchicalChunking(),
         "semantic": SemanticChunking(),
         "adaptive": AdaptiveChunking(),
-    "recursive": RecursiveCharacterChunking(),
+        "recursive": RecursiveCharacterChunking(),
     }
     
     return strategies.get(strategy_name, FixedSizeChunking())

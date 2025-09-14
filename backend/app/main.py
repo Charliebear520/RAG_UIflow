@@ -124,6 +124,16 @@ class ChunkRequest(BaseModel):
     doc_id: str
     chunk_size: int = 500
     overlap: int = 50
+    strategy: str = "fixed_size"
+    use_json_structure: bool = False
+    
+    # 策略特定參數
+    hierarchical_params: Optional[Dict[str, Any]] = None
+    adaptive_params: Optional[Dict[str, Any]] = None
+    hybrid_params: Optional[Dict[str, Any]] = None
+    semantic_params: Optional[Dict[str, Any]] = None
+    rcts_hierarchical_params: Optional[Dict[str, Any]] = None
+    structured_hierarchical_params: Optional[Dict[str, Any]] = None
 
 
 class EmbedRequest(BaseModel):
@@ -1563,6 +1573,9 @@ def evaluate_chunk_config(doc: DocRecord, config: ChunkConfig,
     elif strategy == "hierarchical":
         from .chunking import chunk_text
         chunks = chunk_text(doc.text, strategy="hierarchical", max_chunk_size=config.chunk_size, overlap_ratio=config.overlap_ratio)
+    elif strategy == "rcts_hierarchical":
+        from .chunking import chunk_text
+        chunks = chunk_text(doc.text, strategy="rcts_hierarchical", max_chunk_size=config.chunk_size, overlap_ratio=config.overlap_ratio)
     elif strategy == "structured_hierarchical":
         from .chunking import chunk_text
         chunks = chunk_text(doc.text, strategy="structured_hierarchical", json_data=doc.json_data, max_chunk_size=config.chunk_size, overlap_ratio=config.overlap_ratio)
@@ -1684,9 +1697,12 @@ def chunk(req: ChunkRequest):
     if not doc:
         return JSONResponse(status_code=404, content={"error": "doc not found"})
     
+    # 導入新的chunking模組
+    from .chunking import chunk_text
+    
     # 根據不同策略進行分塊
-    strategy = getattr(req, 'strategy', 'fixed_size')
-    use_json_structure = getattr(req, 'use_json_structure', False)
+    strategy = req.strategy
+    use_json_structure = req.use_json_structure
     
     # 如果啟用JSON結構化分割且有JSON數據，優先使用JSON結構化分割
     if use_json_structure and doc.json_data:
@@ -1696,48 +1712,53 @@ def chunk(req: ChunkRequest):
         # 存儲結構化chunks到文檔中
         doc.structured_chunks = structured_chunks
     else:
-        # 使用傳統分割策略
-        if strategy == 'fixed_size':
-            chunks = sliding_window_chunks(doc.text, req.chunk_size, req.overlap)
-        elif strategy == 'hierarchical':
-            params = getattr(req, 'hierarchical_params', {})
-            chunks = hierarchical_chunks(
-                doc.text, 
-                req.chunk_size,  # max_chunk_size
-                params.get('min_chunk_size', req.chunk_size // 2),
-                req.overlap,
-                params.get('level_depth', 2)
-            )
-        elif strategy == 'adaptive':
-            params = getattr(req, 'adaptive_params', {})
-            chunks = adaptive_chunks(
-                doc.text,
-                req.chunk_size,  # target_size
-                params.get('tolerance', req.chunk_size // 10),
-                req.overlap,
-                params.get('semantic_threshold', 0.7)
-            )
-        elif strategy == 'hybrid':
-            params = getattr(req, 'hybrid_params', {})
-            chunks = hybrid_chunks(
-                doc.text,
-                req.chunk_size,  # primary_size
-                params.get('secondary_size', req.chunk_size // 2),
-                req.overlap,
-                params.get('switch_threshold', 0.8)
-            )
-        elif strategy == 'semantic':
-            params = getattr(req, 'semantic_params', {})
-            chunks = semantic_chunks(
-                doc.text,
-                req.chunk_size,  # target_size
-                params.get('similarity_threshold', 0.6),
-                req.overlap,
-                params.get('context_window', 100)
-            )
-        else:
-            # 默認使用固定大小分割
-            chunks = sliding_window_chunks(doc.text, req.chunk_size, req.overlap)
+        # 使用新的chunking模組
+        chunk_kwargs = {
+            "chunk_size": req.chunk_size,
+            "overlap": req.overlap,
+        }
+        
+        # 根據策略添加特定參數
+        if strategy == 'hierarchical' and req.hierarchical_params:
+            chunk_kwargs.update({
+                "max_chunk_size": req.chunk_size,
+                "min_chunk_size": req.hierarchical_params.get('min_chunk_size', req.chunk_size // 2),
+                "overlap_ratio": req.overlap / req.chunk_size if req.chunk_size > 0 else 0.1,
+                "level_depth": req.hierarchical_params.get('level_depth', 2)
+            })
+        elif strategy == 'rcts_hierarchical' and req.rcts_hierarchical_params:
+            chunk_kwargs.update({
+                "max_chunk_size": req.chunk_size,
+                "overlap_ratio": req.rcts_hierarchical_params.get('overlap_ratio', 0.1),
+                "preserve_structure": req.rcts_hierarchical_params.get('preserve_structure', True)
+            })
+        elif strategy == 'structured_hierarchical' and req.structured_hierarchical_params:
+            chunk_kwargs.update({
+                "max_chunk_size": req.chunk_size,
+                "overlap_ratio": req.structured_hierarchical_params.get('overlap_ratio', 0.1),
+                "chunk_by": req.structured_hierarchical_params.get('chunk_by', 'article')
+            })
+        elif strategy == 'adaptive' and req.adaptive_params:
+            chunk_kwargs.update({
+                "target_size": req.chunk_size,
+                "tolerance": req.adaptive_params.get('tolerance', req.chunk_size // 10),
+                "semantic_threshold": req.adaptive_params.get('semantic_threshold', 0.7)
+            })
+        elif strategy == 'hybrid' and req.hybrid_params:
+            chunk_kwargs.update({
+                "primary_size": req.chunk_size,
+                "secondary_size": req.hybrid_params.get('secondary_size', req.chunk_size // 2),
+                "switch_threshold": req.hybrid_params.get('switch_threshold', 0.8)
+            })
+        elif strategy == 'semantic' and req.semantic_params:
+            chunk_kwargs.update({
+                "target_size": req.chunk_size,
+                "similarity_threshold": req.semantic_params.get('similarity_threshold', 0.6),
+                "context_window": req.semantic_params.get('context_window', 100)
+            })
+        
+        # 使用新的chunking模組
+        chunks = chunk_text(doc.text, strategy=strategy, json_data=doc.json_data, **chunk_kwargs)
         
         # 清空結構化chunks
         doc.structured_chunks = []

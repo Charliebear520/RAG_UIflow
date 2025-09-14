@@ -4,6 +4,7 @@ import React from "react";
 export type ChunkStrategy =
   | "fixed_size"
   | "hierarchical"
+  | "rcts_hierarchical"
   | "structured_hierarchical"
   | "adaptive"
   | "hybrid"
@@ -21,10 +22,15 @@ export interface ChunkParams {
     overlap: number;
     level_depth: number;
   };
+  rcts_hierarchical: {
+    max_chunk_size: number;
+    overlap_ratio: number;
+    preserve_structure: boolean;
+  };
   structured_hierarchical: {
     max_chunk_size: number;
     overlap_ratio: number;
-    chunk_by: "chapter" | "section" | "article";
+    chunk_by: "chapter" | "section" | "article" | "item";
   };
   adaptive: {
     target_size: number;
@@ -61,6 +67,14 @@ export const strategyInfo = {
     pros: ["保持語義完整", "符合文檔結構", "可讀性好"],
     cons: ["依賴文檔格式", "長度不均勻"],
     metrics: ["結構完整性", "語義連貫性", "分塊均勻度"],
+  },
+  rcts_hierarchical: {
+    name: "RCTS層次分割",
+    description:
+      "結合RecursiveCharacterTextSplitter和層次結構識別，智能分割法律文檔。",
+    pros: ["智能分隔符識別", "保持結構完整性", "處理長文本", "中文優化"],
+    cons: ["計算複雜度較高", "需要調優參數"],
+    metrics: ["分隔符準確性", "結構保持度", "長文本處理"],
   },
   structured_hierarchical: {
     name: "結構化層次分割",
@@ -109,7 +123,7 @@ export const ChunkStrategySelector: React.FC<ChunkStrategySelectorProps> = ({
   const handleParamChange = (
     strategyType: ChunkStrategy,
     key: string,
-    value: number
+    value: number | boolean
   ) => {
     const newParams = { ...params };
     (newParams[strategyType] as any)[key] = value;
@@ -236,6 +250,71 @@ export const ChunkStrategySelector: React.FC<ChunkStrategySelectorProps> = ({
           </div>
         );
 
+      case "rcts_hierarchical":
+        return (
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                最大分塊大小
+              </label>
+              <input
+                type="number"
+                value={params.rcts_hierarchical.max_chunk_size}
+                onChange={(e) =>
+                  handleParamChange(
+                    "rcts_hierarchical",
+                    "max_chunk_size",
+                    parseInt(e.target.value)
+                  )
+                }
+                className="w-full px-3 py-2 border rounded-md"
+                min="200"
+                max="2000"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">重疊比例</label>
+              <input
+                type="number"
+                step="0.1"
+                value={params.rcts_hierarchical.overlap_ratio}
+                onChange={(e) =>
+                  handleParamChange(
+                    "rcts_hierarchical",
+                    "overlap_ratio",
+                    parseFloat(e.target.value)
+                  )
+                }
+                className="w-full px-3 py-2 border rounded-md"
+                min="0"
+                max="0.5"
+              />
+            </div>
+            <div className="col-span-2">
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={params.rcts_hierarchical.preserve_structure}
+                  onChange={(e) =>
+                    handleParamChange(
+                      "rcts_hierarchical",
+                      "preserve_structure",
+                      e.target.checked
+                    )
+                  }
+                  className="mr-2"
+                />
+                保持層次結構
+              </label>
+              <div className="text-xs text-gray-500 mt-1">
+                RCTS層次分割：結合智能分隔符識別和層次結構，適合處理複雜法律文檔
+                <br />
+                保持結構：在條文邊界強制分割，確保法律邏輯完整性
+              </div>
+            </div>
+          </div>
+        );
+
       case "structured_hierarchical":
         return (
           <div className="grid grid-cols-2 gap-4">
@@ -283,17 +362,20 @@ export const ChunkStrategySelector: React.FC<ChunkStrategySelectorProps> = ({
                 onChange={(e) => {
                   const newParams = { ...params };
                   newParams.structured_hierarchical.chunk_by = e.target
-                    .value as "chapter" | "section" | "article";
+                    .value as "chapter" | "section" | "article" | "item";
                   onParamsChange(newParams);
                 }}
                 className="w-full px-3 py-2 border rounded-md"
               >
                 <option value="article">按條文分割</option>
+                <option value="item">按項分割</option>
                 <option value="section">按節分割</option>
                 <option value="chapter">按章分割</option>
               </select>
               <div className="text-xs text-gray-500 mt-1">
                 按條文分割：每條法律條文獨立成塊（推薦）
+                <br />
+                按項分割：每個條文項目獨立成塊（精細化）
                 <br />
                 按節分割：每個章節獨立成塊
                 <br />

@@ -7,6 +7,8 @@ import { api } from "../lib/api";
 type ChunkStrategy =
   | "fixed_size"
   | "hierarchical"
+  | "rcts_hierarchical"
+  | "structured_hierarchical"
   | "adaptive"
   | "hybrid"
   | "semantic";
@@ -22,6 +24,16 @@ interface ChunkParams {
     min_chunk_size: number;
     overlap: number;
     level_depth: number;
+  };
+  rcts_hierarchical: {
+    max_chunk_size: number;
+    overlap_ratio: number;
+    preserve_structure: boolean;
+  };
+  structured_hierarchical: {
+    max_chunk_size: number;
+    overlap_ratio: number;
+    chunk_by: "chapter" | "section" | "article" | "item";
   };
   adaptive: {
     target_size: number;
@@ -98,6 +110,68 @@ const strategyInfo = {
         max: 5,
         default: 3,
         unit: "層",
+      },
+    },
+  },
+  rcts_hierarchical: {
+    name: "RCTS層次分割",
+    description:
+      "結合RecursiveCharacterTextSplitter和層次結構識別，智能分割法律文檔。",
+    metrics: ["分隔符準確性", "結構保持度", "長文本處理", "語義完整性"],
+    params: {
+      max_chunk_size: {
+        label: "最大分塊大小",
+        min: 200,
+        max: 2000,
+        default: 1000,
+        unit: "字符",
+      },
+      overlap_ratio: {
+        label: "重疊比例",
+        min: 0.05,
+        max: 0.3,
+        default: 0.1,
+        unit: "比例",
+      },
+      preserve_structure: {
+        label: "保持層次結構",
+        type: "boolean",
+        default: true,
+        description: "在條文邊界強制分割，確保法律邏輯完整性",
+      },
+    },
+  },
+  structured_hierarchical: {
+    name: "結構化層次分割",
+    description:
+      "基於JSON結構數據，按照法律文檔的章-節-條-項結構進行智能分割。",
+    metrics: ["結構準確性", "條文完整性", "引用關係保持", "分割粒度"],
+    params: {
+      max_chunk_size: {
+        label: "最大分塊大小",
+        min: 200,
+        max: 2000,
+        default: 1000,
+        unit: "字符",
+      },
+      overlap_ratio: {
+        label: "重疊比例",
+        min: 0.05,
+        max: 0.3,
+        default: 0.1,
+        unit: "比例",
+      },
+      chunk_by: {
+        label: "分割單位",
+        type: "select",
+        options: [
+          { value: "article", label: "按條文分割" },
+          { value: "item", label: "按項分割" },
+          { value: "section", label: "按節分割" },
+          { value: "chapter", label: "按章分割" },
+        ],
+        default: "article",
+        description: "選擇分割的粒度級別",
       },
     },
   },
@@ -260,6 +334,16 @@ export function ChunkPage() {
       overlap: 50,
       level_depth: 3,
     },
+    rcts_hierarchical: {
+      max_chunk_size: 1000,
+      overlap_ratio: 0.1,
+      preserve_structure: true,
+    },
+    structured_hierarchical: {
+      max_chunk_size: 1000,
+      overlap_ratio: 0.1,
+      chunk_by: "article",
+    },
     adaptive: {
       target_size: 600,
       tolerance: 100,
@@ -325,7 +409,7 @@ export function ChunkPage() {
   const handleParamChange = (
     strategy: ChunkStrategy,
     param: string,
-    value: number
+    value: number | boolean | string
   ) => {
     setParams((prev) => ({
       ...prev,
@@ -401,11 +485,41 @@ export function ChunkPage() {
               .context_window,
           };
           break;
+        case "rcts_hierarchical":
+          strategyParams.rcts_hierarchical_params = {
+            overlap_ratio: (currentParams as ChunkParams["rcts_hierarchical"])
+              .overlap_ratio,
+            preserve_structure: (
+              currentParams as ChunkParams["rcts_hierarchical"]
+            ).preserve_structure,
+          };
+          break;
+        case "structured_hierarchical":
+          strategyParams.structured_hierarchical_params = {
+            overlap_ratio: (
+              currentParams as ChunkParams["structured_hierarchical"]
+            ).overlap_ratio,
+            chunk_by: (currentParams as ChunkParams["structured_hierarchical"])
+              .chunk_by,
+          };
+          break;
+      }
+
+      // 獲取overlap值，根據策略類型處理
+      let overlapValue: number;
+      if ("overlap" in currentParams) {
+        overlapValue = currentParams.overlap;
+      } else if ("overlap_ratio" in currentParams) {
+        // 對於使用overlap_ratio的策略，計算實際overlap值
+        overlapValue = Math.round(chunkSize * currentParams.overlap_ratio);
+      } else {
+        // 默認值
+        overlapValue = 50;
       }
 
       const result = await chunk(
         chunkSize,
-        currentParams.overlap,
+        overlapValue,
         selectedStrategy,
         strategyParams
       );
@@ -710,29 +824,81 @@ export function ChunkPage() {
                     <div key={paramKey} className="col-6">
                       <label className="form-label small">
                         {paramInfo.label}
-                        <span className="text-muted">({paramInfo.unit})</span>
+                        <span className="text-muted">
+                          {paramInfo.type === "boolean"
+                            ? ""
+                            : `(${paramInfo.unit})`}
+                        </span>
                       </label>
-                      <input
-                        className="form-control form-control-sm"
-                        type="number"
-                        min={paramInfo.min}
-                        max={paramInfo.max}
-                        value={
-                          params[selectedStrategy][
-                            paramKey as keyof ChunkParams[ChunkStrategy]
-                          ]
-                        }
-                        onChange={(e) =>
-                          handleParamChange(
-                            selectedStrategy,
-                            paramKey,
-                            parseFloat(e.target.value) || 0
-                          )
-                        }
-                      />
-                      <div className="form-text small">
-                        範圍: {paramInfo.min} - {paramInfo.max}
-                      </div>
+                      {paramInfo.type === "boolean" ? (
+                        <div className="form-check">
+                          <input
+                            className="form-check-input"
+                            type="checkbox"
+                            checked={
+                              params[selectedStrategy][
+                                paramKey as keyof ChunkParams[ChunkStrategy]
+                              ] as boolean
+                            }
+                            onChange={(e) =>
+                              handleParamChange(
+                                selectedStrategy,
+                                paramKey,
+                                e.target.checked
+                              )
+                            }
+                          />
+                          <label className="form-check-label small">
+                            {paramInfo.description || "啟用此選項"}
+                          </label>
+                        </div>
+                      ) : paramInfo.type === "select" ? (
+                        <select
+                          className="form-select form-select-sm"
+                          value={
+                            params[selectedStrategy][
+                              paramKey as keyof ChunkParams[ChunkStrategy]
+                            ] as string
+                          }
+                          onChange={(e) =>
+                            handleParamChange(
+                              selectedStrategy,
+                              paramKey,
+                              e.target.value
+                            )
+                          }
+                        >
+                          {paramInfo.options?.map((option: any) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <>
+                          <input
+                            className="form-control form-control-sm"
+                            type="number"
+                            min={paramInfo.min}
+                            max={paramInfo.max}
+                            value={
+                              params[selectedStrategy][
+                                paramKey as keyof ChunkParams[ChunkStrategy]
+                              ] as number
+                            }
+                            onChange={(e) =>
+                              handleParamChange(
+                                selectedStrategy,
+                                paramKey,
+                                parseFloat(e.target.value) || 0
+                              )
+                            }
+                          />
+                          <div className="form-text small">
+                            範圍: {paramInfo.min} - {paramInfo.max}
+                          </div>
+                        </>
+                      )}
                     </div>
                   )
                 )}
