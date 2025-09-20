@@ -6,19 +6,22 @@ import Editor from "@monaco-editor/react";
 interface MetadataOptions {
   include_id: boolean;
   include_page_range: boolean;
-  include_keywords: boolean;
-  include_cross_references: boolean;
-  include_importance: boolean;
-  include_length: boolean;
-  include_extracted_entities: boolean;
   include_spans: boolean;
 }
 
 export function UploadPage() {
   const nav = useNavigate();
-  const { upload, convert, updateJsonData, jsonData, fileName, docId, reset } =
-    useRag();
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const {
+    upload,
+    convert,
+    updateJsonData,
+    jsonData,
+    fileName,
+    docId,
+    reset,
+    setDocId,
+  } = useRag();
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [converting, setConverting] = useState(false);
   const [convertError, setConvertError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -29,17 +32,85 @@ export function UploadPage() {
   const [metadataOptions, setMetadataOptions] = useState<MetadataOptions>({
     include_id: true,
     include_page_range: true,
-    include_keywords: true,
-    include_cross_references: true,
-    include_importance: true,
-    include_length: true,
-    include_extracted_entities: false,
     include_spans: true,
   });
 
-  const isPDF = (f: File | null) =>
-    !!f &&
-    (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"));
+  const isPDF = (f: File) =>
+    f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
+
+  const convertMultiple = async (
+    files: File[],
+    metadataOptions: MetadataOptions
+  ) => {
+    // 調用新的多文件轉換API
+    const formData = new FormData();
+    files.forEach((file, index) => {
+      formData.append(`files`, file);
+    });
+    formData.append("metadata_options", JSON.stringify(metadataOptions));
+
+    const base = import.meta.env.VITE_API_BASE_URL || "/api";
+    const response = await fetch(`${base}/convert-multiple`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || "多文件轉換失敗");
+    }
+
+    const result = await response.json();
+
+    if (result.doc_id) {
+      // 直接返回結果
+      setDocId(result.doc_id);
+      updateJsonData(result.metadata);
+      return;
+    }
+
+    if (result.task_id) {
+      // 異步任務，需要輪詢狀態
+      await pollConvertStatus(result.task_id);
+    }
+  };
+
+  const pollConvertStatus = async (taskId: string) => {
+    const maxAttempts = 120; // 最多等待2分鐘
+    let attempts = 0;
+
+    while (attempts < maxAttempts) {
+      try {
+        const base = import.meta.env.VITE_API_BASE_URL || "/api";
+        const response = await fetch(
+          `${base}/convert-multiple/status/${taskId}`
+        );
+        const status = await response.json();
+
+        if (status.status === "completed") {
+          setDocId(status.result.doc_id);
+          updateJsonData(status.result.metadata);
+          break;
+        } else if (status.status === "failed") {
+          throw new Error(status.error || "多文件轉換失敗");
+        }
+
+        // 等待1秒後重試
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        attempts++;
+      } catch (error) {
+        if (attempts >= maxAttempts - 1) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        attempts++;
+      }
+    }
+
+    if (attempts >= maxAttempts) {
+      throw new Error("多文件轉換超時");
+    }
+  };
 
   const handleEditJson = () => {
     if (jsonData) {
@@ -97,32 +168,45 @@ export function UploadPage() {
               className="form-control"
               type="file"
               accept="application/pdf,.pdf"
+              multiple
               onChange={async (e) => {
-                const f = e.target.files?.[0] || null;
-                setSelectedFile(f);
-                if (f) {
-                  // Create backend doc for downstream steps
-                  await upload(f);
+                const files = Array.from(e.target.files || []);
+                const pdfFiles = files.filter(isPDF);
+                setSelectedFiles(pdfFiles);
+                if (pdfFiles.length > 0) {
+                  // 設置文件名（多文件時使用第一個文件名）
+                  await upload(pdfFiles[0]);
                 }
               }}
             />
 
-            {selectedFile && (
+            {selectedFiles.length > 0 && (
               <div className="mt-3 d-flex align-items-center justify-content-between">
                 <div className="text-truncate" style={{ maxWidth: "60%" }}>
                   <span className="badge text-bg-light me-2">Selected</span>
-                  <span title={selectedFile.name}>{selectedFile.name}</span>
+                  <span title={selectedFiles.map((f) => f.name).join(", ")}>
+                    {selectedFiles.length === 1
+                      ? selectedFiles[0].name
+                      : `${selectedFiles.length} 個文件`}
+                  </span>
                 </div>
                 <div className="d-flex gap-2">
-                  {isPDF(selectedFile) && (
+                  {selectedFiles.length > 0 && (
                     <button
                       className="btn btn-primary btn-sm"
                       onClick={async () => {
-                        if (!selectedFile) return;
+                        if (selectedFiles.length === 0) return;
                         setConverting(true);
                         setConvertError(null);
                         try {
-                          await convert(selectedFile, metadataOptions);
+                          if (selectedFiles.length === 1) {
+                            await convert(selectedFiles[0], metadataOptions);
+                          } else {
+                            await convertMultiple(
+                              selectedFiles,
+                              metadataOptions
+                            );
+                          }
                         } catch (error) {
                           console.error("Convert failed:", error);
                           setConvertError(
@@ -134,16 +218,21 @@ export function UploadPage() {
                           setConverting(false);
                         }
                       }}
+                      disabled={converting}
                     >
-                      Confirm Convert
+                      {converting
+                        ? "轉換中..."
+                        : selectedFiles.length === 1
+                        ? "Confirm Convert"
+                        : `轉換 ${selectedFiles.length} 個文件`}
                     </button>
                   )}
-                  {(jsonData || selectedFile) && (
+                  {(jsonData || selectedFiles.length > 0) && (
                     <button
                       className="btn btn-outline-secondary btn-sm"
                       onClick={() => {
                         reset();
-                        setSelectedFile(null);
+                        setSelectedFiles([]);
                         setConvertError(null);
                         if (inputRef.current) inputRef.current.value = "";
                       }}
@@ -162,7 +251,7 @@ export function UploadPage() {
             )}
 
             {/* Metadata Options */}
-            {isPDF(selectedFile) && (
+            {selectedFiles.length > 0 && selectedFiles.every(isPDF) && (
               <div className="mt-3">
                 <h6 className="mb-2">Metadata 選項</h6>
                 <div className="row g-2">
@@ -204,94 +293,6 @@ export function UploadPage() {
                         htmlFor="include_page_range"
                       >
                         頁碼範圍
-                      </label>
-                    </div>
-                  </div>
-                  <div className="col-6">
-                    <div className="form-check form-check-sm">
-                      <input
-                        className="form-check-input"
-                        type="checkbox"
-                        id="include_keywords"
-                        checked={metadataOptions.include_keywords}
-                        onChange={(e) =>
-                          setMetadataOptions((prev) => ({
-                            ...prev,
-                            include_keywords: e.target.checked,
-                          }))
-                        }
-                      />
-                      <label
-                        className="form-check-label"
-                        htmlFor="include_keywords"
-                      >
-                        關鍵詞
-                      </label>
-                    </div>
-                  </div>
-                  <div className="col-6">
-                    <div className="form-check form-check-sm">
-                      <input
-                        className="form-check-input"
-                        type="checkbox"
-                        id="include_cross_references"
-                        checked={metadataOptions.include_cross_references}
-                        onChange={(e) =>
-                          setMetadataOptions((prev) => ({
-                            ...prev,
-                            include_cross_references: e.target.checked,
-                          }))
-                        }
-                      />
-                      <label
-                        className="form-check-label"
-                        htmlFor="include_cross_references"
-                      >
-                        交叉引用
-                      </label>
-                    </div>
-                  </div>
-                  <div className="col-6">
-                    <div className="form-check form-check-sm">
-                      <input
-                        className="form-check-input"
-                        type="checkbox"
-                        id="include_importance"
-                        checked={metadataOptions.include_importance}
-                        onChange={(e) =>
-                          setMetadataOptions((prev) => ({
-                            ...prev,
-                            include_importance: e.target.checked,
-                          }))
-                        }
-                      />
-                      <label
-                        className="form-check-label"
-                        htmlFor="include_importance"
-                      >
-                        重要性權重
-                      </label>
-                    </div>
-                  </div>
-                  <div className="col-6">
-                    <div className="form-check form-check-sm">
-                      <input
-                        className="form-check-input"
-                        type="checkbox"
-                        id="include_length"
-                        checked={metadataOptions.include_length}
-                        onChange={(e) =>
-                          setMetadataOptions((prev) => ({
-                            ...prev,
-                            include_length: e.target.checked,
-                          }))
-                        }
-                      />
-                      <label
-                        className="form-check-label"
-                        htmlFor="include_length"
-                      >
-                        內容長度
                       </label>
                     </div>
                   </div>

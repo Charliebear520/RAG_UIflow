@@ -26,8 +26,11 @@ from .evaluation import evaluate_chunk_config
 # 創建路由器
 router = APIRouter()
 
-# 創建store實例
-store = InMemoryStore()
+# 使用main.py中的store實例
+from .main import store
+
+# 簡單的任務狀態存儲
+task_status_store = {}
 
 
 class EvaluationMetrics(BaseModel):
@@ -55,9 +58,9 @@ class EvaluationTask:
     test_queries: List[str]
     k_values: List[int]
     status: str  # "pending", "running", "completed", "failed"
-    progress: float = 0.0  # 新增：進度 0.0 to 1.0
     results: List[EvaluationResult]
     created_at: datetime
+    progress: float = 0.0  # 新增：進度 0.0 to 1.0
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
     strategy: str = "fixed_size"  # 新增：分割策略
@@ -140,6 +143,71 @@ class FixedSizeEvaluationRequest(BaseModel):
 
 # 創建評估存儲實例
 eval_store = EvaluationStore()
+
+
+def generate_text_from_merged_doc(merged_doc: Dict[str, Any]) -> str:
+    """
+    從合併的法律文檔JSON結構生成文本內容
+    
+    參數:
+    - merged_doc: 合併後的法律文檔JSON結構
+    
+    返回:
+    - 生成的文本內容
+    """
+    if not merged_doc or "laws" not in merged_doc:
+        return ""
+    
+    text_parts = []
+    
+    for law in merged_doc["laws"]:
+        law_name = law.get("law_name", "未命名法規")
+        text_parts.append(f"=== {law_name} ===\n")
+        
+        chapters = law.get("chapters", [])
+        for chapter in chapters:
+            chapter_name = chapter.get("chapter", "")
+            if chapter_name:
+                text_parts.append(f"\n{chapter_name}\n")
+            
+            sections = chapter.get("sections", [])
+            for section in sections:
+                section_name = section.get("section", "")
+                if section_name:
+                    text_parts.append(f"\n{section_name}\n")
+                
+                articles = section.get("articles", [])
+                for article in articles:
+                    article_name = article.get("article", "")
+                    article_content = article.get("content", "")
+                    
+                    if article_name:
+                        text_parts.append(f"\n{article_name}")
+                        if article_content:
+                            text_parts.append(f" {article_content}")
+                        text_parts.append("\n")
+                    
+                    # 處理項目
+                    items = article.get("items", [])
+                    for item in items:
+                        item_name = item.get("item", "")
+                        item_content = item.get("content", "")
+                        
+                        if item_name and item_content:
+                            text_parts.append(f"{item_name} {item_content}\n")
+                        
+                        # 處理子項目
+                        sub_items = item.get("sub_items", [])
+                        for sub_item in sub_items:
+                            sub_item_name = sub_item.get("sub_item", "")
+                            sub_item_content = sub_item.get("content", "")
+                            
+                            if sub_item_name and sub_item_content:
+                                text_parts.append(f"{sub_item_name} {sub_item_content}\n")
+        
+        text_parts.append("\n" + "="*50 + "\n")
+    
+    return "\n".join(text_parts)
 
 
 def run_evaluation_task(task_id: str):
@@ -244,6 +312,21 @@ async def convert_pdf(
         # 轉換PDF為結構化格式
         result = convert_pdf_structured(file_content, file.filename, options)
         
+        # 檢查轉換是否成功
+        if not result.get("success", False):
+            error_msg = result.get("error", "PDF轉換失敗")
+            print(f"PDF轉換失敗: {error_msg}")
+            raise HTTPException(status_code=400, detail=f"PDF轉換失敗: {error_msg}")
+        
+        # 檢查提取的文本是否為空
+        extracted_text = result.get("text", "")
+        if not extracted_text or not extracted_text.strip():
+            error_msg = "PDF轉換成功但沒有提取到文本內容，可能是掃描版PDF或文本被加密"
+            print(f"文本提取為空: {error_msg}")
+            raise HTTPException(status_code=400, detail=error_msg)
+        
+        print(f"PDF轉換成功，提取文本長度: {len(extracted_text)} 字符")
+        
         # 生成文檔ID
         doc_id = str(uuid.uuid4())
         
@@ -251,7 +334,7 @@ async def convert_pdf(
         doc_record = DocRecord(
             id=doc_id,
             filename=file.filename,
-            text=result["text"],
+            text=extracted_text,
             chunks=[],
             chunk_size=0,
             overlap=0,
@@ -269,6 +352,9 @@ async def convert_pdf(
             "processing_time": result["processing_time"]
         }
         
+    except HTTPException:
+        # 重新拋出HTTPException，不要轉換為500錯誤
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -278,12 +364,25 @@ async def convert_pdf(
 async def chunk_document(request: ChunkConfig):
     """分塊文檔"""
     try:
-        # 這裡需要從請求中獲取doc_id，暫時使用第一個文檔
-        docs = store.list_docs()
-        if not docs:
-            raise HTTPException(status_code=404, detail="沒有找到文檔")
+        # 使用請求中的doc_id獲取文檔
+        doc = store.get_doc(request.doc_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"文檔 {request.doc_id} 不存在")
         
-        doc = docs[0]  # 使用第一個文檔
+        # 添加調試信息
+        print(f"文檔ID: {request.doc_id}")
+        print(f"文檔文件名: {doc.filename}")
+        print(f"文檔文本長度: {len(doc.text) if doc.text else 0}")
+        print(f"文檔是否有JSON數據: {bool(doc.json_data)}")
+        
+        # 檢查文檔是否有文本內容
+        if not doc.text or not doc.text.strip():
+            # 提供更詳細的錯誤信息
+            error_detail = f"文檔沒有文本內容，無法進行分塊。文檔ID: {request.doc_id}, 文件名: {doc.filename}"
+            if doc.json_data:
+                error_detail += f", JSON數據存在: {bool(doc.json_data)}"
+            print(f"分塊錯誤: {error_detail}")
+            raise HTTPException(status_code=400, detail=error_detail)
         
         # 準備分塊參數
         chunk_kwargs = {
@@ -313,17 +412,50 @@ async def chunk_document(request: ChunkConfig):
         # 重置嵌入
         store.reset_embeddings()
         
+        # 計算chunk統計信息
+        chunk_lengths = [len(chunk) for chunk in chunks] if chunks else []
+        avg_chunk_length = sum(chunk_lengths) / len(chunk_lengths) if chunk_lengths else 0
+        min_length = min(chunk_lengths) if chunk_lengths else 0
+        max_length = max(chunk_lengths) if chunk_lengths else 0
+        
+        # 計算長度方差
+        if chunk_lengths:
+            variance = sum((length - avg_chunk_length) ** 2 for length in chunk_lengths) / len(chunk_lengths)
+        else:
+            variance = 0
+        
+        # 計算重疊率
+        overlap_rate = request.overlap_ratio if hasattr(request, 'overlap_ratio') else 0
+        
+        # 準備返回的chunks（前幾個作為sample）
+        sample_chunks = chunks[:3] if chunks else []
+        
         return {
             "chunks": chunks,
+            "num_chunks": len(chunks),
             "chunk_count": len(chunks),
             "strategy": request.strategy,
             "chunk_size": request.chunk_size,
             "overlap_ratio": request.overlap_ratio,
             "chunk_by": request.chunk_by if request.strategy == "structured_hierarchical" else None,
-            "avg_chunk_length": sum(len(chunk) for chunk in chunks) / len(chunks) if chunks else 0,
-            "chunk_lengths": [len(chunk) for chunk in chunks]
+            "avg_chunk_length": avg_chunk_length,
+            "chunk_lengths": chunk_lengths,
+            # 前端期望的數據結構
+            "metrics": {
+                "avg_length": avg_chunk_length,
+                "length_variance": variance,
+                "overlap_rate": overlap_rate,
+                "min_length": min_length,
+                "max_length": max_length,
+            },
+            "sample": sample_chunks,
+            "all_chunks": chunks,
+            "overlap": int(request.chunk_size * request.overlap_ratio)
         }
         
+    except HTTPException:
+        # 重新拋出HTTPException，不要轉換為500錯誤
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -372,6 +504,9 @@ async def generate_questions_endpoint(request: GenerateQuestionsRequest):
             }
         }
         
+    except HTTPException:
+        # 重新拋出HTTPException，不要轉換為500錯誤
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -799,6 +934,9 @@ async def evaluate_chunking(request: EvaluationRequest):
             "questions_generated": len(questions)
         }
         
+    except HTTPException:
+        # 重新拋出HTTPException，不要轉換為500錯誤
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -944,3 +1082,167 @@ async def get_evaluation_results(task_id: str):
             "best_recall_at_5": max(r["metrics"]["recall_at_k"].get(5, 0) for r in task.results)
         }
     }
+
+
+@router.post("/convert-multiple")
+async def convert_multiple_pdfs(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...),
+    metadata_options: str = Form("{}")
+):
+    """轉換多個PDF文檔並整合成一個法律JSON"""
+    try:
+        # 解析元數據選項
+        try:
+            metadata_config = json.loads(metadata_options)
+            from .main import MetadataOptions
+            options = MetadataOptions(**metadata_config)
+        except:
+            from .main import MetadataOptions
+            options = MetadataOptions()
+        
+        # 驗證文件類型
+        for file in files:
+            if not file.filename or not file.filename.lower().endswith('.pdf'):
+                raise HTTPException(status_code=400, detail=f"文件 {file.filename} 不是PDF格式")
+        
+        # 創建任務ID
+        task_id = str(uuid.uuid4())
+        
+        # 在後台處理轉換之前，先讀取所有文件內容
+        file_contents = []
+        for file in files:
+            content = await file.read()
+            file_contents.append({
+                'content': content,
+                'filename': file.filename or 'unknown.pdf'
+            })
+        
+        background_tasks.add_task(process_multiple_pdf_conversion, task_id, file_contents, options)
+        
+        return {"task_id": task_id, "status": "processing"}
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"多文件轉換失敗: {str(e)}"}
+        )
+
+
+@router.get("/convert-multiple/status/{task_id}")
+async def get_multiple_convert_status(task_id: str):
+    """獲取多文件轉換狀態"""
+    try:
+        if task_id not in task_status_store:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "任務不存在"}
+            )
+        
+        status_info = task_status_store[task_id]
+        return {
+            "task_id": task_id,
+            "status": status_info["status"],
+            "progress": status_info.get("progress", 0.0),
+            "result": status_info.get("result"),
+            "error": status_info.get("error")
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"獲取狀態失敗: {str(e)}"}
+        )
+
+
+async def process_multiple_pdf_conversion(task_id: str, file_contents: List[Dict], options):
+    """處理多個PDF轉換的後台任務"""
+    try:
+        # 初始化任務狀態
+        task_status_store[task_id] = {
+            "status": "processing",
+            "progress": 0.0
+        }
+        
+        from .main import convert_pdf_structured, merge_law_documents
+        
+        # 轉換每個PDF文件
+        law_documents = []
+        all_texts = []  # 收集所有文本內容
+        total_files = len(file_contents)
+        
+        for i, file_info in enumerate(file_contents):
+            # 更新進度
+            progress = (i / total_files) * 0.8  # 80%用於轉換
+            task_status_store[task_id]["progress"] = progress
+            
+            # 使用預先讀取的文件內容
+            file_content = file_info['content']
+            filename = file_info['filename']
+            conversion_result = convert_pdf_structured(file_content, filename, options)
+            
+            # 檢查轉換是否成功
+            if not conversion_result.get("success", False):
+                print(f"PDF轉換失敗: {filename}")
+                continue
+            
+            # 檢查文本內容
+            extracted_text = conversion_result.get("text", "")
+            if not extracted_text or not extracted_text.strip():
+                print(f"PDF轉換成功但沒有提取到文本內容: {filename}")
+                continue
+                
+            # 收集文本內容和metadata
+            all_texts.append(extracted_text)
+            law_doc = conversion_result["metadata"]
+            law_documents.append(law_doc)
+        
+        # 更新進度到90%
+        task_status_store[task_id]["progress"] = 0.9
+        
+        # 整合多個法律文檔
+        merged_doc = merge_law_documents(law_documents)
+        
+        # 合併所有文本內容
+        if all_texts:
+            merged_text = "\n\n" + "="*80 + "\n\n".join(all_texts)
+        else:
+            # 如果沒有文本內容，從JSON結構生成
+            merged_text = generate_text_from_merged_doc(merged_doc)
+        
+        print(f"多文件合併完成，生成文本長度: {len(merged_text)} 字符")
+        
+        # 創建文檔記錄
+        doc_id = str(uuid.uuid4())
+        doc_record = DocRecord(
+            id=doc_id,
+            filename=f"merged_{len(file_contents)}_laws",
+            text=merged_text,  # 合併後的文本
+            chunks=[],  # 將在後續步驟中生成
+            chunk_size=0,
+            overlap=0,
+            json_data=merged_doc,
+            structured_chunks=None,
+            generated_questions=None
+        )
+        
+        # 存儲文檔記錄
+        store.docs[doc_id] = doc_record
+        
+        # 更新任務狀態為完成
+        task_status_store[task_id] = {
+            "status": "completed",
+            "progress": 1.0,
+            "result": {
+                "doc_id": doc_id,
+                "metadata": merged_doc
+            }
+        }
+        
+    except Exception as e:
+        # 更新任務狀態為失敗
+        task_status_store[task_id] = {
+            "status": "failed",
+            "progress": 0.0,
+            "error": str(e)
+        }
+        print(f"多文件轉換失敗: {e}")

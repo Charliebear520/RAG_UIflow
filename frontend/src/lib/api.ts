@@ -1,4 +1,4 @@
-const base = import.meta.env.VITE_API_BASE_URL || "/api";
+const base = import.meta.env.VITE_API_BASE_URL || "http://localhost:8001/api";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -8,6 +8,10 @@ async function json<T>(res: Response): Promise<T> {
       // 如果有具體的錯誤信息，直接拋出
       if (errorData.error) {
         throw new Error(errorData.error);
+      }
+      // 檢查FastAPI的detail字段
+      if (errorData.detail) {
+        throw new Error(errorData.detail);
       }
       throw new Error(`${res.status} ${res.statusText}`);
     } catch (e) {

@@ -26,6 +26,7 @@ type RagContextType = {
   upload: (file: File) => Promise<void>;
   convert: (file: File, metadataOptions?: any) => Promise<void>;
   updateJsonData: (newJsonData: any) => void;
+  setDocId: (docId: string | null) => void;
   chunk: (
     size: number,
     overlap: number,
@@ -234,6 +235,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     upload,
     convert,
     updateJsonData,
+    setDocId,
     chunk,
     embed,
     retrieve,

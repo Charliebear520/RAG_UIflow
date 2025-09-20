@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from .models import ChunkConfig
+from .models import ChunkConfig, MetadataOptions
 try:
     from rank_bm25 import BM25Okapi  # type: ignore
     BM25_AVAILABLE = True
@@ -98,6 +98,19 @@ class InMemoryStore:
         self.embeddings = None
         self.chunk_doc_ids = []
         self.chunks_flat = []
+    
+    def add_doc(self, doc_record: DocRecord):
+        """添加文檔記錄"""
+        self.docs[doc_record.id] = doc_record
+        self.reset_embeddings()
+    
+    def get_doc(self, doc_id: str) -> Optional[DocRecord]:
+        """獲取文檔記錄"""
+        return self.docs.get(doc_id)
+    
+    def list_docs(self) -> List[DocRecord]:
+        """列出所有文檔記錄"""
+        return list(self.docs.values())
 
 
 
@@ -118,8 +131,8 @@ app.add_middleware(
 )
 
 # 暫時停用routes.py的包含，避免循環導入問題
-# from .routes import router
-# app.include_router(router)
+from .routes import router
+app.include_router(router, prefix="/api")
 
 
 class ChunkRequest(BaseModel):
@@ -152,15 +165,7 @@ class GenerateRequest(BaseModel):
     top_k: int = 5
 
 
-class MetadataOptions(BaseModel):
-    include_id: bool = True
-    include_page_range: bool = True
-    include_keywords: bool = True
-    include_cross_references: bool = True
-    include_importance: bool = True
-    include_length: bool = True
-    include_extracted_entities: bool = False 
-    include_spans: bool = True
+# MetadataOptions 已移至 models.py
 
 
 # 評測相關的數據模型
@@ -1096,12 +1101,34 @@ def json_structured_chunks(json_data: Dict[str, Any], chunk_size: int, overlap: 
     """
     基於JSON結構的智能分割
     保留法律文檔的結構化信息
+    支持單一法律文檔和多法律文檔格式
     """
     if not json_data or chunk_size <= 0:
         return []
     
     chunks = []
-    law_name = json_data.get("law_name", "未命名法規")
+    
+    # 檢查是否為多法律文檔格式
+    if "laws" in json_data:
+        # 多法律文檔格式
+        laws = json_data.get("laws", [])
+        for law in laws:
+            law_chunks = process_single_law(law, chunk_size, overlap)
+            chunks.extend(law_chunks)
+    else:
+        # 單一法律文檔格式
+        law_chunks = process_single_law(json_data, chunk_size, overlap)
+        chunks.extend(law_chunks)
+    
+    return chunks
+
+
+def process_single_law(law_data: Dict[str, Any], chunk_size: int, overlap: int) -> List[Dict[str, Any]]:
+    """
+    處理單一法律文檔
+    """
+    chunks = []
+    law_name = law_data.get("law_name", "未命名法規")
     
     def create_chunk(content: str, metadata: Dict[str, Any], chunk_id: str) -> Dict[str, Any]:
         """創建包含metadata的chunk"""
@@ -1109,18 +1136,9 @@ def json_structured_chunks(json_data: Dict[str, Any], chunk_size: int, overlap: 
             "chunk_id": chunk_id,
             "content": content,
             "metadata": {
-                "law_name": law_name,
-                "chunk_type": metadata.get("type", "unknown"),
-                "chapter": metadata.get("chapter", ""),
-                "section": metadata.get("section", ""),
-                "article": metadata.get("article", ""),
-                "item": metadata.get("item", ""),
-                "sub_item": metadata.get("sub_item", ""),
-                "keywords": metadata.get("keywords", []),
-                "cross_references": metadata.get("cross_references", []),
-                "importance": metadata.get("importance", 0.0),
-                "page_range": metadata.get("page_range", {}),
-                "length": len(content)
+                "id": metadata.get("id", ""),
+                "spans": metadata.get("spans", {}),
+                "page_range": metadata.get("page_range", {})
             }
         }
     
@@ -1136,13 +1154,8 @@ def json_structured_chunks(json_data: Dict[str, Any], chunk_size: int, overlap: 
             # 如果條文內容較短，直接作為一個chunk
             if len(article_content) <= chunk_size:
                 metadata = {
-                    "type": "article",
-                    "chapter": chapter,
-                    "section": section,
-                    "article": article_title,
-                    "keywords": article.get("metadata", {}).get("keywords", []),
-                    "cross_references": article.get("metadata", {}).get("cross_references", []),
-                    "importance": article.get("metadata", {}).get("importance", 0.0),
+                    "id": article.get("metadata", {}).get("id", ""),
+                    "spans": article.get("metadata", {}).get("spans", {}),
                     "page_range": article.get("metadata", {}).get("page_range", {})
                 }
                 chunk_id = f"{article_title}_main"
@@ -1152,14 +1165,8 @@ def json_structured_chunks(json_data: Dict[str, Any], chunk_size: int, overlap: 
                 text_chunks = sliding_window_chunks(article_content, chunk_size, overlap)
                 for i, chunk_text in enumerate(text_chunks):
                     metadata = {
-                        "type": "article_part",
-                        "chapter": chapter,
-                        "section": section,
-                        "article": article_title,
-                        "part": i + 1,
-                        "keywords": article.get("metadata", {}).get("keywords", []),
-                        "cross_references": article.get("metadata", {}).get("cross_references", []),
-                        "importance": article.get("metadata", {}).get("importance", 0.0),
+                        "id": article.get("metadata", {}).get("id", ""),
+                        "spans": article.get("metadata", {}).get("spans", {}),
                         "page_range": article.get("metadata", {}).get("page_range", {})
                     }
                     chunk_id = f"{article_title}_part_{i+1}"
@@ -1175,14 +1182,8 @@ def json_structured_chunks(json_data: Dict[str, Any], chunk_size: int, overlap: 
             if item_content:
                 if len(item_content) <= chunk_size:
                     metadata = {
-                        "type": "item",
-                        "chapter": chapter,
-                        "section": section,
-                        "article": article_title,
-                        "item": item_title,
-                        "keywords": item.get("metadata", {}).get("keywords", []),
-                        "cross_references": item.get("metadata", {}).get("cross_references", []),
-                        "importance": item.get("metadata", {}).get("importance", 0.0),
+                        "id": item.get("metadata", {}).get("id", ""),
+                        "spans": item.get("metadata", {}).get("spans", {}),
                         "page_range": item.get("metadata", {}).get("page_range", {})
                     }
                     chunk_id = f"{article_title}_{item_title}_main"
@@ -1192,15 +1193,8 @@ def json_structured_chunks(json_data: Dict[str, Any], chunk_size: int, overlap: 
                     text_chunks = sliding_window_chunks(item_content, chunk_size, overlap)
                     for i, chunk_text in enumerate(text_chunks):
                         metadata = {
-                            "type": "item_part",
-                            "chapter": chapter,
-                            "section": section,
-                            "article": article_title,
-                            "item": item_title,
-                            "part": i + 1,
-                            "keywords": item.get("metadata", {}).get("keywords", []),
-                            "cross_references": item.get("metadata", {}).get("cross_references", []),
-                            "importance": item.get("metadata", {}).get("importance", 0.0),
+                            "id": item.get("metadata", {}).get("id", ""),
+                            "spans": item.get("metadata", {}).get("spans", {}),
                             "page_range": item.get("metadata", {}).get("page_range", {})
                         }
                         chunk_id = f"{article_title}_{item_title}_part_{i+1}"
@@ -1214,15 +1208,8 @@ def json_structured_chunks(json_data: Dict[str, Any], chunk_size: int, overlap: 
                 if sub_item_content:
                     if len(sub_item_content) <= chunk_size:
                         metadata = {
-                            "type": "sub_item",
-                            "chapter": chapter,
-                            "section": section,
-                            "article": article_title,
-                            "item": item_title,
-                            "sub_item": sub_item_title,
-                            "keywords": sub_item.get("metadata", {}).get("keywords", []),
-                            "cross_references": sub_item.get("metadata", {}).get("cross_references", []),
-                            "importance": sub_item.get("metadata", {}).get("importance", 0.0),
+                            "id": sub_item.get("metadata", {}).get("id", ""),
+                            "spans": sub_item.get("metadata", {}).get("spans", {}),
                             "page_range": sub_item.get("metadata", {}).get("page_range", {})
                         }
                         chunk_id = f"{article_title}_{item_title}_{sub_item_title}"
@@ -1232,16 +1219,8 @@ def json_structured_chunks(json_data: Dict[str, Any], chunk_size: int, overlap: 
                         text_chunks = sliding_window_chunks(sub_item_content, chunk_size, overlap)
                         for i, chunk_text in enumerate(text_chunks):
                             metadata = {
-                                "type": "sub_item_part",
-                                "chapter": chapter,
-                                "section": section,
-                                "article": article_title,
-                                "item": item_title,
-                                "sub_item": sub_item_title,
-                                "part": i + 1,
-                                "keywords": sub_item.get("metadata", {}).get("keywords", []),
-                                "cross_references": sub_item.get("metadata", {}).get("cross_references", []),
-                                "importance": sub_item.get("metadata", {}).get("importance", 0.0),
+                                "id": sub_item.get("metadata", {}).get("id", ""),
+                                "spans": sub_item.get("metadata", {}).get("spans", {}),
                                 "page_range": sub_item.get("metadata", {}).get("page_range", {})
                             }
                             chunk_id = f"{article_title}_{item_title}_{sub_item_title}_part_{i+1}"
@@ -1250,7 +1229,7 @@ def json_structured_chunks(json_data: Dict[str, Any], chunk_size: int, overlap: 
         return article_chunks
     
     # 遍歷所有章節
-    chapters = json_data.get("chapters", [])
+    chapters = law_data.get("chapters", [])
     for chapter in chapters:
         chapter_title = chapter.get("chapter", "")
         sections = chapter.get("sections", [])
@@ -2052,16 +2031,8 @@ def retrieve(req: RetrieveRequest):
             # 添加法律結構信息
             metadata = structured_chunk.get("metadata", {})
             result["legal_structure"] = {
-                "law_name": metadata.get("law_name", ""),
-                "chapter": metadata.get("chapter", ""),
-                "section": metadata.get("section", ""),
-                "article": metadata.get("article", ""),
-                "item": metadata.get("item", ""),
-                "sub_item": metadata.get("sub_item", ""),
-                "chunk_type": metadata.get("chunk_type", ""),
-                "keywords": metadata.get("keywords", []),
-                "cross_references": metadata.get("cross_references", []),
-                "importance": metadata.get("importance", 0.0),
+                "id": metadata.get("id", ""),
+                "spans": metadata.get("spans", {}),
                 "page_range": metadata.get("page_range", {})
             }
         
@@ -2194,6 +2165,115 @@ def generate(req: GenerateRequest):
         "legal_references": legal_references,
         "steps": reasoning_steps,
     }
+
+
+def merge_law_documents(law_documents: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    整合多個法律文檔成一個統一的JSON結構
+    
+    參數:
+    - law_documents: 多個法律文檔的列表
+    
+    返回:
+    - 整合後的法律文檔，格式為 {"laws": [...]}
+    """
+    if not law_documents:
+        return {"laws": []}
+    
+    # 確保每個法律文檔都有唯一的ID前綴
+    merged_laws = []
+    global_id_counter = 0
+    
+    for doc in law_documents:
+        if not doc or "law_name" not in doc:
+            continue
+            
+        law_name = doc["law_name"]
+        law_prefix = f"{law_name}_{global_id_counter}"
+        
+        # 創建新的法律文檔結構
+        merged_law = {
+            "law_name": law_name,
+            "chapters": []
+        }
+        
+        # 處理章節
+        chapters = doc.get("chapters", [])
+        for chapter in chapters:
+            chapter_name = chapter.get("chapter", "")
+            merged_chapter = {
+                "chapter": chapter_name,
+                "sections": []
+            }
+            
+            # 處理節
+            sections = chapter.get("sections", [])
+            for section in sections:
+                section_name = section.get("section", "")
+                merged_section = {
+                    "section": section_name,
+                    "articles": []
+                }
+                
+                # 處理條文
+                articles = section.get("articles", [])
+                for article in articles:
+                    article_name = article.get("article", "")
+                    merged_article = {
+                        "article": article_name,
+                        "content": article.get("content", ""),
+                        "items": []
+                    }
+                    
+                    # 處理項目
+                    items = article.get("items", [])
+                    for item in items:
+                        item_name = item.get("item", "")
+                        merged_item = {
+                            "item": item_name,
+                            "content": item.get("content", ""),
+                            "sub_items": []
+                        }
+                        
+                        # 處理子項目
+                        sub_items = item.get("sub_items", [])
+                        for sub_item in sub_items:
+                            sub_item_name = sub_item.get("sub_item", "")
+                            merged_sub_item = {
+                                "sub_item": sub_item_name,
+                                "content": sub_item.get("content", ""),
+                                "metadata": {
+                                    "id": f"{law_prefix}_{chapter_name}_{section_name}_{article_name}_{item_name}_{sub_item_name}".replace(" ", "_"),
+                                    "spans": sub_item.get("metadata", {}).get("spans", {}),
+                                    "page_range": sub_item.get("metadata", {}).get("page_range", {})
+                                }
+                            }
+                            merged_item["sub_items"].append(merged_sub_item)
+                        
+                        # 為項目添加metadata
+                        merged_item["metadata"] = {
+                            "id": f"{law_prefix}_{chapter_name}_{section_name}_{article_name}_{item_name}".replace(" ", "_"),
+                            "spans": item.get("metadata", {}).get("spans", {}),
+                            "page_range": item.get("metadata", {}).get("page_range", {})
+                        }
+                        merged_article["items"].append(merged_item)
+                    
+                    # 為條文添加metadata
+                    merged_article["metadata"] = {
+                        "id": f"{law_prefix}_{chapter_name}_{section_name}_{article_name}".replace(" ", "_"),
+                        "spans": article.get("metadata", {}).get("spans", {}),
+                        "page_range": article.get("metadata", {}).get("page_range", {})
+                    }
+                    merged_section["articles"].append(merged_article)
+                
+                merged_chapter["sections"].append(merged_section)
+            
+            merged_law["chapters"].append(merged_chapter)
+        
+        merged_laws.append(merged_law)
+        global_id_counter += 1
+    
+    return {"laws": merged_laws}
 
 
 def convert_pdf_structured(file_content: bytes, filename: str, options: MetadataOptions) -> Dict[str, Any]:
@@ -2417,15 +2497,9 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
             
             print(f"找到 {len(all_articles)} 個條文")
             
-            # 批量處理關鍵詞（如果啟用）
-            if options.include_keywords:
-                print("批量提取關鍵詞...")
-                # 簡化的關鍵詞提取，避免API調用
-            
-            # 批量處理交叉引用（如果啟用）
-            if options.include_cross_references:
-                print("批量提取交叉引用...")
-                # 簡化的交叉引用提取
+            # 批量處理metadata（如果啟用）
+            if options.include_id or options.include_page_range or options.include_spans:
+                print("批量處理metadata...")
             
             processed_count = 0
             for chapter in structure["chapters"]:
@@ -2439,23 +2513,10 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                         article_metadata = {}
                         if options.include_id:
                             article_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}".replace(" ", "_")
-                        if options.include_length:
-                            article_metadata["length"] = len(article["content"])
-                        if options.include_importance:
-                            # 簡化的重要性計算（基於內容長度）
-                            article_metadata["importance"] = min(1.0, len(article["content"]) / 1000.0)
-                        if options.include_keywords:
-                            # 簡化的關鍵詞提取（基於頻率，避免API調用）
-                            words = re.findall(r'[\u4e00-\u9fff]+', article["content"])
-                            word_count = {}
-                            for word in words:
-                                if len(word) >= 2:  # 只考慮2字以上的詞
-                                    word_count[word] = word_count.get(word, 0) + 1
-                            article_metadata["keywords"] = [word for word, count in sorted(word_count.items(), key=lambda x: x[1], reverse=True)[:5]]
-                        if options.include_cross_references:
-                            # 簡化的交叉引用提取（基於正則表達式）
-                            refs = re.findall(r'第[一二三四五六七八九十百千0-9]+條', article["content"])
-                            article_metadata["cross_references"] = list(set(refs))[:10]
+                        if options.include_page_range:
+                            article_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化的頁面範圍
+                        if options.include_spans:
+                            article_metadata["spans"] = {"start": 0, "end": len(article["content"])}
                         if options.include_page_range:
                             # 簡化的頁碼範圍（基於文本位置估算）
                             article_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化版本
@@ -2481,22 +2542,10 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                             item_metadata = {}
                             if options.include_id:
                                 item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item['item']}".replace(" ", "_")
-                            if options.include_length:
-                                item_metadata["length"] = len(item["content"])
-                            if options.include_importance:
-                                # 簡化的重要性計算
-                                item_metadata["importance"] = min(1.0, len(item["content"]) / 500.0)
-                            if options.include_keywords:
-                                # 簡化的關鍵詞提取
-                                words = re.findall(r'[\u4e00-\u9fff]+', item["content"])
-                                word_count = {}
-                                for word in words:
-                                    if len(word) >= 2:
-                                        word_count[word] = word_count.get(word, 0) + 1
-                                item_metadata["keywords"] = [word for word, count in sorted(word_count.items(), key=lambda x: x[1], reverse=True)[:3]]
-                            if options.include_cross_references:
-                                refs = re.findall(r'第[一二三四五六七八九十百千0-9]+條', item["content"])
-                                item_metadata["cross_references"] = list(set(refs))[:5]
+                            if options.include_page_range:
+                                item_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化的頁面範圍
+                            if options.include_spans:
+                                item_metadata["spans"] = {"start": 0, "end": len(item["content"])}
                             
                             item["metadata"] = item_metadata
                             
@@ -2505,22 +2554,10 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                                 sub_item_metadata = {}
                                 if options.include_id:
                                     sub_item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item['item']}_{sub_item['item']}".replace(" ", "_")
-                                if options.include_length:
-                                    sub_item_metadata["length"] = len(sub_item["content"])
-                                if options.include_importance:
-                                    # 簡化的重要性計算
-                                    sub_item_metadata["importance"] = min(1.0, len(sub_item["content"]) / 300.0)
-                                if options.include_keywords:
-                                    # 簡化的關鍵詞提取
-                                    words = re.findall(r'[\u4e00-\u9fff]+', sub_item["content"])
-                                    word_count = {}
-                                    for word in words:
-                                        if len(word) >= 2:
-                                            word_count[word] = word_count.get(word, 0) + 1
-                                    sub_item_metadata["keywords"] = [word for word, count in sorted(word_count.items(), key=lambda x: x[1], reverse=True)[:3]]
-                                if options.include_cross_references:
-                                    refs = re.findall(r'第[一二三四五六七八九十百千0-9]+條', sub_item["content"])
-                                    sub_item_metadata["cross_references"] = list(set(refs))[:5]
+                                if options.include_page_range:
+                                    sub_item_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化的頁面範圍
+                                if options.include_spans:
+                                    sub_item_metadata["spans"] = {"start": 0, "end": len(sub_item["content"])}
                                 
                                 sub_item["metadata"] = sub_item_metadata
                         
@@ -2532,8 +2569,7 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
             print(f"Metadata處理完成，耗時: {metadata_time:.2f}秒")
         
         # 添加metadata（使用優化版本）
-        if any([options.include_id, options.include_keywords, options.include_cross_references, 
-                options.include_importance, options.include_length, options.include_spans]):
+        if any([options.include_id, options.include_page_range, options.include_spans]):
             add_metadata_to_structure_optimized(structure, options, full_text)
         else:
             print("跳過metadata處理（未啟用）")

@@ -59,6 +59,7 @@ class EvaluationResult:
 # Pydantic 模型
 class ChunkConfig(BaseModel):
     """分塊配置"""
+    doc_id: str  # 文檔ID
     chunk_size: int = 500
     overlap: int = 50  # 重疊大小（字符數）
     overlap_ratio: float = 0.1
@@ -116,3 +117,7 @@ class MetadataOptions(BaseModel):
     include_figures: bool = False
     preserve_formatting: bool = True
     extract_metadata: bool = True
+    # 新增必要的屬性
+    include_id: bool = True
+    include_page_range: bool = True
+    include_spans: bool = True

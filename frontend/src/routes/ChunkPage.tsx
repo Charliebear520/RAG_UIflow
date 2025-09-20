@@ -1731,139 +1731,143 @@ export function ChunkPage() {
               </div>
             )}
 
-            {chunkResults && (
-              <div>
-                {/* 評估指標 */}
-                <div className="mb-4">
-                  <h6>評估指標</h6>
-                  <div className="row g-2">
-                    <div className="col-6">
-                      <div className="card bg-light">
-                        <div className="card-body p-2">
-                          <div className="small text-muted">分塊數量</div>
-                          <div className="fw-bold">
-                            {chunkResults.metrics.chunk_count}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="col-6">
-                      <div className="card bg-light">
-                        <div className="card-body p-2">
-                          <div className="small text-muted">平均長度</div>
-                          <div className="fw-bold">
-                            {chunkResults.metrics.avg_length} 字符
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="col-6">
-                      <div className="card bg-light">
-                        <div className="card-body p-2">
-                          <div className="small text-muted">長度變異</div>
-                          <div className="fw-bold">
-                            {chunkResults.metrics.length_variance.toFixed(2)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="col-6">
-                      <div className="card bg-light">
-                        <div className="card-body p-2">
-                          <div className="small text-muted">重疊率</div>
-                          <div className="fw-bold">
-                            {(chunkResults.metrics.overlap_rate * 100).toFixed(
-                              1
-                            )}
-                            %
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="col-6">
-                      <div className="card bg-light">
-                        <div className="card-body p-2">
-                          <div className="small text-muted">最小長度</div>
-                          <div className="fw-bold">
-                            {chunkResults.metrics.min_length} 字符
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="col-6">
-                      <div className="card bg-light">
-                        <div className="card-body p-2">
-                          <div className="small text-muted">最大長度</div>
-                          <div className="fw-bold">
-                            {chunkResults.metrics.max_length} 字符
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 分塊內容預覽 */}
+            {chunkResults &&
+              chunkResults.chunks &&
+              chunkResults.chunks.length > 0 && (
                 <div>
-                  <div className="d-flex justify-content-between align-items-center mb-2">
-                    <h6>分塊內容預覽</h6>
-                    <div>
-                      <small className="text-muted me-2">
-                        顯示前 {chunkResults.chunks.length} 個分塊，共{" "}
-                        {chunkResults.full_chunks} 個
-                      </small>
-                      {chunkResults.all_chunks &&
-                        chunkResults.all_chunks.length > 3 && (
-                          <button
-                            className="btn btn-outline-primary btn-sm"
-                            onClick={() => {
-                              // 切換顯示所有分塊或只顯示前3個
-                              if (chunkResults.chunks.length === 3) {
-                                setChunkResults((prev: any) => ({
-                                  ...prev,
-                                  chunks: prev.all_chunks || [],
-                                }));
-                              } else {
-                                setChunkResults((prev: any) => ({
-                                  ...prev,
-                                  chunks: prev.all_chunks?.slice(0, 3) || [],
-                                }));
-                              }
-                            }}
-                          >
-                            {chunkResults.chunks.length === 3
-                              ? "顯示全部"
-                              : "顯示前3個"}
-                          </button>
-                        )}
-                    </div>
-                  </div>
-                  <div
-                    className="border rounded p-3"
-                    style={{ maxHeight: "400px", overflowY: "auto" }}
-                  >
-                    {chunkResults.chunks.map((chunk: string, index: number) => (
-                      <div key={index} className="mb-3">
-                        <div className="d-flex justify-content-between align-items-center mb-1">
-                          <small className="text-muted">
-                            分塊 #{index + 1}
-                          </small>
-                          <small className="text-muted">
-                            {chunk.length} 字符
-                          </small>
-                        </div>
-                        <div
-                          className="bg-light p-2 rounded small"
-                          style={{ whiteSpace: "pre-wrap" }}
-                        >
-                          {chunk}
+                  {/* 評估指標 */}
+                  <div className="mb-4">
+                    <h6>評估指標</h6>
+                    <div className="row g-2">
+                      <div className="col-6">
+                        <div className="card bg-light">
+                          <div className="card-body p-2">
+                            <div className="small text-muted">分塊數量</div>
+                            <div className="fw-bold">
+                              {chunkResults.metrics.chunk_count}
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    ))}
+                      <div className="col-6">
+                        <div className="card bg-light">
+                          <div className="card-body p-2">
+                            <div className="small text-muted">平均長度</div>
+                            <div className="fw-bold">
+                              {chunkResults.metrics.avg_length} 字符
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="col-6">
+                        <div className="card bg-light">
+                          <div className="card-body p-2">
+                            <div className="small text-muted">長度變異</div>
+                            <div className="fw-bold">
+                              {chunkResults.metrics.length_variance.toFixed(2)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="col-6">
+                        <div className="card bg-light">
+                          <div className="card-body p-2">
+                            <div className="small text-muted">重疊率</div>
+                            <div className="fw-bold">
+                              {(
+                                chunkResults.metrics.overlap_rate * 100
+                              ).toFixed(1)}
+                              %
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="col-6">
+                        <div className="card bg-light">
+                          <div className="card-body p-2">
+                            <div className="small text-muted">最小長度</div>
+                            <div className="fw-bold">
+                              {chunkResults.metrics.min_length} 字符
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="col-6">
+                        <div className="card bg-light">
+                          <div className="card-body p-2">
+                            <div className="small text-muted">最大長度</div>
+                            <div className="fw-bold">
+                              {chunkResults.metrics.max_length} 字符
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 分塊內容預覽 */}
+                  <div>
+                    <div className="d-flex justify-content-between align-items-center mb-2">
+                      <h6>分塊內容預覽</h6>
+                      <div>
+                        <small className="text-muted me-2">
+                          顯示前 {chunkResults.chunks.length} 個分塊，共{" "}
+                          {chunkResults.full_chunks} 個
+                        </small>
+                        {chunkResults.all_chunks &&
+                          chunkResults.all_chunks.length > 3 && (
+                            <button
+                              className="btn btn-outline-primary btn-sm"
+                              onClick={() => {
+                                // 切換顯示所有分塊或只顯示前3個
+                                if (chunkResults.chunks.length === 3) {
+                                  setChunkResults((prev: any) => ({
+                                    ...prev,
+                                    chunks: prev.all_chunks || [],
+                                  }));
+                                } else {
+                                  setChunkResults((prev: any) => ({
+                                    ...prev,
+                                    chunks: prev.all_chunks?.slice(0, 3) || [],
+                                  }));
+                                }
+                              }}
+                            >
+                              {chunkResults.chunks.length === 3
+                                ? "顯示全部"
+                                : "顯示前3個"}
+                            </button>
+                          )}
+                      </div>
+                    </div>
+                    <div
+                      className="border rounded p-3"
+                      style={{ maxHeight: "400px", overflowY: "auto" }}
+                    >
+                      {chunkResults.chunks.map(
+                        (chunk: string, index: number) => (
+                          <div key={index} className="mb-3">
+                            <div className="d-flex justify-content-between align-items-center mb-1">
+                              <small className="text-muted">
+                                分塊 #{index + 1}
+                              </small>
+                              <small className="text-muted">
+                                {chunk.length} 字符
+                              </small>
+                            </div>
+                            <div
+                              className="bg-light p-2 rounded small"
+                              style={{ whiteSpace: "pre-wrap" }}
+                            >
+                              {chunk}
+                            </div>
+                          </div>
+                        )
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
 
             {/* 評測結果顯示 */}
             {showEvaluation && (
