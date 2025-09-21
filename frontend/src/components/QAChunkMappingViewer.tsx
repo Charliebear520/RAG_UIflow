@@ -264,12 +264,10 @@ export const QAChunkMappingViewer: React.FC<QAChunkMappingViewerProps> = ({
               <div className="text-sm text-green-800">有映射的問題</div>
             </div>
             <div className="bg-yellow-50 p-3 rounded-lg text-center">
-              <div className="text-2xl font-bold text-yellow-600">
-                {(
-                  selectedResult.mapping_stats?.avg_chunks_per_question || 0
-                ).toFixed(1)}
+              <div className="text-2xl font-bold text-green-600">
+                {(selectedResult.mapping_stats?.mapping_success_rate || 0).toFixed(1)}%
               </div>
-              <div className="text-sm text-yellow-800">平均chunks/問題</div>
+              <div className="text-sm text-green-800">映射成功率</div>
             </div>
           </div>
 

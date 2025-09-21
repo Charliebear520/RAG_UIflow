@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useRag } from "../lib/ragStore";
 import { api } from "../lib/api";
 import { QASetUploader } from "../components/QASetUploader";
-import { SimpleQASetUploader } from "../components/SimpleQASetUploader";
+import { ChunkQASetUploader } from "../components/ChunkQASetUploader";
 import { QAMappingDetails } from "../components/QAMappingDetails";
 
 // 擴展Window接口以包含Bootstrap
@@ -852,7 +852,7 @@ export function ChunkPage() {
                         <h5 className="mb-0">步驟 1: 上傳QA Set</h5>
                       </div>
                       <div className="card-body">
-                        <SimpleQASetUploader
+                        <ChunkQASetUploader
                           onFileUploaded={handleQASetFileUploaded}
                         />
                       </div>
@@ -1648,7 +1648,7 @@ export function ChunkPage() {
                                         <th>分塊數量</th>
                                         <th>正例問題</th>
                                         <th>負例問題</th>
-                                        <th>平均chunk數/問題</th>
+                                        <th>映射成功率</th>
                                       </tr>
                                     </thead>
                                     <tbody>
@@ -1683,9 +1683,10 @@ export function ChunkPage() {
                                               }
                                             </td>
                                             <td>
-                                              {result.mapping_stats.avg_chunks_per_question.toFixed(
+                                              {result.mapping_stats.mapping_success_rate?.toFixed(
                                                 1
-                                              )}
+                                              ) || "0.0"}
+                                              %
                                             </td>
                                           </tr>
                                         )

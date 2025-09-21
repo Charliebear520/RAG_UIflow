@@ -223,6 +223,18 @@ export const api = {
     const res = await fetch(`${base}/qa-mapping/result/${taskId}`);
     return json<any>(res);
   },
+  // 直接映射QA set（不包含分塊處理）
+  async mapQASet(file: File, docId: string) {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("doc_id", docId);
+
+    const res = await fetch(`${base}/map-qa-set`, {
+      method: "POST",
+      body: formData,
+    });
+    return json<any>(res);
+  },
   // 批量分塊相關API
   async startMultipleChunking(body: {
     doc_id: string;

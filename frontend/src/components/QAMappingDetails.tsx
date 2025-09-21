@@ -109,44 +109,41 @@ export const QAMappingDetails: React.FC<QAMappingDetailsProps> = ({
             ([configId, result]: [string, any], configIndex) => (
               <div key={configId} className="accordion-item">
                 <h2 className="accordion-header">
-                  <button
-                    className="accordion-button collapsed"
-                    type="button"
+                  <div
+                    className="accordion-button collapsed d-flex justify-content-between align-items-center"
                     data-bs-toggle="collapse"
                     data-bs-target={`#mappedQA-${configIndex}`}
                     aria-expanded="false"
                     aria-controls={`mappedQA-${configIndex}`}
                   >
-                    <div className="d-flex justify-content-between w-100 me-3">
-                      <span>
-                        {result.strategy} - 配置 {configIndex + 1}(
-                        {result.config.chunk_size} 字符,{" "}
-                        {(result.config.overlap_ratio * 100).toFixed(0)}% 重疊)
-                      </span>
-                      <div
-                        className="d-flex gap-2"
-                        onClick={(e) => e.stopPropagation()}
+                    <span>
+                      {result.strategy} - 配置 {configIndex + 1}(
+                      {result.config.chunk_size} 字符,{" "}
+                      {(result.config.overlap_ratio * 100).toFixed(0)}% 重疊)
+                    </span>
+                    <div
+                      className="d-flex gap-2"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        className="btn btn-outline-primary btn-sm"
+                        onClick={() => handleViewJson(configId)}
+                        title="查看JSON"
                       >
-                        <button
-                          className="btn btn-outline-primary btn-sm"
-                          onClick={() => handleViewJson(configId)}
-                          title="查看JSON"
-                        >
-                          <i className="bi bi-file-text"></i>
-                        </button>
-                        <button
-                          className="btn btn-outline-success btn-sm"
-                          onClick={() => {
-                            setSelectedConfigForJson(configId);
-                            handleDownloadJson();
-                          }}
-                          title="下載JSON"
-                        >
-                          <i className="bi bi-download"></i>
-                        </button>
-                      </div>
+                        <i className="bi bi-file-text"></i>
+                      </button>
+                      <button
+                        className="btn btn-outline-success btn-sm"
+                        onClick={() => {
+                          setSelectedConfigForJson(configId);
+                          handleDownloadJson();
+                        }}
+                        title="下載JSON"
+                      >
+                        <i className="bi bi-download"></i>
+                      </button>
                     </div>
-                  </button>
+                  </div>
                 </h2>
                 <div
                   id={`mappedQA-${configIndex}`}
@@ -178,16 +175,15 @@ export const QAMappingDetails: React.FC<QAMappingDetailsProps> = ({
                           </div>
                         </div>
                         <div className="col-md-3">
-                          <div className="card bg-light">
+                          <div className="card bg-success bg-opacity-10">
                             <div className="card-body text-center p-2">
-                              <h6 className="card-title text-warning mb-1">
-                                {result.mapping_stats.avg_chunks_per_question.toFixed(
+                              <h6 className="card-title text-success mb-1">
+                                {result.mapping_stats.mapping_success_rate?.toFixed(
                                   1
-                                )}
+                                ) || "0.0"}
+                                %
                               </h6>
-                              <small className="card-text">
-                                平均chunk/問題
-                              </small>
+                              <small className="card-text">映射成功率</small>
                             </div>
                           </div>
                         </div>

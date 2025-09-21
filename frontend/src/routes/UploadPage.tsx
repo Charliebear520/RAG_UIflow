@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRag } from "../lib/ragStore";
+import { SimpleQASetUploader } from "../components/SimpleQASetUploader";
 import Editor from "@monaco-editor/react";
 
 interface MetadataOptions {
@@ -28,6 +29,7 @@ export function UploadPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [editedJson, setEditedJson] = useState<string>("");
   const [jsonError, setJsonError] = useState<string | null>(null);
+  const [qaUploadResult, setQaUploadResult] = useState<any>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const [metadataOptions, setMetadataOptions] = useState<MetadataOptions>({
@@ -179,13 +181,17 @@ export function UploadPage() {
     }
   };
 
+  const handleQAUploadComplete = (result: any) => {
+    setQaUploadResult(result);
+  };
+
   return (
     <div className="row g-3">
-      {/* Left: Upload Area */}
+      {/* 第一行：法條文件上傳 */}
       <div className="col-12 col-md-6">
         <div className="card h-100">
           <div className="card-body">
-            <h2 className="h5 mb-3">Upload</h2>
+            <h2 className="h5 mb-3">法條文件上傳</h2>
 
             {/* PDF Upload Section */}
             <div className="mb-4">
@@ -322,6 +328,7 @@ export function UploadPage() {
                         reset();
                         setSelectedFiles([]);
                         setConvertError(null);
+                        setQaUploadResult(null);
                         if (inputRef.current) inputRef.current.value = "";
                       }}
                     >
@@ -413,7 +420,7 @@ export function UploadPage() {
         </div>
       </div>
 
-      {/* Right: JSON Preview */}
+      {/* 第一行：JSON Preview */}
       <div className="col-12 col-md-6">
         <div className="card h-100">
           <div className="card-body">
@@ -538,6 +545,112 @@ export function UploadPage() {
                     onClick={handleCancelEdit}
                   >
                     <i className="bi bi-x"></i> Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 第二行：QA Set Upload */}
+      <div className="col-12 col-md-6">
+        <div className="card h-100">
+          <div className="card-body">
+            <h2 className="h5 mb-3">QA Set Upload</h2>
+            {!docId || !jsonData ? (
+              <div className="text-center text-muted">
+                <i className="bi bi-question-circle display-4 mb-3"></i>
+                <p className="mb-2">
+                  請先上傳並轉換法條文件，
+                  <br />
+                  然後在此處上傳QA Set
+                </p>
+                <small className="text-muted">
+                  • 需要先完成法條JSON轉換
+                  <br />• 然後可以上傳QA數據集進行映射
+                </small>
+              </div>
+            ) : (
+              <SimpleQASetUploader
+                docId={docId}
+                onUploadComplete={handleQAUploadComplete}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 第二行：QA Mapping Preview */}
+      <div className="col-12 col-md-6">
+        <div className="card h-100">
+          <div className="card-body">
+            <h2 className="h5 mb-3">QA Mapping Preview</h2>
+            {!qaUploadResult ? (
+              <div className="text-center text-muted">
+                <i className="bi bi-diagram-3 display-4 mb-3"></i>
+                <p className="mb-2">
+                  上傳QA Set後，
+                  <br />
+                  映射結果將在此處預覽
+                </p>
+                <small className="text-muted">
+                  • 系統會自動將答案對應到法條JSON中的具體位置
+                  <br />• 生成與chunking格式一致的映射關係
+                </small>
+              </div>
+            ) : (
+              <div>
+                <div className="alert alert-success mb-3">
+                  <h6 className="alert-heading">
+                    <i className="bi bi-check-circle me-2"></i>
+                    QA Set映射完成！
+                  </h6>
+                  <div className="row">
+                    <div className="col-6">
+                      <small className="text-muted">
+                        <strong>總配置數:</strong>{" "}
+                        {qaUploadResult.total_configs || 0}
+                      </small>
+                    </div>
+                    <div className="col-6">
+                      <small className="text-muted">
+                        <strong>原始QA問題數:</strong>{" "}
+                        {qaUploadResult.original_qa_set?.length || 0}
+                      </small>
+                    </div>
+                  </div>
+                </div>
+
+                <pre
+                  className="bg-light p-2 rounded"
+                  style={{
+                    maxHeight: 300,
+                    overflow: "auto",
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {JSON.stringify(qaUploadResult, null, 2)}
+                </pre>
+
+                <div className="d-flex gap-2 mt-2">
+                  <button
+                    className="btn btn-outline-secondary btn-sm"
+                    onClick={() => {
+                      const dataStr = JSON.stringify(qaUploadResult, null, 2);
+                      const dataUri =
+                        "data:application/json;charset=utf-8," +
+                        encodeURIComponent(dataStr);
+                      const linkElement = document.createElement("a");
+                      linkElement.setAttribute("href", dataUri);
+                      linkElement.setAttribute(
+                        "download",
+                        "qa_mapping_result.json"
+                      );
+                      linkElement.click();
+                    }}
+                  >
+                    <i className="bi bi-download"></i> Download Result
                   </button>
                 </div>
               </div>
