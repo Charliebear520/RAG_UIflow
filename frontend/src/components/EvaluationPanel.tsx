@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../lib/api";
+import { QASetUploader } from "./QASetUploader";
 
 interface EvaluationPanelProps {
   docId: string;
@@ -36,6 +37,10 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
 }) => {
   // Default evaluation mode ON and tuned defaults
   const [isEvaluationMode, setIsEvaluationMode] = useState(true);
+  const [evaluationMode, setEvaluationMode] = useState<"qa_set" | "generated">(
+    "qa_set"
+  ); // 新增：評估模式選擇
+  const [qaMappingResult, setQAMappingResult] = useState<any>(null); // 新增：QA映射結果
   const [chunkSizes, setChunkSizes] = useState<number[]>([300, 600, 900]);
   const [overlapRatios, setOverlapRatios] = useState<number[]>([0.0, 0.1]);
   const [questionTypes, setQuestionTypes] = useState<string[]>([
@@ -56,6 +61,11 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
   const totalCombos = chunkSizes.length * overlapRatios.length;
   const tooManyCombos = totalCombos > 8; // guardrail
 
+  const handleQAMappingComplete = (result: any) => {
+    setQAMappingResult(result);
+    // 可以自動開始評估，或者讓用戶手動開始
+  };
+
   const startEvaluation = async () => {
     if (!docId) return;
     if (tooManyCombos) {
@@ -68,49 +78,104 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
     setEvaluationResults(null);
 
     try {
-      // 開始評估
-      const response = await api.evaluateChunking({
-        doc_id: docId,
-        chunk_sizes: chunkSizes,
-        overlap_ratios: overlapRatios,
-        question_types: questionTypes,
-        num_questions: numQuestions,
-      });
+      let response;
 
-      setEvaluationTaskId(response.task_id);
+      if (evaluationMode === "qa_set" && qaMappingResult) {
+        // 使用QA set映射結果進行評估
+        response = await api.startFixedSizeEvaluation({
+          doc_id: docId,
+          chunk_sizes: chunkSizes,
+          overlap_ratios: overlapRatios,
+          test_queries: qaMappingResult.original_qa_set.map(
+            (item: any) => item.query
+          ),
+          k_values: [1, 3, 5, 10],
+        });
+      } else {
+        // 使用生成的問題進行評估
+        const response = await api.evaluateChunking({
+          doc_id: docId,
+          chunk_sizes: chunkSizes,
+          overlap_ratios: overlapRatios,
+          question_types: questionTypes,
+          num_questions: numQuestions,
+        });
 
-      // 開始執行評估
-      await api.runEvaluation(response.task_id);
+        setEvaluationTaskId(response.task_id);
 
-      // 輪詢任務狀態
-      const pollTaskStatus = async () => {
-        try {
-          const statusResponse = await api.getEvaluationTask(response.task_id);
+        // 開始執行評估
+        await api.runEvaluation(response.task_id);
 
-          if (statusResponse.status === "completed") {
-            // 獲取評估結果
-            const resultsResponse = await api.getEvaluationResults(
+        // 輪詢任務狀態
+        const pollTaskStatus = async () => {
+          try {
+            const statusResponse = await api.getEvaluationTask(
               response.task_id
             );
-            setEvaluationResults(resultsResponse);
-            onEvaluationComplete(resultsResponse);
-            setIsEvaluating(false);
-            setEvaluationProgress(100);
-          } else if (statusResponse.status === "failed") {
-            setEvaluationError(statusResponse.error_message || "評估失敗");
-            setIsEvaluating(false);
-          } else if (statusResponse.status === "running") {
-            setEvaluationProgress(statusResponse.progress * 100);
-            setTimeout(pollTaskStatus, 2000); // 2秒後再次檢查
-          }
-        } catch (error) {
-          setEvaluationError("獲取評估狀態失敗");
-          setIsEvaluating(false);
-        }
-      };
 
-      // 開始輪詢
-      setTimeout(pollTaskStatus, 1000);
+            if (statusResponse.status === "completed") {
+              // 獲取評估結果
+              const resultsResponse = await api.getEvaluationResults(
+                response.task_id
+              );
+              setEvaluationResults(resultsResponse);
+              onEvaluationComplete(resultsResponse);
+              setIsEvaluating(false);
+              setEvaluationProgress(100);
+            } else if (statusResponse.status === "failed") {
+              setEvaluationError(statusResponse.error_message || "評估失敗");
+              setIsEvaluating(false);
+            } else if (statusResponse.status === "running") {
+              setEvaluationProgress(statusResponse.progress * 100);
+              setTimeout(pollTaskStatus, 2000); // 2秒後再次檢查
+            }
+          } catch (error) {
+            setEvaluationError("獲取評估狀態失敗");
+            setIsEvaluating(false);
+          }
+        };
+
+        // 開始輪詢
+        setTimeout(pollTaskStatus, 1000);
+        return;
+      }
+
+      // 對於QA set模式，使用不同的API流程
+      if (evaluationMode === "qa_set") {
+        setEvaluationTaskId(response.task_id);
+
+        // 輪詢任務狀態
+        const pollTaskStatus = async () => {
+          try {
+            const statusResponse = await api.getEvaluationStatus(
+              response.task_id
+            );
+
+            if (statusResponse.status === "completed") {
+              // 獲取評估結果
+              const resultsResponse = await api.getEvaluationResults(
+                response.task_id
+              );
+              setEvaluationResults(resultsResponse);
+              onEvaluationComplete(resultsResponse);
+              setIsEvaluating(false);
+              setEvaluationProgress(100);
+            } else if (statusResponse.status === "failed") {
+              setEvaluationError(statusResponse.error_message || "評估失敗");
+              setIsEvaluating(false);
+            } else if (statusResponse.status === "running") {
+              setEvaluationProgress(statusResponse.progress * 100);
+              setTimeout(pollTaskStatus, 2000); // 2秒後再次檢查
+            }
+          } catch (error) {
+            setEvaluationError("獲取評估狀態失敗");
+            setIsEvaluating(false);
+          }
+        };
+
+        // 開始輪詢
+        setTimeout(pollTaskStatus, 1000);
+      }
     } catch (error) {
       setEvaluationError("啟動評估失敗");
       setIsEvaluating(false);
@@ -167,9 +232,52 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
 
       {isEvaluationMode && (
         <>
+          {/* 評估模式選擇 */}
+          <div className="bg-gray-50 p-4 rounded-lg">
+            <h3 className="text-lg font-semibold mb-4">評估模式</h3>
+            <div className="flex space-x-4">
+              <label className="flex items-center">
+                <input
+                  type="radio"
+                  value="qa_set"
+                  checked={evaluationMode === "qa_set"}
+                  onChange={(e) =>
+                    setEvaluationMode(e.target.value as "qa_set" | "generated")
+                  }
+                  className="mr-2"
+                />
+                <span>QA Set上傳模式</span>
+              </label>
+              <label className="flex items-center">
+                <input
+                  type="radio"
+                  value="generated"
+                  checked={evaluationMode === "generated"}
+                  onChange={(e) =>
+                    setEvaluationMode(e.target.value as "qa_set" | "generated")
+                  }
+                  className="mr-2"
+                />
+                <span>自動生成問題模式</span>
+              </label>
+            </div>
+          </div>
+
+          {/* QA Set上傳模式 */}
+          {evaluationMode === "qa_set" && (
+            <QASetUploader
+              docId={docId}
+              onMappingComplete={handleQAMappingComplete}
+            />
+          )}
+
           {/* 評估配置 */}
           <div className="bg-blue-50 p-4 rounded-lg">
-            <h3 className="text-lg font-semibold mb-4">評測配置</h3>
+            <h3 className="text-lg font-semibold mb-4">
+              {evaluationMode === "qa_set"
+                ? "評測配置（基於QA Set）"
+                : "評測配置（自動生成問題）"}
+            </h3>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -227,57 +335,78 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
               </div>
             </div>
 
-            <div className="mt-4">
-              <label className="block text-sm font-medium mb-2">問題類型</label>
-              <div className="flex flex-wrap gap-2">
-                {[
-                  "案例應用",
-                  "情境分析",
-                  "實務處理",
-                  "法律後果",
-                  "合規判斷",
-                ].map((type) => (
-                  <label key={type} className="flex items-center">
-                    <input
-                      type="checkbox"
-                      checked={questionTypes.includes(type)}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setQuestionTypes([...questionTypes, type]);
-                        } else {
-                          setQuestionTypes(
-                            questionTypes.filter((t) => t !== type)
-                          );
-                        }
-                      }}
-                      className="mr-1"
-                    />
-                    <span className="text-sm">{type}</span>
+            {evaluationMode === "generated" && (
+              <>
+                <div className="mt-4">
+                  <label className="block text-sm font-medium mb-2">
+                    問題類型
                   </label>
-                ))}
-              </div>
-            </div>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      "案例應用",
+                      "情境分析",
+                      "實務處理",
+                      "法律後果",
+                      "合規判斷",
+                    ].map((type) => (
+                      <label key={type} className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={questionTypes.includes(type)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setQuestionTypes([...questionTypes, type]);
+                            } else {
+                              setQuestionTypes(
+                                questionTypes.filter((t) => t !== type)
+                              );
+                            }
+                          }}
+                          className="mr-1"
+                        />
+                        <span className="text-sm">{type}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
 
-            <div className="mt-4">
-              <label className="block text-sm font-medium mb-2">問題數量</label>
-              <input
-                type="number"
-                value={numQuestions}
-                onChange={(e) => setNumQuestions(parseInt(e.target.value))}
-                className="w-32 px-3 py-2 border rounded-md"
-                min="5"
-                max="50"
-              />
-            </div>
+                <div className="mt-4">
+                  <label className="block text-sm font-medium mb-2">
+                    問題數量
+                  </label>
+                  <input
+                    type="number"
+                    value={numQuestions}
+                    onChange={(e) => setNumQuestions(parseInt(e.target.value))}
+                    className="w-32 px-3 py-2 border rounded-md"
+                    min="5"
+                    max="50"
+                  />
+                </div>
+              </>
+            )}
 
             <div className="mt-4">
               <button
                 onClick={startEvaluation}
-                disabled={isEvaluating || !docId}
+                disabled={
+                  isEvaluating ||
+                  !docId ||
+                  (evaluationMode === "qa_set" && !qaMappingResult)
+                }
                 className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:bg-gray-400"
               >
-                {isEvaluating ? "評測中..." : "開始評測"}
+                {isEvaluating
+                  ? "評測中..."
+                  : evaluationMode === "qa_set" && !qaMappingResult
+                  ? "請先完成QA Set映射"
+                  : "開始評測"}
               </button>
+              {evaluationMode === "qa_set" && !qaMappingResult && (
+                <p className="text-sm text-gray-600 mt-2">
+                  請先上傳QA set並完成chunk映射後再開始評測
+                </p>
+              )}
             </div>
           </div>
 
@@ -375,60 +504,73 @@ export const EvaluationPanel: React.FC<EvaluationPanelProps> = ({
                       <tr key={index} className="hover:bg-gray-50">
                         <td className="px-4 py-3 text-sm">
                           <div className="font-medium">
-                            {result.config.strategy || "固定大小分割"}
+                            {(result.config as any).strategy || "固定大小分割"}
                           </div>
                           <div className="text-xs text-gray-500">
                             Size: {result.config.chunk_size} | Overlap:{" "}
                             {(result.config.overlap_ratio * 100).toFixed(0)}%
-                            {result.config.chunk_by && (
+                            {(result.config as any).chunk_by && (
                               <div className="mt-1">
                                 分割單位:{" "}
-                                {result.config.chunk_by === "article"
+                                {(result.config as any).chunk_by === "article"
                                   ? "按條文分割"
-                                  : result.config.chunk_by === "item"
+                                  : (result.config as any).chunk_by === "item"
                                   ? "按項分割"
-                                  : result.config.chunk_by === "section"
+                                  : (result.config as any).chunk_by ===
+                                    "section"
                                   ? "按節分割"
-                                  : result.config.chunk_by === "chapter"
+                                  : (result.config as any).chunk_by ===
+                                    "chapter"
                                   ? "按章分割"
-                                  : result.config.chunk_by}
+                                  : (result.config as any).chunk_by}
                               </div>
                             )}
-                            {result.config.preserve_structure !== undefined && (
-                              <div className="mt-1">
-                                保持結構:{" "}
-                                {result.config.preserve_structure ? "是" : "否"}
-                              </div>
-                            )}
-                            {result.config.level_depth !== undefined && (
-                              <div className="mt-1">
-                                層次深度: {result.config.level_depth}
-                              </div>
-                            )}
-                            {result.config.similarity_threshold !==
+                            {(result.config as any).preserve_structure !==
                               undefined && (
                               <div className="mt-1">
-                                相似度閾值: {result.config.similarity_threshold}
+                                保持結構:{" "}
+                                {(result.config as any).preserve_structure
+                                  ? "是"
+                                  : "否"}
                               </div>
                             )}
-                            {result.config.semantic_threshold !== undefined && (
+                            {(result.config as any).level_depth !==
+                              undefined && (
                               <div className="mt-1">
-                                語義閾值: {result.config.semantic_threshold}
+                                層次深度: {(result.config as any).level_depth}
                               </div>
                             )}
-                            {result.config.step_size !== undefined && (
+                            {(result.config as any).similarity_threshold !==
+                              undefined && (
                               <div className="mt-1">
-                                步長: {result.config.step_size}
+                                相似度閾值:{" "}
+                                {(result.config as any).similarity_threshold}
                               </div>
                             )}
-                            {result.config.switch_threshold !== undefined && (
+                            {(result.config as any).semantic_threshold !==
+                              undefined && (
                               <div className="mt-1">
-                                切換閾值: {result.config.switch_threshold}
+                                語義閾值:{" "}
+                                {(result.config as any).semantic_threshold}
                               </div>
                             )}
-                            {result.config.secondary_size !== undefined && (
+                            {(result.config as any).step_size !== undefined && (
                               <div className="mt-1">
-                                次要大小: {result.config.secondary_size}
+                                步長: {(result.config as any).step_size}
+                              </div>
+                            )}
+                            {(result.config as any).switch_threshold !==
+                              undefined && (
+                              <div className="mt-1">
+                                切換閾值:{" "}
+                                {(result.config as any).switch_threshold}
+                              </div>
+                            )}
+                            {(result.config as any).secondary_size !==
+                              undefined && (
+                              <div className="mt-1">
+                                次要大小:{" "}
+                                {(result.config as any).secondary_size}
                               </div>
                             )}
                           </div>

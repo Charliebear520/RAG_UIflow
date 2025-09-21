@@ -39,6 +39,40 @@ class FixedSizeChunking(ChunkingStrategy):
             start = end - overlap
             
         return chunks
+    
+    def chunk_with_span(self, text: str, chunk_size: int = 500, overlap_ratio: float = 0.1, **kwargs) -> List[Dict[str, Any]]:
+        """固定大小分割，返回帶span信息的結果"""
+        overlap = int(chunk_size * overlap_ratio)
+        result = []
+        start = 0
+        chunk_index = 0
+        
+        while start < len(text):
+            end = start + chunk_size
+            chunk = text[start:end]
+            
+            if chunk.strip():
+                chunk_id = f"fixed_size_chunk_{chunk_index+1:03d}"
+                metadata = {
+                    "strategy": "fixed_size",
+                    "chunk_size": chunk_size,
+                    "overlap_ratio": overlap_ratio,
+                    "overlap": overlap,
+                    "chunk_index": chunk_index,
+                    "length": len(chunk)
+                }
+                
+                result.append({
+                    "content": chunk,
+                    "span": {"start": start, "end": end},
+                    "chunk_id": chunk_id,
+                    "metadata": metadata
+                })
+                chunk_index += 1
+            
+            start = end - overlap
+            
+        return result
 
 
 class HierarchicalChunking(ChunkingStrategy):
@@ -253,37 +287,9 @@ class HierarchicalChunking(ChunkingStrategy):
         Returns:
             List[Dict]: 包含content、span、metadata的chunk列表
         """
+        # 直接使用_generate_chunk_spans來生成帶span信息的chunks
         chunks = self.chunk(text, max_chunk_size, overlap_ratio, **kwargs)
-        
-        result = []
-        current_pos = 0
-        
-        for i, chunk in enumerate(chunks):
-            # 在原文中查找chunk位置
-            start_pos = text.find(chunk, current_pos)
-            if start_pos == -1:
-                start_pos = current_pos
-            end_pos = start_pos + len(chunk)
-            
-            # 提取metadata
-            level, number, content = self._detect_structure_level(chunk.split('\n')[0])
-            
-            result.append({
-                "content": chunk,
-                "span": {"start": start_pos, "end": end_pos},
-                "chunk_id": f"hierarchical_chunk_{i}",
-                "metadata": {
-                    "level": level,
-                    "number": number,
-                    "content_preview": content,
-                    "length": len(chunk),
-                    "strategy": "hierarchical"
-                }
-            })
-            
-            current_pos = start_pos
-        
-        return result
+        return _generate_chunk_spans(chunks, text, "hierarchical", **kwargs)
 
 
 class RCTSHierarchicalChunking(ChunkingStrategy):
@@ -1348,3 +1354,149 @@ def chunk_text(text: str, strategy: str = "fixed_size", json_data: Dict[str, Any
         return chunker.chunk(text, json_data=json_data, **kwargs)
     else:
         return chunker.chunk(text, **kwargs)
+
+
+def chunk_text_with_span(text: str, strategy: str = "fixed_size", json_data: Dict[str, Any] | None = None, **kwargs) -> List[Dict[str, Any]]:
+    """
+    分割文本並返回帶span信息的結果
+    
+    Returns:
+        List[Dict]: 包含content、span、chunk_id、metadata的chunk列表
+    """
+    chunker = get_chunking_strategy(strategy)
+    
+    # 參數映射：將通用的chunk_size映射到策略特定的參數名
+    if strategy == "sliding_window" and "chunk_size" in kwargs:
+        kwargs["window_size"] = kwargs.pop("chunk_size")
+    
+    # 檢查策略是否支持span功能
+    if hasattr(chunker, 'chunk_with_span'):
+        # 如果使用結構化層次分割，傳遞JSON數據
+        if strategy == "structured_hierarchical" and json_data:
+            return chunker.chunk_with_span(text, json_data=json_data, **kwargs)
+        else:
+            return chunker.chunk_with_span(text, **kwargs)
+    else:
+        # 回退到基本分割，然後手動計算span
+        chunks = chunk_text(text, strategy, json_data, **kwargs)
+        return _generate_chunk_spans(chunks, text, strategy, json_data, **kwargs)
+
+
+def _generate_chunk_spans(chunks: List[str], text: str, strategy: str, json_data: Dict[str, Any] = None, **kwargs) -> List[Dict[str, Any]]:
+    """
+    為chunks生成span信息，並添加對應的法條JSON span信息
+    
+    Args:
+        chunks: 分塊後的文本列表
+        text: 原始文本
+        strategy: 分割策略
+        json_data: 法條JSON數據
+        **kwargs: 其他參數
+    
+    Returns:
+        List[Dict]: 包含span信息的chunk列表
+    """
+    result = []
+    current_pos = 0
+    
+    # 提取所有法條的span信息
+    law_spans = []
+    if json_data and "laws" in json_data:
+        for law in json_data["laws"]:
+            for chapter in law.get("chapters", []):
+                for section in chapter.get("sections", []):
+                    for article in section.get("articles", []):
+                        if "metadata" in article and "spans" in article["metadata"]:
+                            for span in article["metadata"]["spans"]:
+                                law_spans.append({
+                                    "start_char": span["start_char"],
+                                    "end_char": span["end_char"],
+                                    "text": span["text"],
+                                    "article_id": article["metadata"]["id"],
+                                    "article_name": article.get("article", ""),
+                                    "chapter_name": chapter.get("chapter", ""),
+                                    "section_name": section.get("section", "")
+                                })
+    
+    for i, chunk in enumerate(chunks):
+        # 對於hierarchical策略，使用更準確的span計算
+        if strategy == "hierarchical":
+            # 使用累積位置計算
+            if i == 0:
+                start_pos = 0
+            else:
+                # 基於前一個chunk的位置計算當前位置
+                prev_chunk = chunks[i-1]
+                prev_start = current_pos
+                # 在文檔中查找當前chunk的位置，從前一個chunk結束位置開始
+                start_pos = text.find(chunk, prev_start)
+                if start_pos == -1:
+                    # 如果找不到，嘗試在整個文檔中查找
+                    start_pos = text.find(chunk)
+                    if start_pos == -1:
+                        # 如果還是找不到，使用累積位置
+                        start_pos = current_pos
+        else:
+            # 對於其他策略，使用原來的邏輯
+            start_pos = text.find(chunk, current_pos)
+            if start_pos == -1:
+                # 如果找不到，嘗試在整個文檔中查找
+                start_pos = text.find(chunk)
+                if start_pos == -1:
+                    # 如果還是找不到，使用當前位置
+                    start_pos = current_pos
+        
+        end_pos = start_pos + len(chunk)
+        
+        # 確保不超出文檔範圍
+        if end_pos > len(text):
+            end_pos = len(text)
+        
+        # 更新current_pos，但不要超過文檔長度
+        current_pos = min(end_pos, len(text))
+        
+        # 生成chunk ID
+        chunk_id = f"{strategy}_chunk_{i+1:03d}"
+        
+        # 找到與此chunk重疊的法條spans
+        overlapping_law_spans = []
+        for law_span in law_spans:
+            law_start = law_span["start_char"]
+            law_end = law_span["end_char"]
+            
+            # 計算重疊
+            overlap_start = max(start_pos, law_start)
+            overlap_end = min(end_pos, law_end)
+            if overlap_start < overlap_end:
+                overlap_ratio = (overlap_end - overlap_start) / (end_pos - start_pos)
+                if overlap_ratio > 0.1:  # 至少10%重疊
+                    overlapping_law_spans.append({
+                        **law_span,
+                        "overlap_ratio": overlap_ratio,
+                        "overlap_start": overlap_start,
+                        "overlap_end": overlap_end
+                    })
+        
+        # 按重疊比例排序
+        overlapping_law_spans.sort(key=lambda x: x["overlap_ratio"], reverse=True)
+        
+        # 生成metadata
+        metadata = {
+            "strategy": strategy,
+            "chunk_index": i,
+            "length": len(chunk),
+            "overlapping_law_spans": overlapping_law_spans,
+            **kwargs
+        }
+        
+        result.append({
+            "content": chunk,
+            "span": {"start": start_pos, "end": end_pos},
+            "chunk_id": chunk_id,
+            "metadata": metadata
+        })
+        
+        # 更新當前位置，考慮可能的重疊
+        current_pos = max(current_pos, start_pos)
+    
+    return result

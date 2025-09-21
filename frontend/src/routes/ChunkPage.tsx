@@ -2,29 +2,31 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRag } from "../lib/ragStore";
 import { api } from "../lib/api";
+import { QASetUploader } from "../components/QASetUploader";
+import { SimpleQASetUploader } from "../components/SimpleQASetUploader";
+import { QAMappingDetails } from "../components/QAMappingDetails";
+
+// 擴展Window接口以包含Bootstrap
+declare global {
+  interface Window {
+    bootstrap: any;
+  }
+}
 
 // 分塊策略類型定義
 type ChunkStrategy =
   | "fixed_size"
-  | "hierarchical"
   | "rcts_hierarchical"
   | "structured_hierarchical"
+  | "hybrid"
   | "semantic"
-  | "sliding_window"
-  | "llm_semantic"
-  | "hybrid";
+  | "llm_semantic";
 
 // 策略參數接口
 interface ChunkParams {
   fixed_size: {
     chunk_size: number;
     overlap: number;
-  };
-  hierarchical: {
-    max_chunk_size: number;
-    min_chunk_size: number;
-    overlap: number;
-    level_depth: number;
   };
   rcts_hierarchical: {
     max_chunk_size: number;
@@ -36,32 +38,24 @@ interface ChunkParams {
     overlap_ratio: number;
     chunk_by: "chapter" | "section" | "article" | "item";
   };
+  hybrid: {
+    primary_size: number;
+    secondary_size: number;
+    overlap: number;
+    switch_threshold: number;
+  };
   semantic: {
-    max_chunk_size: number;
+    target_size: number;
     similarity_threshold: number;
     overlap: number;
     context_window: number;
   };
-  sliding_window: {
-    window_size: number;
-    step_size: number;
-    overlap_ratio: number;
-    boundary_aware: boolean;
-    min_chunk_size: number;
-    max_chunk_size: number;
-    preserve_sentences: boolean;
-  };
   llm_semantic: {
-    max_chunk_size: number;
-    semantic_threshold: number;
+    target_size: number;
+    similarity_threshold: number;
     overlap: number;
-    context_window: number;
-  };
-  hybrid: {
-    primary_size: number;
-    secondary_size: number;
-    overlap_ratio: number;
-    switch_threshold: number;
+    model: string;
+    temperature: number;
   };
 }
 
@@ -85,41 +79,6 @@ const strategyInfo = {
         max: 200,
         default: 50,
         unit: "字符",
-      },
-    },
-  },
-  hierarchical: {
-    name: "層次分割",
-    description: "根據文檔結構（標題、段落等）進行層次化分割，保持語義完整性。",
-    metrics: ["分塊數量", "層次深度", "結構保持度", "語義連貫性"],
-    params: {
-      max_chunk_size: {
-        label: "最大分塊大小",
-        min: 200,
-        max: 3000,
-        default: 1000,
-        unit: "字符",
-      },
-      min_chunk_size: {
-        label: "最小分塊大小",
-        min: 50,
-        max: 500,
-        default: 200,
-        unit: "字符",
-      },
-      overlap: {
-        label: "重疊大小",
-        min: 0,
-        max: 200,
-        default: 50,
-        unit: "字符",
-      },
-      level_depth: {
-        label: "層次深度",
-        min: 1,
-        max: 5,
-        default: 3,
-        unit: "層",
       },
     },
   },
@@ -185,77 +144,23 @@ const strategyInfo = {
       },
     },
   },
-  sliding_window: {
-    name: "滑動視窗分割",
-    description:
-      "使用固定大小的滑動視窗進行分割，支援邊界感知和重疊控制，確保內容的連續性。",
-    metrics: ["分塊數量", "視窗覆蓋率", "重疊率", "內容連續性", "邊界保持度"],
+  llm_semantic: {
+    name: "LLM輔助語義分割",
+    description: "使用大語言模型進行智能語義分割，提供最優的分塊策略。",
+    metrics: ["語義準確性", "上下文保持", "分塊質量", "模型性能"],
     params: {
-      window_size: {
-        label: "視窗大小",
+      target_size: {
+        label: "目標大小",
         min: 200,
         max: 1500,
         default: 500,
         unit: "字符",
       },
-      step_size: {
-        label: "步長",
-        min: 50,
-        max: 500,
-        default: 250,
-        unit: "字符",
-      },
-      overlap_ratio: {
-        label: "重疊比例",
-        min: 0,
-        max: 0.5,
-        default: 0.1,
-        unit: "比例",
-        step: 0.05,
-      },
-      boundary_aware: {
-        label: "邊界感知",
-        type: "boolean",
-        default: true,
-      },
-      min_chunk_size: {
-        label: "最小分塊大小",
-        min: 50,
-        max: 500,
-        default: 100,
-        unit: "字符",
-      },
-      max_chunk_size: {
-        label: "最大分塊大小",
-        min: 500,
-        max: 2000,
-        default: 1000,
-        unit: "字符",
-      },
-      preserve_sentences: {
-        label: "保持句子完整性",
-        type: "boolean",
-        default: true,
-      },
-    },
-  },
-  llm_semantic: {
-    name: "LLM輔助語義分割",
-    description: "結合LLM的語義理解能力進行智能分割，確保語義連貫性。",
-    metrics: ["分塊數量", "語義連貫性", "LLM準確性", "分割點質量"],
-    params: {
-      max_chunk_size: {
-        label: "最大分塊大小",
-        min: 300,
-        max: 1200,
-        default: 500,
-        unit: "字符",
-      },
-      semantic_threshold: {
-        label: "語義閾值",
+      similarity_threshold: {
+        label: "相似度閾值",
         min: 0.1,
         max: 0.9,
-        default: 0.7,
+        default: 0.8,
         unit: "分數",
       },
       overlap: {
@@ -265,12 +170,24 @@ const strategyInfo = {
         default: 50,
         unit: "字符",
       },
-      context_window: {
-        label: "上下文窗口",
-        min: 50,
-        max: 300,
-        default: 100,
-        unit: "字符",
+      model: {
+        label: "模型",
+        type: "select",
+        options: [
+          { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
+          { value: "gpt-4", label: "GPT-4" },
+          { value: "claude-3-sonnet", label: "Claude 3 Sonnet" },
+          { value: "claude-3-opus", label: "Claude 3 Opus" },
+        ],
+        default: "gpt-3.5-turbo",
+      },
+      temperature: {
+        label: "溫度",
+        min: 0,
+        max: 2,
+        default: 0.7,
+        unit: "分數",
+        step: 0.1,
       },
     },
   },
@@ -311,14 +228,14 @@ const strategyInfo = {
   },
   semantic: {
     name: "語義分割",
-    description: "基於語義相似性進行智能分割，確保每個分塊在語義上保持連貫性。",
-    metrics: ["分塊數量", "語義連貫性", "相似度分佈", "分割點質量"],
+    description: "基於語義相似度進行分割，保持語義連貫性。",
+    metrics: ["語義連貫性", "相似度", "分塊質量"],
     params: {
-      max_chunk_size: {
-        label: "最大分塊大小",
-        min: 300,
-        max: 1200,
-        default: 600,
+      target_size: {
+        label: "目標大小",
+        min: 200,
+        max: 1500,
+        default: 500,
         unit: "字符",
       },
       similarity_threshold: {
@@ -337,9 +254,9 @@ const strategyInfo = {
       },
       context_window: {
         label: "上下文窗口",
-        min: 50,
-        max: 300,
-        default: 100,
+        min: 100,
+        max: 1000,
+        default: 200,
         unit: "字符",
       },
     },
@@ -387,71 +304,33 @@ interface EvaluationTask {
 export function ChunkPage() {
   const nav = useNavigate();
   const { canChunk, chunk, docId, chunkMeta } = useRag();
-  const [selectedStrategy, setSelectedStrategy] =
-    useState<ChunkStrategy>("fixed_size");
 
-  // 當策略變化時，更新評測配置
-  useEffect(() => {
-    setEvaluationConfig((prev) => ({
-      ...prev,
-      strategy: selectedStrategy,
-    }));
-  }, [selectedStrategy]);
-  const [params, setParams] = useState<ChunkParams>({
-    fixed_size: { chunk_size: 500, overlap: 50 },
-    hierarchical: {
-      max_chunk_size: 1000,
-      min_chunk_size: 200,
-      overlap: 50,
-      level_depth: 3,
-    },
-    rcts_hierarchical: {
-      max_chunk_size: 1000,
-      overlap_ratio: 0.1,
-      preserve_structure: true,
-    },
-    structured_hierarchical: {
-      max_chunk_size: 1000,
-      overlap_ratio: 0.1,
-      chunk_by: "article",
-    },
-    semantic: {
-      max_chunk_size: 600,
-      similarity_threshold: 0.6,
-      overlap: 50,
-      context_window: 100,
-    },
-    sliding_window: {
-      window_size: 500,
-      step_size: 250,
-      overlap_ratio: 0.1,
-      boundary_aware: true,
-      min_chunk_size: 100,
-      max_chunk_size: 1000,
-      preserve_sentences: true,
-    },
-    llm_semantic: {
-      max_chunk_size: 500,
-      semantic_threshold: 0.7,
-      overlap: 50,
-      context_window: 100,
-    },
-    hybrid: {
-      primary_size: 600,
-      secondary_size: 400,
-      overlap_ratio: 0.1,
-      switch_threshold: 0.5,
-    },
-  });
-  const [busy, setBusy] = useState(false);
-  const [chunkResults, setChunkResults] = useState<any>(null);
+  // 步驟1: QA Set上傳狀態
+  const [uploadedQASetFile, setUploadedQASetFile] = useState<File | null>(null);
 
-  // 評測相關狀態
-  const [showEvaluation, setShowEvaluation] = useState(false);
+  // 步驟2: 多種分塊組合配置狀態
+  const [selectedStrategies, setSelectedStrategies] = useState<ChunkStrategy[]>(
+    ["fixed_size"]
+  );
+  const [chunkSizes, setChunkSizes] = useState<number[]>([300, 500, 800]);
+  const [overlapRatios, setOverlapRatios] = useState<number[]>([0.0, 0.1, 0.2]);
+  const [isChunking, setIsChunking] = useState(false);
+  const [chunkingError, setChunkingError] = useState<string | null>(null);
+  const [chunkingProgress, setChunkingProgress] = useState(0);
+  const [chunkingTaskId, setChunkingTaskId] = useState<string | null>(null);
+
+  // 步驟3: QA映射狀態
+  const [qaMappingResult, setQAMappingResult] = useState<any>(null);
+  const [chunkingCompleted, setChunkingCompleted] = useState(false); // 新增：分塊處理完成狀態
+  const [qaMappingTaskId, setQAMappingTaskId] = useState<string | null>(null);
+  const [qaMappingProgress, setQAMappingProgress] = useState(0);
+  const [qaMappingError, setQAMappingError] = useState<string | null>(null);
+
+  // 步驟4: 評測狀態
   const [evaluationConfig, setEvaluationConfig] = useState({
     chunk_sizes: [300, 500, 800],
     overlap_ratios: [0.0, 0.1, 0.2],
-    strategy: "fixed_size", // 新增：分割策略
+    strategy: "fixed_size",
     test_queries: [
       "著作權的定義是什麼？",
       "什麼情況下可以合理使用他人作品？",
@@ -460,22 +339,6 @@ export function ChunkPage() {
       "如何申請著作權登記？",
     ],
     k_values: [1, 3, 5, 10],
-    // 策略特定參數選項 - 預設包含所有排列組合
-    chunk_by_options: ["article", "item", "section", "chapter"], // 結構化層次分割
-    preserve_structure_options: [true, false], // RCTS層次分割
-    level_depth_options: [2, 3, 4], // 層次分割
-    similarity_threshold_options: [0.5, 0.6, 0.7], // 語義分割
-    semantic_threshold_options: [0.6, 0.7, 0.8], // LLM語義分割
-    switch_threshold_options: [0.3, 0.5, 0.7], // 混合分割
-    min_chunk_size_options: [100, 200, 300], // 層次分割
-    context_window_options: [50, 100, 150], // 語義分割
-    step_size_options: [200, 250, 300], // 滑動視窗
-    window_size_options: [400, 500, 600, 800], // 滑動視窗
-    boundary_aware_options: [true, false], // 滑動視窗
-    preserve_sentences_options: [true, false], // 滑動視窗
-    min_chunk_size_options_sw: [50, 100, 150], // 滑動視窗專用
-    max_chunk_size_options_sw: [800, 1000, 1200], // 滑動視窗專用
-    secondary_size_options: [300, 400, 500], // 混合分割
   });
   const [currentTask, setCurrentTask] = useState<EvaluationTask | null>(null);
   const [evaluationResults, setEvaluationResults] = useState<
@@ -487,12 +350,6 @@ export function ChunkPage() {
   const [showAllResults, setShowAllResults] = useState(false);
   const [progressInterval, setProgressInterval] =
     useState<NodeJS.Timeout | null>(null);
-
-  // 問題生成相關狀態
-  const [generatedQuestions, setGeneratedQuestions] = useState<any[]>([]);
-  const [questionLoading, setQuestionLoading] = useState(false);
-  const [questionError, setQuestionError] = useState<string | null>(null);
-  const [numQuestions, setNumQuestions] = useState(10);
 
   // 輪詢進度更新的函數
   const pollProgress = async (taskId: string) => {
@@ -556,188 +413,298 @@ export function ChunkPage() {
 
     return estimatedMinutes > 0 ? estimatedMinutes.toString() : "< 1";
   };
-  const [questionTypes, setQuestionTypes] = useState<string[]>([
-    "案例應用",
-    "情境分析",
-    "實務處理",
-    "法律後果",
-    "合規判斷",
-  ]);
-  const [difficultyLevels, setDifficultyLevels] = useState<string[]>([
-    "基礎",
-    "進階",
-    "應用",
-  ]);
 
-  const handleParamChange = (
-    strategy: ChunkStrategy,
-    param: string,
-    value: number | boolean | string | string[]
-  ) => {
-    setParams((prev) => ({
-      ...prev,
-      [strategy]: {
-        ...prev[strategy],
-        [param]: value,
-      },
-    }));
+  // 步驟1: 處理QA Set文件上傳
+  const handleQASetFileUploaded = (file: File) => {
+    setUploadedQASetFile(file);
   };
 
-  const handleRunChunker = async () => {
+  // 步驟2: 處理多種分塊組合配置
+  const handleStrategyToggle = (strategy: ChunkStrategy) => {
+    setSelectedStrategies((prev) =>
+      prev.includes(strategy)
+        ? prev.filter((s) => s !== strategy)
+        : [...prev, strategy]
+    );
+  };
+
+  const handleChunkSizeToggle = (size: number) => {
+    setChunkSizes((prev) =>
+      prev.includes(size) ? prev.filter((s) => s !== size) : [...prev, size]
+    );
+  };
+
+  const handleOverlapRatioToggle = (ratio: number) => {
+    setOverlapRatios((prev) =>
+      prev.includes(ratio) ? prev.filter((r) => r !== ratio) : [...prev, ratio]
+    );
+  };
+
+  // 分塊結果狀態
+  const [chunkingResults, setChunkingResults] = useState<any[]>([]);
+
+  // 分塊顯示狀態
+  const [showAllChunks, setShowAllChunks] = useState(false);
+  const [chunkSearchTerm, setChunkSearchTerm] = useState("");
+  const [chunkFilterLength, setChunkFilterLength] = useState<{
+    min: number;
+    max: number;
+  }>({ min: 0, max: 10000 });
+
+  // 確保Bootstrap accordion正確初始化
+  useEffect(() => {
+    if (chunkingResults.length > 0 && typeof window !== "undefined") {
+      // 等待DOM更新後重新初始化Bootstrap組件
+      const timer = setTimeout(() => {
+        // 檢查Bootstrap是否可用
+        if (window.bootstrap) {
+          // 重新初始化所有accordion
+          const accordions = document.querySelectorAll(".accordion");
+          accordions.forEach((accordion) => {
+            const bsAccordion = new window.bootstrap.Collapse(accordion, {
+              toggle: false,
+            });
+          });
+        }
+      }, 100);
+
+      return () => clearTimeout(timer);
+    }
+  }, [chunkingResults, showAllChunks]);
+
+  // 步驟2: 執行多種分塊組合操作
+  const handleRunMultipleChunking = async () => {
     if (!canChunk) return;
-    setBusy(true);
+
+    setIsChunking(true);
+    setChunkingError(null);
+    setChunkingResults([]);
+    setChunkingProgress(0);
+
     try {
-      // 暫時使用現有的chunk API，後續需要擴展支持不同策略
-      const currentParams = params[selectedStrategy];
+      // 調用新的批量分塊API
+      const response = await api.startMultipleChunking({
+        doc_id: docId!,
+        strategies: selectedStrategies,
+        chunk_sizes: chunkSizes,
+        overlap_ratios: overlapRatios,
+      });
 
-      // 根據策略獲取適當的chunk size
-      let chunkSize: number;
-      switch (selectedStrategy) {
-        case "fixed_size":
-          chunkSize = (currentParams as ChunkParams["fixed_size"]).chunk_size;
-          break;
-        case "hierarchical":
-          chunkSize = (currentParams as ChunkParams["hierarchical"])
-            .max_chunk_size;
-          break;
-        case "rcts_hierarchical":
-          chunkSize = (currentParams as ChunkParams["rcts_hierarchical"])
-            .max_chunk_size;
-          break;
-        case "structured_hierarchical":
-          chunkSize = (currentParams as ChunkParams["structured_hierarchical"])
-            .max_chunk_size;
-          break;
-        case "semantic":
-          chunkSize = (currentParams as ChunkParams["semantic"]).max_chunk_size;
-          break;
-        case "sliding_window":
-          chunkSize = (currentParams as ChunkParams["sliding_window"])
-            .window_size;
-          break;
-        case "llm_semantic":
-          chunkSize = (currentParams as ChunkParams["llm_semantic"])
-            .max_chunk_size;
-          break;
-        case "hybrid":
-          chunkSize = (currentParams as ChunkParams["hybrid"]).primary_size;
-          break;
-        default:
-          chunkSize = 500;
+      setChunkingTaskId(response.task_id);
+
+      // 開始輪詢進度
+      const pollProgress = async () => {
+        try {
+          const statusResponse = await api.getChunkingStatus(response.task_id);
+          setChunkingProgress(statusResponse.progress * 100);
+
+          if (statusResponse.status === "completed") {
+            const resultsResponse = await api.getChunkingResults(
+              response.task_id
+            );
+            setChunkingResults(resultsResponse.results);
+            // 注意：不自動設置chunkingCompleted，需要用戶手動點擊「繼續到QA映射」
+            setIsChunking(false);
+          } else if (statusResponse.status === "failed") {
+            setChunkingError(statusResponse.error_message || "分塊操作失敗");
+            setIsChunking(false);
+          } else {
+            // 繼續輪詢
+            setTimeout(pollProgress, 1000);
+          }
+        } catch (error) {
+          console.error("輪詢分塊進度失敗:", error);
+          setChunkingError("獲取分塊進度失敗");
+          setIsChunking(false);
+        }
+      };
+
+      // 開始輪詢
+      setTimeout(pollProgress, 1000);
+    } catch (error) {
+      console.error("分塊操作失敗:", error);
+      setChunkingError(error instanceof Error ? error.message : "分塊操作失敗");
+      setIsChunking(false);
+    }
+  };
+
+  // 重新進行分塊
+  const handleRetryChunking = () => {
+    setChunkingResults([]);
+    setChunkingCompleted(false); // 重置分塊完成狀態
+    setQAMappingResult(null);
+    setQAMappingTaskId(null); // 重置QA映射任務ID
+    setQAMappingProgress(0); // 重置QA映射進度
+    setQAMappingError(null); // 重置QA映射錯誤
+    setEvaluationResults([]);
+    setCurrentTask(null);
+    setShowAllChunks(false);
+    setChunkSearchTerm("");
+    setChunkFilterLength({ min: 0, max: 10000 });
+    setChunkingProgress(0);
+    setChunkingTaskId(null);
+  };
+
+  // 過濾和搜索分塊
+  const getFilteredChunks = () => {
+    if (!chunkingResults.length) return [];
+
+    const allChunks = chunkingResults.flatMap((result, resultIndex) => {
+      // 優先使用chunks_with_span，如果沒有則回退到chunks
+      const chunksData =
+        result.chunks_with_span || result.all_chunks || result.chunks || [];
+
+      return chunksData.map((chunkData: any, chunkIndex: number) => {
+        // 如果chunkData是帶span信息的對象
+        if (typeof chunkData === "object" && chunkData.content) {
+          return {
+            chunk: chunkData.content,
+            chunkId: chunkData.chunk_id,
+            span: chunkData.span,
+            metadata: chunkData.metadata,
+            resultIndex,
+            chunkIndex,
+            strategy: result.strategy,
+            config: result.config,
+          };
+        } else {
+          // 如果chunkData是字符串（舊格式）
+          return {
+            chunk: chunkData,
+            chunkId: `${result.strategy}_chunk_${chunkIndex}`,
+            span: null,
+            metadata: null,
+            resultIndex,
+            chunkIndex,
+            strategy: result.strategy,
+            config: result.config,
+          };
+        }
+      });
+    });
+
+    return allChunks.filter(({ chunk }) => {
+      // 長度過濾
+      const chunkLength = chunk.length;
+      if (
+        chunkLength < chunkFilterLength.min ||
+        chunkLength > chunkFilterLength.max
+      ) {
+        return false;
       }
 
-      // 構建策略特定的參數
-      let strategyParams: any = { strategy: selectedStrategy };
-
-      switch (selectedStrategy) {
-        case "hierarchical":
-          strategyParams.hierarchical_params = {
-            min_chunk_size: (currentParams as ChunkParams["hierarchical"])
-              .min_chunk_size,
-            level_depth: (currentParams as ChunkParams["hierarchical"])
-              .level_depth,
-          };
-          break;
-        case "rcts_hierarchical":
-          strategyParams.rcts_hierarchical_params = {
-            overlap_ratio: (currentParams as ChunkParams["rcts_hierarchical"])
-              .overlap_ratio,
-            preserve_structure: (
-              currentParams as ChunkParams["rcts_hierarchical"]
-            ).preserve_structure,
-          };
-          break;
-        case "structured_hierarchical":
-          strategyParams.structured_hierarchical_params = {
-            overlap_ratio: (
-              currentParams as ChunkParams["structured_hierarchical"]
-            ).overlap_ratio,
-            chunk_by: (currentParams as ChunkParams["structured_hierarchical"])
-              .chunk_by,
-          };
-          break;
-        case "semantic":
-          strategyParams.semantic_params = {
-            similarity_threshold: (currentParams as ChunkParams["semantic"])
-              .similarity_threshold,
-            context_window: (currentParams as ChunkParams["semantic"])
-              .context_window,
-          };
-          break;
-        case "sliding_window":
-          strategyParams.sliding_window_params = {
-            step_size: (currentParams as ChunkParams["sliding_window"])
-              .step_size,
-            overlap_ratio: (currentParams as ChunkParams["sliding_window"])
-              .overlap_ratio,
-            boundary_aware: (currentParams as ChunkParams["sliding_window"])
-              .boundary_aware,
-            min_chunk_size: (currentParams as ChunkParams["sliding_window"])
-              .min_chunk_size,
-            max_chunk_size: (currentParams as ChunkParams["sliding_window"])
-              .max_chunk_size,
-            preserve_sentences: (currentParams as ChunkParams["sliding_window"])
-              .preserve_sentences,
-          };
-          break;
-        case "llm_semantic":
-          strategyParams.llm_semantic_params = {
-            semantic_threshold: (currentParams as ChunkParams["llm_semantic"])
-              .semantic_threshold,
-            context_window: (currentParams as ChunkParams["llm_semantic"])
-              .context_window,
-          };
-          break;
-        case "hybrid":
-          strategyParams.hybrid_params = {
-            secondary_size: (currentParams as ChunkParams["hybrid"])
-              .secondary_size,
-            overlap_ratio: (currentParams as ChunkParams["hybrid"])
-              .overlap_ratio,
-            switch_threshold: (currentParams as ChunkParams["hybrid"])
-              .switch_threshold,
-          };
-          break;
+      // 搜索過濾
+      if (chunkSearchTerm) {
+        return chunk.toLowerCase().includes(chunkSearchTerm.toLowerCase());
       }
 
-      // 獲取overlap值，根據策略類型處理
-      let overlapValue: number;
-      if ("overlap" in currentParams) {
-        overlapValue = currentParams.overlap;
-      } else if ("overlap_ratio" in currentParams) {
-        // 對於使用overlap_ratio的策略，計算實際overlap值
-        overlapValue = Math.round(chunkSize * currentParams.overlap_ratio);
-      } else {
-        // 默認值
-        overlapValue = 50;
+      return true;
+    });
+  };
+
+  // 步驟3: 處理QA映射完成的回調函數
+  const handleQAMappingComplete = (result: any) => {
+    setQAMappingResult(result);
+  };
+
+  // 步驟3: 開始QA映射
+  const handleStartQAMapping = async () => {
+    if (!uploadedQASetFile || !chunkingResults.length) {
+      setQAMappingError("請先完成QA set上傳和分塊處理");
+      return;
+    }
+
+    try {
+      setQAMappingError(null);
+      setQAMappingProgress(0);
+
+      // 讀取QA set文件內容
+      const qaSetContent = await uploadedQASetFile.text();
+      const qaSet = JSON.parse(qaSetContent);
+
+      // 驗證QA set格式
+      if (!Array.isArray(qaSet)) {
+        setQAMappingError("QA set文件格式錯誤：應該是一個包含問題答案對的數組");
+        return;
       }
 
-      const result = await chunk(
-        chunkSize,
-        overlapValue,
-        selectedStrategy,
-        strategyParams
+      // 檢查是否有基本的QA結構
+      if (qaSet.length === 0) {
+        setQAMappingError("QA set文件為空");
+        return;
+      }
+
+      // 檢查第一個項目是否有必要的字段
+      const firstItem = qaSet[0];
+      if (!firstItem.query || !firstItem.label) {
+        setQAMappingError("QA set文件格式錯誤：缺少必要的字段（query, label）");
+        return;
+      }
+
+      // 添加調試信息
+      console.log("QA映射請求數據:");
+      console.log("- doc_id:", docId);
+      console.log("- qa_set長度:", qaSet.length);
+      console.log("- qa_set結構:", {
+        isArray: Array.isArray(qaSet),
+        firstItemKeys: Object.keys(firstItem),
+        sampleItem: {
+          query: firstItem.query?.substring(0, 50) + "...",
+          label: firstItem.label,
+          hasSpans: !!firstItem.spans,
+        },
+      });
+      console.log("- chunking_results長度:", chunkingResults.length);
+      console.log(
+        "- chunking_results結構:",
+        chunkingResults.map((r) => ({
+          strategy: r.strategy,
+          has_chunks_with_span: !!r.chunks_with_span,
+          chunks_with_span_length: r.chunks_with_span?.length || 0,
+        }))
       );
 
-      // 使用真實的chunking結果
-      setChunkResults({
-        strategy: selectedStrategy,
-        metrics: {
-          chunk_count: result.num_chunks,
-          avg_length: result.metrics.avg_length,
-          length_variance: result.metrics.length_variance,
-          overlap_rate: result.metrics.overlap_rate,
-          min_length: result.metrics.min_length,
-          max_length: result.metrics.max_length,
-        },
-        chunks: result.sample || [],
-        all_chunks: result.all_chunks || [],
-        full_chunks: result.num_chunks,
-        chunk_size: result.chunk_size,
-        overlap: result.overlap,
+      // 啟動QA映射任務
+      const response = await api.startQAMapping({
+        doc_id: docId!,
+        qa_set: qaSet,
+        chunking_results: chunkingResults,
+        iou_threshold: 0.5,
       });
-    } finally {
-      setBusy(false);
+
+      setQAMappingTaskId(response.task_id);
+
+      // 開始輪詢進度
+      const pollProgress = async () => {
+        try {
+          const statusResponse = await api.getQAMappingStatus(response.task_id);
+          setQAMappingProgress(statusResponse.progress * 100);
+
+          if (statusResponse.status === "completed") {
+            const resultResponse = await api.getQAMappingResult(
+              response.task_id
+            );
+            setQAMappingResult(resultResponse);
+            setQAMappingTaskId(null);
+          } else if (statusResponse.status === "failed") {
+            setQAMappingError(statusResponse.error || "QA映射失敗");
+            setQAMappingTaskId(null);
+          } else {
+            // 繼續輪詢
+            setTimeout(pollProgress, 1000);
+          }
+        } catch (error) {
+          console.error("輪詢QA映射進度失敗:", error);
+          setQAMappingError("獲取QA映射進度失敗");
+          setQAMappingTaskId(null);
+        }
+      };
+
+      // 開始輪詢
+      setTimeout(pollProgress, 1000);
+    } catch (error) {
+      console.error("QA映射失敗:", error);
+      setQAMappingError(error instanceof Error ? error.message : "QA映射失敗");
     }
   };
 
@@ -748,15 +715,34 @@ export function ChunkPage() {
       return;
     }
 
+    if (!qaMappingResult) {
+      setEvaluationError("請先完成QA Set映射");
+      return;
+    }
+
+    if (chunkingResults.length === 0) {
+      setEvaluationError("請先完成多種分塊組合處理");
+      return;
+    }
+
     setEvaluationLoading(true);
     setEvaluationError(null);
     setEvaluationResults([]);
     setEvaluationComparison(null);
 
     try {
-      const response = await api.startFixedSizeEvaluation({
+      // 使用QA set中的問題進行評測
+      const testQueries = qaMappingResult.original_qa_set.map(
+        (item: any) => item.query
+      );
+
+      // 使用新的策略評估API，基於已完成的分塊結果
+      const response = await api.startStrategyEvaluation({
         doc_id: docId,
-        ...evaluationConfig,
+        chunking_results: chunkingResults,
+        qa_mapping_result: qaMappingResult,
+        test_queries: testQueries,
+        k_values: [1, 3, 5, 10],
       });
 
       setCurrentTask({
@@ -792,49 +778,6 @@ export function ChunkPage() {
       setEvaluationComparison(comparisonResponse);
     } catch (err) {
       setEvaluationError(`載入結果失敗: ${err}`);
-    }
-  };
-
-  const generateQuestions = async () => {
-    if (!docId) {
-      setQuestionError("請先上傳文檔");
-      return;
-    }
-
-    setQuestionLoading(true);
-    setQuestionError(null);
-    setGeneratedQuestions([]);
-
-    try {
-      const response = await api.generateQuestions({
-        doc_id: docId,
-        num_questions: numQuestions,
-        question_types: questionTypes,
-        difficulty_levels: difficultyLevels,
-      });
-
-      console.log("問題生成響應:", response); // 調試用
-
-      if (response.success) {
-        console.log("成功生成問題:", response.result.questions.length, "個"); // 調試用
-        setGeneratedQuestions(response.result.questions);
-        // 將生成的問題添加到測試查詢中
-        const newQueries = response.result.questions.map(
-          (q: any) => q.question
-        );
-        setEvaluationConfig((prev) => ({
-          ...prev,
-          test_queries: [...prev.test_queries, ...newQueries],
-        }));
-      } else {
-        console.log("響應顯示失敗:", response); // 調試用
-        setQuestionError("問題生成失敗");
-      }
-    } catch (err) {
-      console.error("問題生成異常:", err); // 調試用
-      setQuestionError(`問題生成失敗: ${err}`);
-    } finally {
-      setQuestionLoading(false);
     }
   };
 
@@ -900,35 +843,6 @@ export function ChunkPage() {
     URL.revokeObjectURL(url);
   };
 
-  const exportQuestions = () => {
-    if (!generatedQuestions.length) return;
-
-    const report = {
-      generation_info: {
-        doc_id: docId,
-        num_questions: generatedQuestions.length,
-        question_types: questionTypes,
-        difficulty_levels: difficultyLevels,
-        generated_at: new Date().toISOString(),
-      },
-      questions: generatedQuestions,
-    };
-
-    const blob = new Blob([JSON.stringify(report, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `legal-questions-${
-      new Date().toISOString().split("T")[0]
-    }.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   // 輪詢任務狀態
   useEffect(() => {
     if (
@@ -956,1797 +870,1310 @@ export function ChunkPage() {
   }, [currentTask]);
 
   return (
-    <div className="row g-3">
-      {/* 左側：策略選擇和參數配置 */}
-      <div className="col-12 col-md-6">
-        <div className="card h-100">
-          <div className="card-body">
-            <h2 className="h5 mb-3">分塊策略配置</h2>
-
-            {!canChunk && (
-              <div className="alert alert-warning" role="alert">
-                請先上傳文檔後再進行分塊操作。
-              </div>
-            )}
-
-            {/* 策略選擇 */}
-            <div className="mb-4">
-              <label className="form-label fw-bold">選擇分塊策略</label>
-              <div className="row g-2">
-                {Object.entries(strategyInfo).map(([key, info]) => (
-                  <div key={key} className="col-6">
-                    <div className="form-check">
-                      <input
-                        className="form-check-input"
-                        type="radio"
-                        name="strategy"
-                        id={`strategy-${key}`}
-                        checked={selectedStrategy === key}
-                        onChange={() =>
-                          setSelectedStrategy(key as ChunkStrategy)
-                        }
-                      />
-                      <label
-                        className="form-check-label"
-                        htmlFor={`strategy-${key}`}
-                      >
-                        {info.name}
-                      </label>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* 評測功能切換 */}
-            <div className="mb-4">
-              <div className="d-flex justify-content-between align-items-center">
-                <h6 className="mb-0">分割策略評測</h6>
-                <div className="form-check form-switch">
-                  <input
-                    className="form-check-input"
-                    type="checkbox"
-                    id="evaluationSwitch"
-                    checked={showEvaluation}
-                    onChange={(e) => setShowEvaluation(e.target.checked)}
-                  />
-                  <label
-                    className="form-check-label"
-                    htmlFor="evaluationSwitch"
-                  >
-                    啟用評測模式
-                  </label>
-                </div>
-              </div>
-              <small className="text-muted">
-                啟用後可以測試不同chunk size和overlap比例的組合效果
-              </small>
-            </div>
-
-            {/* 策略描述 */}
-            <div className="mb-4">
-              <h6 className="text-primary">
-                {strategyInfo[selectedStrategy].name}
-              </h6>
-              <p className="text-muted small mb-2">
-                {strategyInfo[selectedStrategy].description}
-              </p>
-              <div className="small">
-                <strong>評估指標：</strong>
-                <span className="text-muted">
-                  {strategyInfo[selectedStrategy].metrics.join("、")}
-                </span>
-              </div>
-            </div>
-
-            {/* 參數配置 */}
-            <div className="mb-4">
-              <h6>參數設置</h6>
-              <div className="row g-3">
-                {Object.entries(strategyInfo[selectedStrategy].params).map(
-                  ([paramKey, paramInfo]) => (
-                    <div key={paramKey} className="col-6">
-                      <label className="form-label small">
-                        {paramInfo.label}
-                        <span className="text-muted">
-                          {paramInfo.type === "boolean"
-                            ? ""
-                            : `(${paramInfo.unit})`}
-                        </span>
-                      </label>
-                      {paramInfo.type === "boolean" ? (
-                        <div className="form-check">
-                          <input
-                            className="form-check-input"
-                            type="checkbox"
-                            checked={
-                              params[selectedStrategy][
-                                paramKey as keyof ChunkParams[ChunkStrategy]
-                              ] as boolean
-                            }
-                            onChange={(e) =>
-                              handleParamChange(
-                                selectedStrategy,
-                                paramKey,
-                                e.target.checked
-                              )
-                            }
-                          />
-                          <label className="form-check-label small">
-                            {paramInfo.description || "啟用此選項"}
-                          </label>
-                        </div>
-                      ) : paramInfo.type === "select" ? (
-                        <select
-                          className="form-select form-select-sm"
-                          value={
-                            params[selectedStrategy][
-                              paramKey as keyof ChunkParams[ChunkStrategy]
-                            ] as string
-                          }
-                          onChange={(e) =>
-                            handleParamChange(
-                              selectedStrategy,
-                              paramKey,
-                              e.target.value
-                            )
-                          }
-                        >
-                          {paramInfo.options?.map((option: any) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      ) : paramInfo.type === "text" ? (
-                        <input
-                          className="form-control form-control-sm"
-                          type="text"
-                          value={
-                            Array.isArray(
-                              params[selectedStrategy][
-                                paramKey as keyof ChunkParams[ChunkStrategy]
-                              ]
-                            )
-                              ? (
-                                  params[selectedStrategy][
-                                    paramKey as keyof ChunkParams[ChunkStrategy]
-                                  ] as string[]
-                                ).join(",")
-                              : (params[selectedStrategy][
-                                  paramKey as keyof ChunkParams[ChunkStrategy]
-                                ] as string)
-                          }
-                          onChange={(e) =>
-                            handleParamChange(
-                              selectedStrategy,
-                              paramKey,
-                              e.target.value.split(",").map((s) => s.trim())
-                            )
-                          }
-                        />
-                      ) : (
-                        <>
-                          <input
-                            className="form-control form-control-sm"
-                            type="number"
-                            min={paramInfo.min}
-                            max={paramInfo.max}
-                            value={
-                              params[selectedStrategy][
-                                paramKey as keyof ChunkParams[ChunkStrategy]
-                              ] as number
-                            }
-                            onChange={(e) =>
-                              handleParamChange(
-                                selectedStrategy,
-                                paramKey,
-                                parseFloat(e.target.value) || 0
-                              )
-                            }
-                          />
-                          <div className="form-text small">
-                            範圍: {paramInfo.min} - {paramInfo.max}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )
-                )}
-              </div>
-            </div>
-
-            {/* 評測配置 */}
-            {showEvaluation && (
-              <div className="mb-4">
-                <h6 className="text-success">評測配置</h6>
-
-                {/* 問題生成 */}
-                <div className="mb-3">
-                  <label className="form-label fw-bold">生成繁體中文問題</label>
-                  <div className="row g-2 mb-2">
-                    <div className="col-6">
-                      <input
-                        type="number"
-                        className="form-control form-control-sm"
-                        placeholder="問題數量"
-                        value={numQuestions}
-                        onChange={(e) =>
-                          setNumQuestions(parseInt(e.target.value) || 10)
-                        }
-                        min="1"
-                        max="50"
-                      />
-                    </div>
-                    <div className="col-6">
-                      <button
-                        className="btn btn-success btn-sm w-100"
-                        onClick={generateQuestions}
-                        disabled={!docId || questionLoading}
-                      >
-                        {questionLoading ? (
-                          <span className="spinner-border spinner-border-sm me-1" />
-                        ) : (
-                          <i className="bi bi-question-circle me-1"></i>
-                        )}
-                        生成問題
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 問題生成錯誤顯示 */}
-                {questionError && (
-                  <div className="alert alert-danger" role="alert">
-                    {questionError}
-                  </div>
-                )}
-
-                {/* 評測參數 */}
-                <div className="mb-3">
-                  <label className="form-label fw-bold">評測參數</label>
-                  <div className="row g-2">
-                    <div className="col-6">
-                      <input
-                        type="text"
-                        className="form-control form-control-sm"
-                        placeholder="Chunk Sizes (逗號分隔)"
-                        value={evaluationConfig.chunk_sizes.join(",")}
-                        onChange={(e) => {
-                          const sizes = e.target.value
-                            .split(",")
-                            .map((s) => parseInt(s.trim()))
-                            .filter((n) => !isNaN(n));
-                          setEvaluationConfig((prev) => ({
-                            ...prev,
-                            chunk_sizes: sizes,
-                          }));
-                        }}
-                      />
-                    </div>
-                    <div className="col-6">
-                      <input
-                        type="text"
-                        className="form-control form-control-sm"
-                        placeholder="重疊比例 (逗號分隔: 0.0,0.1,0.2)"
-                        value={evaluationConfig.overlap_ratios.join(",")}
-                        onChange={(e) => {
-                          const ratios = e.target.value
-                            .split(",")
-                            .map((s) => parseFloat(s.trim()))
-                            .filter((n) => !isNaN(n));
-                          setEvaluationConfig((prev) => ({
-                            ...prev,
-                            overlap_ratios: ratios,
-                          }));
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* 策略特定參數 */}
-                {selectedStrategy === "structured_hierarchical" && (
-                  <div className="mb-3">
-                    <label className="form-label fw-bold">分割單位選項</label>
-                    <input
-                      type="text"
-                      className="form-control form-control-sm"
-                      placeholder="分割單位選項 (逗號分隔: article,item,section,chapter)"
-                      value={evaluationConfig.chunk_by_options.join(",")}
-                      onChange={(e) => {
-                        const options = e.target.value
-                          .split(",")
-                          .map((s) => s.trim())
-                          .filter((s) => s);
-                        setEvaluationConfig((prev) => ({
-                          ...prev,
-                          chunk_by_options: options,
-                        }));
-                      }}
-                    />
-                    <div className="form-text small">
-                      可選值: article(按條文分割), item(按項分割),
-                      section(按節分割), chapter(按章分割)
-                    </div>
-                  </div>
-                )}
-
-                {selectedStrategy === "rcts_hierarchical" && (
-                  <div className="mb-3">
-                    <label className="form-label fw-bold">
-                      保持層次結構選項
-                    </label>
-                    <input
-                      type="text"
-                      className="form-control form-control-sm"
-                      placeholder="保持層次結構選項 (逗號分隔: true,false)"
-                      value={evaluationConfig.preserve_structure_options.join(
-                        ","
-                      )}
-                      onChange={(e) => {
-                        const options = e.target.value
-                          .split(",")
-                          .map((s) => s.trim().toLowerCase() === "true")
-                          .filter((s) => typeof s === "boolean");
-                        setEvaluationConfig((prev) => ({
-                          ...prev,
-                          preserve_structure_options: options,
-                        }));
-                      }}
-                    />
-                    <div className="form-text small">
-                      可選值: true(啟用), false(停用)
-                    </div>
-                  </div>
-                )}
-
-                {selectedStrategy === "hierarchical" && (
-                  <div className="mb-3">
-                    <div className="row g-2">
-                      <div className="col-6">
-                        <label className="form-label small">層次深度選項</label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="層次深度 (逗號分隔: 2,3,4)"
-                          value={evaluationConfig.level_depth_options.join(",")}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseInt(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              level_depth_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label small">
-                          最小分塊大小選項
-                        </label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="最小分塊大小 (逗號分隔: 100,200,300)"
-                          value={evaluationConfig.min_chunk_size_options.join(
-                            ","
-                          )}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseInt(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              min_chunk_size_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {selectedStrategy === "semantic" && (
-                  <div className="mb-3">
-                    <div className="row g-2">
-                      <div className="col-6">
-                        <label className="form-label small">
-                          相似度閾值選項
-                        </label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="相似度閾值 (逗號分隔: 0.5,0.6,0.7)"
-                          value={evaluationConfig.similarity_threshold_options.join(
-                            ","
-                          )}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseFloat(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              similarity_threshold_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label small">
-                          上下文窗口選項
-                        </label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="上下文窗口 (逗號分隔: 50,100,150)"
-                          value={evaluationConfig.context_window_options.join(
-                            ","
-                          )}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseInt(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              context_window_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {selectedStrategy === "llm_semantic" && (
-                  <div className="mb-3">
-                    <div className="row g-2">
-                      <div className="col-6">
-                        <label className="form-label small">語義閾值選項</label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="語義閾值 (逗號分隔: 0.6,0.7,0.8)"
-                          value={evaluationConfig.semantic_threshold_options.join(
-                            ","
-                          )}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseFloat(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              semantic_threshold_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label small">
-                          上下文窗口選項
-                        </label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="上下文窗口 (逗號分隔: 50,100,150)"
-                          value={evaluationConfig.context_window_options.join(
-                            ","
-                          )}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseInt(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              context_window_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {selectedStrategy === "sliding_window" && (
-                  <div className="mb-3">
-                    <div className="row g-2">
-                      <div className="col-6">
-                        <label className="form-label small">視窗大小選項</label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="視窗大小 (逗號分隔: 400,500,600,800)"
-                          value={evaluationConfig.window_size_options.join(",")}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseInt(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              window_size_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label small">步長選項</label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="步長 (逗號分隔: 200,250,300)"
-                          value={evaluationConfig.step_size_options.join(",")}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseInt(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              step_size_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <div className="row g-2 mt-2">
-                      <div className="col-6">
-                        <label className="form-label small">
-                          最小分塊大小選項
-                        </label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="最小分塊大小 (逗號分隔: 50,100,150)"
-                          value={evaluationConfig.min_chunk_size_options_sw.join(
-                            ","
-                          )}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseInt(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              min_chunk_size_options_sw: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label small">
-                          最大分塊大小選項
-                        </label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="最大分塊大小 (逗號分隔: 800,1000,1200)"
-                          value={evaluationConfig.max_chunk_size_options_sw.join(
-                            ","
-                          )}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseInt(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              max_chunk_size_options_sw: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <div className="row g-2 mt-2">
-                      <div className="col-6">
-                        <label className="form-label small">邊界感知選項</label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="邊界感知 (逗號分隔: true,false)"
-                          value={evaluationConfig.boundary_aware_options.join(
-                            ","
-                          )}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => s.trim().toLowerCase() === "true")
-                              .filter((s) => typeof s === "boolean");
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              boundary_aware_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label small">
-                          保持句子完整性選項
-                        </label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="保持句子完整性 (逗號分隔: true,false)"
-                          value={evaluationConfig.preserve_sentences_options.join(
-                            ","
-                          )}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => s.trim().toLowerCase() === "true")
-                              .filter((s) => typeof s === "boolean");
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              preserve_sentences_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {selectedStrategy === "hybrid" && (
-                  <div className="mb-3">
-                    <div className="row g-2">
-                      <div className="col-6">
-                        <label className="form-label small">切換閾值選項</label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="切換閾值 (逗號分隔: 0.3,0.5,0.7)"
-                          value={evaluationConfig.switch_threshold_options.join(
-                            ","
-                          )}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseFloat(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              switch_threshold_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                      <div className="col-6">
-                        <label className="form-label small">次要大小選項</label>
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="次要大小 (逗號分隔: 300,400,500)"
-                          value={evaluationConfig.secondary_size_options.join(
-                            ","
-                          )}
-                          onChange={(e) => {
-                            const options = e.target.value
-                              .split(",")
-                              .map((s) => parseInt(s.trim()))
-                              .filter((n) => !isNaN(n));
-                            setEvaluationConfig((prev) => ({
-                              ...prev,
-                              secondary_size_options: options,
-                            }));
-                          }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 統一執行按鈕 */}
-            <div className="d-grid">
-              <button
-                className={`btn ${
-                  showEvaluation ? "btn-warning" : "btn-primary"
-                }`}
-                disabled={
-                  !canChunk ||
-                  busy ||
-                  evaluationLoading ||
-                  currentTask?.status === "running"
-                }
-                onClick={showEvaluation ? startEvaluation : handleRunChunker}
-              >
-                {busy || evaluationLoading ? (
-                  <>
-                    <span
-                      className="spinner-border spinner-border-sm me-2"
-                      role="status"
-                    />
-                    {showEvaluation ? "啟動評測中..." : "執行分塊中..."}
-                  </>
-                ) : (
-                  <>
-                    {showEvaluation ? (
-                      <>
-                        <i className="bi bi-graph-up me-1"></i>
-                        開始評測
-                      </>
-                    ) : (
-                      "Run Chunker"
-                    )}
-                  </>
-                )}
-              </button>
-            </div>
-
-            {docId && (
-              <p className="text-muted small mt-3 mb-0">
-                doc_id: <code>{docId}</code>
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* 右側：結果顯示 */}
-      <div className="col-12 col-md-6">
-        <div className="card h-100">
-          <div className="card-body">
-            <h2 className="h5 mb-3">分塊結果</h2>
-
-            {!chunkResults && !chunkMeta && (
+    <div className="container-fluid">
+      <div className="row">
+        <div className="col-12">
+          <div className="card">
+            <div className="card-header">
+              <h2 className="h4 mb-0">分塊策略評測</h2>
               <p className="text-muted mb-0">
-                選擇策略並點擊「Run Chunker」後，分塊結果將顯示在這裡。
+                通過四個步驟完成分塊策略的評測：上傳QA set → 進行分塊 →
+                分塊後映射 → 策略評估
               </p>
-            )}
-
-            {chunkMeta && (
-              <div className="mb-4">
-                <div className="alert alert-success" role="alert">
-                  <h6 className="alert-heading">分塊完成</h6>
-                  <p className="mb-2">
-                    文檔已成功分割為 {chunkMeta.count} 個分塊
-                  </p>
-                  <hr />
-                  <div className="row g-2 small">
-                    <div className="col-6">
-                      <strong>分塊大小:</strong> {chunkMeta.size} 字符
-                    </div>
-                    <div className="col-6">
-                      <strong>重疊大小:</strong> {chunkMeta.overlap} 字符
-                    </div>
-                  </div>
-                </div>
-
-                <div className="d-grid">
-                  <button
-                    className="btn btn-success"
-                    onClick={() => nav("/embed")}
-                  >
-                    繼續到 Embed
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {chunkResults &&
-              chunkResults.chunks &&
-              chunkResults.chunks.length > 0 && (
-                <div>
-                  {/* 評估指標 */}
-                  <div className="mb-4">
-                    <h6>評估指標</h6>
-                    <div className="row g-2">
-                      <div className="col-6">
-                        <div className="card bg-light">
-                          <div className="card-body p-2">
-                            <div className="small text-muted">分塊數量</div>
-                            <div className="fw-bold">
-                              {chunkResults.metrics.chunk_count}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="col-6">
-                        <div className="card bg-light">
-                          <div className="card-body p-2">
-                            <div className="small text-muted">平均長度</div>
-                            <div className="fw-bold">
-                              {chunkResults.metrics.avg_length} 字符
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="col-6">
-                        <div className="card bg-light">
-                          <div className="card-body p-2">
-                            <div className="small text-muted">長度變異</div>
-                            <div className="fw-bold">
-                              {chunkResults.metrics.length_variance.toFixed(2)}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="col-6">
-                        <div className="card bg-light">
-                          <div className="card-body p-2">
-                            <div className="small text-muted">重疊率</div>
-                            <div className="fw-bold">
-                              {(
-                                chunkResults.metrics.overlap_rate * 100
-                              ).toFixed(1)}
-                              %
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="col-6">
-                        <div className="card bg-light">
-                          <div className="card-body p-2">
-                            <div className="small text-muted">最小長度</div>
-                            <div className="fw-bold">
-                              {chunkResults.metrics.min_length} 字符
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="col-6">
-                        <div className="card bg-light">
-                          <div className="card-body p-2">
-                            <div className="small text-muted">最大長度</div>
-                            <div className="fw-bold">
-                              {chunkResults.metrics.max_length} 字符
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 分塊內容預覽 */}
-                  <div>
-                    <div className="d-flex justify-content-between align-items-center mb-2">
-                      <h6>分塊內容預覽</h6>
-                      <div>
-                        <small className="text-muted me-2">
-                          顯示前 {chunkResults.chunks.length} 個分塊，共{" "}
-                          {chunkResults.full_chunks} 個
-                        </small>
-                        {chunkResults.all_chunks &&
-                          chunkResults.all_chunks.length > 3 && (
-                            <button
-                              className="btn btn-outline-primary btn-sm"
-                              onClick={() => {
-                                // 切換顯示所有分塊或只顯示前3個
-                                if (chunkResults.chunks.length === 3) {
-                                  setChunkResults((prev: any) => ({
-                                    ...prev,
-                                    chunks: prev.all_chunks || [],
-                                  }));
-                                } else {
-                                  setChunkResults((prev: any) => ({
-                                    ...prev,
-                                    chunks: prev.all_chunks?.slice(0, 3) || [],
-                                  }));
-                                }
-                              }}
-                            >
-                              {chunkResults.chunks.length === 3
-                                ? "顯示全部"
-                                : "顯示前3個"}
-                            </button>
-                          )}
-                      </div>
-                    </div>
-                    <div
-                      className="border rounded p-3"
-                      style={{ maxHeight: "400px", overflowY: "auto" }}
-                    >
-                      {chunkResults.chunks.map(
-                        (chunk: string, index: number) => (
-                          <div key={index} className="mb-3">
-                            <div className="d-flex justify-content-between align-items-center mb-1">
-                              <small className="text-muted">
-                                分塊 #{index + 1}
-                              </small>
-                              <small className="text-muted">
-                                {chunk.length} 字符
-                              </small>
-                            </div>
-                            <div
-                              className="bg-light p-2 rounded small"
-                              style={{ whiteSpace: "pre-wrap" }}
-                            >
-                              {chunk}
-                            </div>
-                          </div>
-                        )
-                      )}
-                    </div>
-                  </div>
+            </div>
+            <div className="card-body">
+              {!canChunk && (
+                <div className="alert alert-warning" role="alert">
+                  請先上傳文檔後再進行分塊評測操作。
                 </div>
               )}
 
-            {/* 評測結果顯示 */}
-            {showEvaluation && (
-              <>
-                {/* 錯誤顯示 */}
-                {evaluationError && (
-                  <div className="alert alert-danger" role="alert">
-                    {evaluationError}
-                  </div>
-                )}
-
-                {/* 任務狀態 */}
-                {currentTask && (
-                  <div className="card mb-3">
-                    <div className="card-header">
-                      <h6 className="mb-0">評測任務狀態</h6>
-                    </div>
-                    <div className="card-body">
-                      <div className="row g-3">
-                        <div className="col-md-3">
-                          <div className="text-center">
-                            <div
-                              className={`badge bg-${
-                                currentTask.status === "completed"
-                                  ? "success"
-                                  : currentTask.status === "running"
-                                  ? "primary"
-                                  : currentTask.status === "failed"
-                                  ? "danger"
-                                  : "secondary"
-                              } fs-6`}
-                            >
-                              {currentTask.status === "completed"
-                                ? "已完成"
-                                : currentTask.status === "running"
-                                ? "運行中"
-                                : currentTask.status === "failed"
-                                ? "失敗"
-                                : currentTask.status}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="col-md-3">
-                          <div className="text-center">
-                            <div className="small text-muted">進度</div>
-                            <div className="fw-bold">
-                              {(currentTask.progress * 100).toFixed(1)}%
-                            </div>
-                          </div>
-                        </div>
-                        <div className="col-md-3">
-                          <div className="text-center">
-                            <div className="small text-muted">已完成配置</div>
-                            <div className="fw-bold">
-                              {currentTask.completed_configs}/
-                              {currentTask.total_configs}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="col-md-3">
-                          <div className="text-center">
-                            <div className="small text-muted">任務ID</div>
-                            <div className="fw-bold small">
-                              {currentTask.task_id.slice(0, 8)}...
-                            </div>
-                          </div>
-                        </div>
+              {canChunk && (
+                <div className="row g-4">
+                  {/* 步驟1: 上傳QA Set */}
+                  <div className="col-12">
+                    <div
+                      className={`card ${
+                        uploadedQASetFile ? "border-success" : "border-primary"
+                      }`}
+                    >
+                      <div
+                        className={`card-header ${
+                          uploadedQASetFile
+                            ? "bg-success text-white"
+                            : "bg-primary text-white"
+                        }`}
+                      >
+                        <h5 className="mb-0">步驟 1: 上傳QA Set</h5>
                       </div>
-
-                      {currentTask.status === "running" && (
-                        <div className="mt-3">
-                          {/* 評測狀態指示器 */}
-                          <div
-                            className="alert alert-info d-flex align-items-center mb-3"
-                            role="alert"
-                          >
-                            <div
-                              className="spinner-border spinner-border-sm me-2"
-                              role="status"
-                            >
-                              <span className="visually-hidden">
-                                Loading...
-                              </span>
-                            </div>
-                            <div>
-                              <strong>評測進行中</strong>
-                              <div className="small">
-                                正在評估 {selectedStrategy} 分割策略的{" "}
-                                {currentTask.total_configs} 個配置組合
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="progress" style={{ height: "25px" }}>
-                            <div
-                              className="progress-bar progress-bar-striped progress-bar-animated bg-primary"
-                              role="progressbar"
-                              style={{
-                                width: `${currentTask.progress * 100}%`,
-                              }}
-                              aria-valuenow={currentTask.progress * 100}
-                              aria-valuemin={0}
-                              aria-valuemax={100}
-                            >
-                              <span className="fw-bold text-white">
-                                {(currentTask.progress * 100).toFixed(1)}%
-                              </span>
-                            </div>
-                          </div>
-                          <div className="mt-2 d-flex justify-content-between align-items-center">
-                            <small className="text-muted">
-                              正在處理配置 {currentTask.completed_configs} /{" "}
-                              {currentTask.total_configs}
-                            </small>
-                            <div className="d-flex align-items-center gap-2">
-                              <small className="text-muted">
-                                預計剩餘時間:{" "}
-                                {calculateEstimatedTime(currentTask)} 分鐘
-                              </small>
-                              <button
-                                className="btn btn-sm btn-outline-danger"
-                                onClick={() => {
-                                  clearProgressPolling();
-                                  setCurrentTask(null);
-                                  setEvaluationError("評測已取消");
-                                }}
-                                title="取消評測"
-                              >
-                                <i className="bi bi-x-circle"></i> 取消
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {currentTask.status === "completed" && (
-                        <div className="mt-3">
-                          <div
-                            className="alert alert-success d-flex align-items-center"
-                            role="alert"
-                          >
-                            <i className="bi bi-check-circle-fill me-2"></i>
-                            <div>
-                              <strong>評測完成！</strong>
-                              <div className="small">
-                                成功評估了 {currentTask.total_configs}{" "}
-                                個配置組合
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {currentTask.error_message && (
-                        <div className="mt-3">
-                          <div className="alert alert-danger" role="alert">
-                            <strong>錯誤:</strong> {currentTask.error_message}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* 最佳配置 */}
-                {evaluationResults.length > 0 && getBestConfig() && (
-                  <div className="card mb-3">
-                    <div className="card-header bg-success text-white">
-                      <h6 className="mb-0">
-                        <i className="bi bi-trophy me-2"></i>
-                        最佳配置 (綜合評比)
-                      </h6>
-                    </div>
-                    <div className="card-body">
-                      {(() => {
-                        const bestConfig = getBestConfig();
-                        if (!bestConfig) return null;
-
-                        const score =
-                          (bestConfig.metrics.precision_at_k[3] || 0) * 0.3 +
-                          (bestConfig.metrics.recall_at_k[3] || 0) * 0.3 +
-                          (bestConfig.metrics.precision_omega || 0) * 0.4;
-
-                        return (
-                          <div className="row">
-                            <div className="col-md-6">
-                              <h6>配置參數</h6>
-                              <div className="table-responsive">
-                                <table className="table table-sm">
-                                  <tbody>
-                                    <tr>
-                                      <td>
-                                        <strong>分塊大小:</strong>
-                                      </td>
-                                      <td>{bestConfig.config.chunk_size}</td>
-                                    </tr>
-                                    <tr>
-                                      <td>
-                                        <strong>重疊比例:</strong>
-                                      </td>
-                                      <td>
-                                        {(
-                                          bestConfig.config.overlap_ratio * 100
-                                        ).toFixed(0)}
-                                        %
-                                      </td>
-                                    </tr>
-                                    {bestConfig.config.strategy ===
-                                      "sliding_window" && (
-                                      <>
-                                        <tr>
-                                          <td>
-                                            <strong>視窗大小:</strong>
-                                          </td>
-                                          <td>
-                                            {bestConfig.config.window_size ||
-                                              bestConfig.config.chunk_size}
-                                          </td>
-                                        </tr>
-                                        <tr>
-                                          <td>
-                                            <strong>步長:</strong>
-                                          </td>
-                                          <td>
-                                            {bestConfig.config.step_size ||
-                                              "N/A"}
-                                          </td>
-                                        </tr>
-                                        <tr>
-                                          <td>
-                                            <strong>邊界感知:</strong>
-                                          </td>
-                                          <td>
-                                            {bestConfig.config.boundary_aware
-                                              ? "是"
-                                              : "否"}
-                                          </td>
-                                        </tr>
-                                        <tr>
-                                          <td>
-                                            <strong>保持句子完整:</strong>
-                                          </td>
-                                          <td>
-                                            {bestConfig.config
-                                              .preserve_sentences
-                                              ? "是"
-                                              : "否"}
-                                          </td>
-                                        </tr>
-                                        {bestConfig.config
-                                          .min_chunk_size_sw && (
-                                          <tr>
-                                            <td>
-                                              <strong>最小分塊大小:</strong>
-                                            </td>
-                                            <td>
-                                              {
-                                                bestConfig.config
-                                                  .min_chunk_size_sw
-                                              }
-                                            </td>
-                                          </tr>
-                                        )}
-                                        {bestConfig.config
-                                          .max_chunk_size_sw && (
-                                          <tr>
-                                            <td>
-                                              <strong>最大分塊大小:</strong>
-                                            </td>
-                                            <td>
-                                              {
-                                                bestConfig.config
-                                                  .max_chunk_size_sw
-                                              }
-                                            </td>
-                                          </tr>
-                                        )}
-                                      </>
-                                    )}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                            <div className="col-md-6">
-                              <h6>評估指標</h6>
-                              <div className="table-responsive">
-                                <table className="table table-sm">
-                                  <tbody>
-                                    <tr>
-                                      <td>
-                                        <strong>Precision@3:</strong>
-                                      </td>
-                                      <td>
-                                        <span className="badge bg-success">
-                                          {(
-                                            bestConfig.metrics
-                                              .precision_at_k[3] || 0
-                                          ).toFixed(3)}
-                                        </span>
-                                      </td>
-                                    </tr>
-                                    <tr>
-                                      <td>
-                                        <strong>Recall@3:</strong>
-                                      </td>
-                                      <td>
-                                        <span className="badge bg-success">
-                                          {(
-                                            bestConfig.metrics.recall_at_k[3] ||
-                                            0
-                                          ).toFixed(3)}
-                                        </span>
-                                      </td>
-                                    </tr>
-                                    <tr>
-                                      <td>
-                                        <strong>PrecisionΩ:</strong>
-                                      </td>
-                                      <td>
-                                        <span className="badge bg-success">
-                                          {(
-                                            bestConfig.metrics
-                                              .precision_omega || 0
-                                          ).toFixed(3)}
-                                        </span>
-                                      </td>
-                                    </tr>
-                                    <tr>
-                                      <td>
-                                        <strong>綜合評分:</strong>
-                                      </td>
-                                      <td>
-                                        <span className="badge bg-primary fs-6">
-                                          {score.toFixed(3)}
-                                        </span>
-                                      </td>
-                                    </tr>
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                )}
-
-                {/* 評測結果 */}
-                {evaluationResults.length > 0 && (
-                  <div className="card mb-3">
-                    <div className="card-header d-flex justify-content-between align-items-center">
-                      <h6 className="mb-0">
-                        評測結果
-                        <span className="badge bg-secondary ms-2">
-                          {evaluationResults.length} 個配置
-                        </span>
-                      </h6>
-                      <div className="d-flex gap-2">
-                        <button
-                          className="btn btn-outline-secondary btn-sm"
-                          onClick={() => setShowAllResults(!showAllResults)}
-                        >
-                          <i
-                            className={`bi bi-chevron-${
-                              showAllResults ? "up" : "down"
-                            } me-1`}
-                          ></i>
-                          {showAllResults ? "收起" : "展開全部"}
-                        </button>
-                        <button
-                          className="btn btn-outline-primary btn-sm"
-                          onClick={exportEvaluationReport}
-                        >
-                          <i className="bi bi-download me-1"></i>
-                          導出報告
-                        </button>
+                      <div className="card-body">
+                        <SimpleQASetUploader
+                          onFileUploaded={handleQASetFileUploaded}
+                        />
                       </div>
                     </div>
-                    <div className="card-body">
-                      <div className="table-responsive">
-                        <table className="table table-sm table-hover">
-                          <thead>
-                            <tr>
-                              <th>配置</th>
-                              <th>Precision@1</th>
-                              <th>Precision@3</th>
-                              <th>Precision@5</th>
-                              <th>Recall@1</th>
-                              <th>Recall@3</th>
-                              <th>Recall@5</th>
-                              <th>PrecisionΩ</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(showAllResults
-                              ? evaluationResults
-                              : evaluationResults.slice(0, 10)
-                            ).map((result, index) => (
-                              <tr key={index}>
-                                <td>
-                                  <div className="small">
-                                    <div>Size: {result.config.chunk_size}</div>
-                                    <div>
-                                      Overlap:{" "}
-                                      {(
-                                        result.config.overlap_ratio * 100
-                                      ).toFixed(0)}
-                                      %
-                                    </div>
+                  </div>
+
+                  {/* 步驟2: 多種分塊組合處理 */}
+                  <div className="col-12">
+                    <div
+                      className={`card ${
+                        chunkingResults.length > 0
+                          ? "border-success"
+                          : uploadedQASetFile
+                          ? "border-warning"
+                          : "border-secondary"
+                      }`}
+                    >
+                      <div
+                        className={`card-header ${
+                          chunkingResults.length > 0
+                            ? "bg-success text-white"
+                            : uploadedQASetFile
+                            ? "bg-warning text-dark"
+                            : "bg-secondary text-white"
+                        }`}
+                      >
+                        <h5 className="mb-0">步驟 2: 多種分塊組合處理</h5>
+                      </div>
+                      <div className="card-body">
+                        {chunkingResults.length > 0 ? (
+                          <div>
+                            <div className="alert alert-success mb-4">
+                              <h6>✅ 多種分塊組合處理完成</h6>
+                              <p className="mb-0">
+                                已成功完成 {chunkingResults.length}{" "}
+                                種分塊組合的處理
+                              </p>
+                            </div>
+
+                            {/* 分塊結果統計 */}
+                            <div className="row g-3 mb-4">
+                              <div className="col-md-3">
+                                <div className="card bg-light">
+                                  <div className="card-body text-center">
+                                    <h5 className="card-title text-primary">
+                                      {chunkingResults.length}
+                                    </h5>
+                                    <p className="card-text small">
+                                      分塊組合數
+                                    </p>
                                   </div>
-                                </td>
-                                <td>
-                                  <span
-                                    className={`badge ${
-                                      result.metrics.precision_at_k[1] > 0.7
-                                        ? "bg-success"
-                                        : result.metrics.precision_at_k[1] > 0.5
-                                        ? "bg-warning"
-                                        : "bg-danger"
-                                    }`}
-                                  >
-                                    {result.metrics.precision_at_k[1]?.toFixed(
-                                      3
-                                    ) || "0.000"}
-                                  </span>
-                                </td>
-                                <td>
-                                  <span
-                                    className={`badge ${
-                                      result.metrics.precision_at_k[3] > 0.7
-                                        ? "bg-success"
-                                        : result.metrics.precision_at_k[3] > 0.5
-                                        ? "bg-warning"
-                                        : "bg-danger"
-                                    }`}
-                                  >
-                                    {result.metrics.precision_at_k[3]?.toFixed(
-                                      3
-                                    ) || "0.000"}
-                                  </span>
-                                </td>
-                                <td>
-                                  <span
-                                    className={`badge ${
-                                      result.metrics.precision_at_k[5] > 0.7
-                                        ? "bg-success"
-                                        : result.metrics.precision_at_k[5] > 0.5
-                                        ? "bg-warning"
-                                        : "bg-danger"
-                                    }`}
-                                  >
-                                    {result.metrics.precision_at_k[5]?.toFixed(
-                                      3
-                                    ) || "0.000"}
-                                  </span>
-                                </td>
-                                <td>
-                                  <span
-                                    className={`badge ${
-                                      result.metrics.recall_at_k[1] > 0.8
-                                        ? "bg-success"
-                                        : result.metrics.recall_at_k[1] > 0.6
-                                        ? "bg-warning"
-                                        : "bg-danger"
-                                    }`}
-                                  >
-                                    {result.metrics.recall_at_k[1]?.toFixed(
-                                      3
-                                    ) || "0.000"}
-                                  </span>
-                                </td>
-                                <td>
-                                  <span
-                                    className={`badge ${
-                                      result.metrics.recall_at_k[3] > 0.8
-                                        ? "bg-success"
-                                        : result.metrics.recall_at_k[3] > 0.6
-                                        ? "bg-warning"
-                                        : "bg-danger"
-                                    }`}
-                                  >
-                                    {result.metrics.recall_at_k[3]?.toFixed(
-                                      3
-                                    ) || "0.000"}
-                                  </span>
-                                </td>
-                                <td>
-                                  <span
-                                    className={`badge ${
-                                      result.metrics.recall_at_k[5] > 0.8
-                                        ? "bg-success"
-                                        : result.metrics.recall_at_k[5] > 0.6
-                                        ? "bg-warning"
-                                        : "bg-danger"
-                                    }`}
-                                  >
-                                    {result.metrics.recall_at_k[5]?.toFixed(
-                                      3
-                                    ) || "0.000"}
-                                  </span>
-                                </td>
-                                <td>
-                                  <span
-                                    className={`badge ${
-                                      result.metrics.precision_omega > 0.7
-                                        ? "bg-success"
-                                        : result.metrics.precision_omega > 0.5
-                                        ? "bg-warning"
-                                        : "bg-danger"
-                                    }`}
-                                  >
-                                    {result.metrics.precision_omega?.toFixed(
-                                      3
-                                    ) || "0.000"}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                      {!showAllResults && evaluationResults.length > 10 && (
-                        <div className="mt-3 text-center">
-                          <div className="alert alert-info mb-0">
-                            <i className="bi bi-info-circle me-2"></i>
-                            顯示前 10 筆結果，共 {evaluationResults.length}{" "}
-                            筆配置
-                            <br />
-                            <small>點擊「展開全部」按鈕查看所有結果</small>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
+                                </div>
+                              </div>
+                              <div className="col-md-3">
+                                <div className="card bg-light">
+                                  <div className="card-body text-center">
+                                    <h5 className="card-title text-success">
+                                      {Math.round(
+                                        chunkingResults.reduce(
+                                          (sum, result) =>
+                                            sum + result.chunk_count,
+                                          0
+                                        ) / chunkingResults.length
+                                      )}
+                                    </h5>
+                                    <p className="card-text small">
+                                      平均分塊數
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="col-md-3">
+                                <div className="card bg-light">
+                                  <div className="card-body text-center">
+                                    <h5 className="card-title text-warning">
+                                      {Math.round(
+                                        chunkingResults.reduce(
+                                          (sum, result) =>
+                                            sum +
+                                            (result.metrics?.avg_length || 0),
+                                          0
+                                        ) / chunkingResults.length
+                                      )}
+                                    </h5>
+                                    <p className="card-text small">平均長度</p>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="col-md-3">
+                                <div className="card bg-light">
+                                  <div className="card-body text-center">
+                                    <h5 className="card-title text-info">
+                                      {selectedStrategies.length}
+                                    </h5>
+                                    <p className="card-text small">
+                                      使用策略數
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
 
-                {/* 對比分析 */}
-                {evaluationComparison && (
-                  <div className="card mb-3">
-                    <div className="card-header">
-                      <h6 className="mb-0">對比分析與推薦</h6>
-                    </div>
-                    <div className="card-body">
-                      <div className="row g-4">
-                        {/* Chunk Size 分析 */}
-                        <div className="col-md-6">
-                          <h6>分塊大小分析</h6>
-                          <div className="table-responsive">
-                            <table className="table table-sm">
-                              <thead>
-                                <tr>
-                                  <th>Size</th>
-                                  <th>Precision@3</th>
-                                  <th>Recall@3</th>
-                                  <th>PrecisionΩ</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {Object.entries(
-                                  evaluationComparison.chunk_size_analysis
-                                ).map(([size, metrics]: [string, any]) => (
-                                  <tr key={size}>
-                                    <td>{size}</td>
-                                    <td>
-                                      {metrics.precision_at_k?.[3]?.toFixed(
-                                        3
-                                      ) || "0.000"}
-                                    </td>
-                                    <td>
-                                      {metrics.recall_at_k?.[3]?.toFixed(3) ||
-                                        "0.000"}
-                                    </td>
-                                    <td>
-                                      {metrics.precision_omega?.toFixed(3) ||
-                                        "0.000"}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-
-                        {/* Overlap 分析 */}
-                        <div className="col-md-6">
-                          <h6>重疊比例分析</h6>
-                          <div className="table-responsive">
-                            <table className="table table-sm">
-                              <thead>
-                                <tr>
-                                  <th>Ratio</th>
-                                  <th>Precision@3</th>
-                                  <th>Recall@3</th>
-                                  <th>PrecisionΩ</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {Object.entries(
-                                  evaluationComparison.overlap_analysis
-                                ).map(([ratio, metrics]: [string, any]) => (
-                                  <tr key={ratio}>
-                                    <td>
-                                      {(parseFloat(ratio) * 100).toFixed(0)}%
-                                    </td>
-                                    <td>
-                                      {metrics.precision_at_k?.[3]?.toFixed(
-                                        3
-                                      ) || "0.000"}
-                                    </td>
-                                    <td>
-                                      {metrics.recall_at_k?.[3]?.toFixed(3) ||
-                                        "0.000"}
-                                    </td>
-                                    <td>
-                                      {metrics.precision_omega?.toFixed(3) ||
-                                        "0.000"}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 策略特定參數分析 */}
-                      {evaluationComparison.strategy_specific_analysis &&
-                        Object.keys(
-                          evaluationComparison.strategy_specific_analysis
-                        ).length > 0 && (
-                          <div className="row g-4 mt-3">
-                            <div className="col-12">
-                              <h6>策略特定參數分析</h6>
+                            {/* 分塊配置信息 */}
+                            <div className="mb-4">
+                              <h6>分塊配置組合</h6>
                               <div className="table-responsive">
-                                <table className="table table-sm">
+                                <table className="table table-sm table-striped">
                                   <thead>
                                     <tr>
-                                      <th>參數類型</th>
-                                      <th>參數值</th>
-                                      <th>Precision@3</th>
-                                      <th>Recall@3</th>
-                                      <th>PrecisionΩ</th>
+                                      <th>策略</th>
+                                      <th>分塊大小</th>
+                                      <th>重疊比例</th>
+                                      <th>分塊數量</th>
+                                      <th>平均長度</th>
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {Object.entries(
-                                      evaluationComparison.strategy_specific_analysis
-                                    ).map(
-                                      ([paramKey, metrics]: [string, any]) => {
-                                        // 解析參數鍵和值
-                                        let paramType = "";
-                                        let paramValue = "";
-
-                                        if (paramKey.startsWith("chunk_by_")) {
-                                          paramType = "分割單位";
-                                          const chunkBy = paramKey.replace(
-                                            "chunk_by_",
-                                            ""
-                                          );
-                                          paramValue =
-                                            chunkBy === "article"
-                                              ? "按條文分割"
-                                              : chunkBy === "item"
-                                              ? "按項分割"
-                                              : chunkBy === "section"
-                                              ? "按節分割"
-                                              : chunkBy === "chapter"
-                                              ? "按章分割"
-                                              : chunkBy;
-                                        } else if (
-                                          paramKey === "preserve_structure"
-                                        ) {
-                                          paramType = "保持結構";
-                                          paramValue = "是";
-                                        } else if (
-                                          paramKey === "no_preserve_structure"
-                                        ) {
-                                          paramType = "保持結構";
-                                          paramValue = "否";
-                                        } else if (
-                                          paramKey.startsWith("level_depth_")
-                                        ) {
-                                          paramType = "層次深度";
-                                          paramValue = paramKey.replace(
-                                            "level_depth_",
-                                            ""
-                                          );
-                                        } else if (
-                                          paramKey.startsWith(
-                                            "similarity_threshold_"
-                                          )
-                                        ) {
-                                          paramType = "相似度閾值";
-                                          paramValue = paramKey.replace(
-                                            "similarity_threshold_",
-                                            ""
-                                          );
-                                        } else if (
-                                          paramKey.startsWith(
-                                            "semantic_threshold_"
-                                          )
-                                        ) {
-                                          paramType = "語義閾值";
-                                          paramValue = paramKey.replace(
-                                            "semantic_threshold_",
-                                            ""
-                                          );
-                                        } else if (
-                                          paramKey.startsWith("step_size_")
-                                        ) {
-                                          paramType = "步長";
-                                          paramValue = paramKey.replace(
-                                            "step_size_",
-                                            ""
-                                          );
-                                        } else if (
-                                          paramKey.startsWith(
-                                            "switch_threshold_"
-                                          )
-                                        ) {
-                                          paramType = "切換閾值";
-                                          paramValue = paramKey.replace(
-                                            "switch_threshold_",
-                                            ""
-                                          );
-                                        } else if (
-                                          paramKey.startsWith("secondary_size_")
-                                        ) {
-                                          paramType = "次要大小";
-                                          paramValue = paramKey.replace(
-                                            "secondary_size_",
-                                            ""
-                                          );
-                                        } else {
-                                          paramType = paramKey;
-                                          paramValue = "";
-                                        }
-
-                                        return (
-                                          <tr key={paramKey}>
-                                            <td>{paramType}</td>
-                                            <td>{paramValue}</td>
-                                            <td>
-                                              {metrics.precision_at_k?.[3]?.toFixed(
-                                                3
-                                              ) || "0.000"}
-                                            </td>
-                                            <td>
-                                              {metrics.recall_at_k?.[3]?.toFixed(
-                                                3
-                                              ) || "0.000"}
-                                            </td>
-                                            <td>
-                                              {metrics.precision_omega?.toFixed(
-                                                3
-                                              ) || "0.000"}
-                                            </td>
-                                          </tr>
-                                        );
-                                      }
-                                    )}
+                                    {chunkingResults.map((result, index) => (
+                                      <tr key={index}>
+                                        <td>
+                                          {strategyInfo[
+                                            result.strategy as ChunkStrategy
+                                          ]?.name || result.strategy}
+                                        </td>
+                                        <td>{result.config.chunk_size} 字符</td>
+                                        <td>
+                                          {(
+                                            result.config.overlap_ratio * 100
+                                          ).toFixed(1)}
+                                          %
+                                        </td>
+                                        <td>{result.chunk_count}</td>
+                                        <td>
+                                          {result.metrics?.avg_length?.toFixed(
+                                            0
+                                          ) || "N/A"}
+                                        </td>
+                                      </tr>
+                                    ))}
                                   </tbody>
                                 </table>
                               </div>
                             </div>
-                          </div>
-                        )}
 
-                      {/* 推薦 */}
-                      <div className="mt-4">
-                        <h6>推薦配置</h6>
-                        <div className="alert alert-info">
-                          {evaluationComparison.recommendations.map(
-                            (rec: string, index: number) => (
-                              <div key={index}>{rec}</div>
-                            )
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                            {/* 分塊內容查看 */}
+                            <div className="mb-4">
+                              <div className="d-flex justify-content-between align-items-center mb-3">
+                                <h6 className="mb-0">分塊內容查看</h6>
+                                <button
+                                  className="btn btn-outline-primary btn-sm"
+                                  onClick={() =>
+                                    setShowAllChunks(!showAllChunks)
+                                  }
+                                >
+                                  {showAllChunks ? (
+                                    <>
+                                      <i className="bi bi-eye-slash me-1"></i>
+                                      隱藏所有分塊
+                                    </>
+                                  ) : (
+                                    <>
+                                      <i className="bi bi-eye me-1"></i>
+                                      查看所有分塊
+                                    </>
+                                  )}
+                                </button>
+                              </div>
 
-                {/* 生成問題結果 */}
-                {generatedQuestions.length > 0 && (
-                  <div className="card">
-                    <div className="card-header d-flex justify-content-between align-items-center">
-                      <h6 className="mb-0">生成的繁體中文問題</h6>
-                      <button
-                        className="btn btn-outline-success btn-sm"
-                        onClick={exportQuestions}
-                      >
-                        <i className="bi bi-download me-1"></i>
-                        導出問題
-                      </button>
-                    </div>
-                    <div className="card-body">
-                      <div className="row g-3">
-                        {generatedQuestions.map((question, index) => (
-                          <div key={index} className="col-12">
-                            <div className="card border-primary">
-                              <div className="card-body">
-                                <div className="d-flex justify-content-between align-items-start mb-2">
-                                  <h6 className="card-title mb-0">
-                                    問題 {index + 1}
-                                  </h6>
-                                  <div>
-                                    <span
-                                      className={`badge bg-${
-                                        question.difficulty === "基礎"
-                                          ? "success"
-                                          : question.difficulty === "進階"
-                                          ? "warning"
-                                          : "danger"
-                                      } me-1`}
-                                    >
-                                      {question.difficulty}
-                                    </span>
-                                    <span className="badge bg-info">
-                                      {question.question_type}
-                                    </span>
+                              {showAllChunks && (
+                                <div className="mb-3">
+                                  {/* 搜索和過濾控制 */}
+                                  <div className="row g-2 mb-3">
+                                    <div className="col-md-6">
+                                      <input
+                                        type="text"
+                                        className="form-control form-control-sm"
+                                        placeholder="搜索分塊內容..."
+                                        value={chunkSearchTerm}
+                                        onChange={(e) =>
+                                          setChunkSearchTerm(e.target.value)
+                                        }
+                                      />
+                                    </div>
+                                    <div className="col-md-3">
+                                      <input
+                                        type="number"
+                                        className="form-control form-control-sm"
+                                        placeholder="最小長度"
+                                        value={chunkFilterLength.min || ""}
+                                        onChange={(e) =>
+                                          setChunkFilterLength((prev) => ({
+                                            ...prev,
+                                            min: parseInt(e.target.value) || 0,
+                                          }))
+                                        }
+                                      />
+                                    </div>
+                                    <div className="col-md-3">
+                                      <input
+                                        type="number"
+                                        className="form-control form-control-sm"
+                                        placeholder="最大長度"
+                                        value={chunkFilterLength.max || ""}
+                                        onChange={(e) =>
+                                          setChunkFilterLength((prev) => ({
+                                            ...prev,
+                                            max:
+                                              parseInt(e.target.value) || 10000,
+                                          }))
+                                        }
+                                      />
+                                    </div>
                                   </div>
-                                </div>
-                                <p className="card-text">{question.question}</p>
 
-                                <div className="mt-3">
-                                  <h6 className="small text-muted mb-2">
-                                    相關法規：
-                                  </h6>
-                                  <div className="d-flex flex-wrap gap-1">
-                                    {question.references.map(
-                                      (ref: string, refIndex: number) => (
-                                        <span
-                                          key={refIndex}
-                                          className="badge bg-secondary"
-                                        >
-                                          {ref}
-                                        </span>
-                                      )
-                                    )}
-                                  </div>
+                                  {/* 過濾結果統計 */}
+                                  {(() => {
+                                    const filteredChunks = getFilteredChunks();
+                                    const totalChunks = chunkingResults.reduce(
+                                      (sum, result) =>
+                                        sum +
+                                        (
+                                          result.all_chunks ||
+                                          result.chunks ||
+                                          []
+                                        ).length,
+                                      0
+                                    );
+                                    return (
+                                      <div className="alert alert-info py-2">
+                                        <small>
+                                          顯示 {filteredChunks.length} /{" "}
+                                          {totalChunks} 個分塊
+                                          {chunkSearchTerm &&
+                                            ` (搜索: "${chunkSearchTerm}")`}
+                                          {(chunkFilterLength.min > 0 ||
+                                            chunkFilterLength.max < 10000) &&
+                                            ` (長度: ${chunkFilterLength.min}-${chunkFilterLength.max} 字符)`}
+                                        </small>
+                                      </div>
+                                    );
+                                  })()}
                                 </div>
+                              )}
 
-                                {question.keywords.length > 0 && (
-                                  <div className="mt-2">
-                                    <h6 className="small text-muted mb-2">
-                                      關鍵詞：
-                                    </h6>
-                                    <div className="d-flex flex-wrap gap-1">
-                                      {question.keywords.map(
-                                        (keyword: string, kwIndex: number) => (
-                                          <span
-                                            key={kwIndex}
-                                            className="badge bg-light text-dark"
+                              {/* 分塊列表 */}
+                              <div
+                                className="accordion"
+                                id={`chunkPreview-${Date.now()}`}
+                              >
+                                {(showAllChunks ? getFilteredChunks() : []).map(
+                                  (chunkInfo, index) => {
+                                    const {
+                                      chunk,
+                                      chunkId,
+                                      span,
+                                      metadata,
+                                      resultIndex,
+                                      chunkIndex,
+                                      strategy,
+                                      config,
+                                    } = chunkInfo;
+                                    const uniqueId = `chunk-${resultIndex}-${chunkIndex}-${Date.now()}`;
+                                    const accordionId = `chunkPreview-${Date.now()}`;
+                                    return (
+                                      <div
+                                        key={uniqueId}
+                                        className="accordion-item"
+                                      >
+                                        <h2 className="accordion-header">
+                                          <button
+                                            className="accordion-button collapsed"
+                                            type="button"
+                                            data-bs-toggle="collapse"
+                                            data-bs-target={`#${uniqueId}`}
+                                            aria-expanded="false"
+                                            aria-controls={uniqueId}
                                           >
-                                            {keyword}
-                                          </span>
-                                        )
+                                            <div className="d-flex justify-content-between w-100 me-3">
+                                              <div className="d-flex flex-column">
+                                                <span>
+                                                  {strategyInfo[
+                                                    strategy as ChunkStrategy
+                                                  ]?.name || strategy}{" "}
+                                                  - 分塊 {chunkIndex + 1}
+                                                </span>
+                                                {chunkId && (
+                                                  <small className="text-primary fw-bold">
+                                                    ID: {chunkId}
+                                                  </small>
+                                                )}
+                                                {span && (
+                                                  <small className="text-info">
+                                                    Span: [{span.start}-
+                                                    {span.end}]
+                                                  </small>
+                                                )}
+                                              </div>
+                                              <span className="badge bg-secondary">
+                                                {chunk.length} 字符
+                                              </span>
+                                            </div>
+                                          </button>
+                                        </h2>
+                                        <div
+                                          id={uniqueId}
+                                          className="accordion-collapse collapse"
+                                          data-bs-parent={`#${accordionId}`}
+                                          aria-labelledby={`heading-${uniqueId}`}
+                                        >
+                                          <div className="accordion-body">
+                                            <div className="d-flex justify-content-between align-items-center mb-2">
+                                              <div className="d-flex flex-column">
+                                                <small className="text-muted">
+                                                  {strategyInfo[
+                                                    strategy as ChunkStrategy
+                                                  ]?.name || strategy}{" "}
+                                                  | 分塊 {chunkIndex + 1} |
+                                                  大小: {config.chunk_size} |
+                                                  重疊:{" "}
+                                                  {(
+                                                    config.overlap_ratio * 100
+                                                  ).toFixed(1)}
+                                                  %
+                                                </small>
+                                                {chunkId && (
+                                                  <small className="text-primary fw-bold">
+                                                    Chunk ID: {chunkId}
+                                                  </small>
+                                                )}
+                                                {span && (
+                                                  <small className="text-info">
+                                                    原文位置: [{span.start}-
+                                                    {span.end}] 字符
+                                                  </small>
+                                                )}
+                                              </div>
+                                              <button
+                                                className="btn btn-outline-secondary btn-sm"
+                                                onClick={() => {
+                                                  navigator.clipboard.writeText(
+                                                    chunk
+                                                  );
+                                                }}
+                                                title="複製分塊內容"
+                                              >
+                                                <i className="bi bi-clipboard"></i>
+                                              </button>
+                                            </div>
+
+                                            {/* 顯示法條JSON spans信息 */}
+                                            {metadata?.overlapping_law_spans
+                                              ?.length > 0 && (
+                                              <div className="mb-3">
+                                                <h6 className="text-success mb-2">
+                                                  <i className="bi bi-file-text me-1"></i>
+                                                  對應法條JSON spans:
+                                                </h6>
+                                                <div className="row">
+                                                  {metadata.overlapping_law_spans
+                                                    .slice(0, 3)
+                                                    .map(
+                                                      (
+                                                        lawSpan: any,
+                                                        lawIndex: number
+                                                      ) => (
+                                                        <div
+                                                          key={lawIndex}
+                                                          className="col-md-4 mb-2"
+                                                        >
+                                                          <div className="card bg-success bg-opacity-10 border-success">
+                                                            <div className="card-body p-2">
+                                                              <h6 className="card-title text-success mb-1 small">
+                                                                {
+                                                                  lawSpan.article_name
+                                                                }
+                                                              </h6>
+                                                              <p className="card-text small mb-1">
+                                                                <strong>
+                                                                  ID:
+                                                                </strong>{" "}
+                                                                {
+                                                                  lawSpan.article_id
+                                                                }
+                                                              </p>
+                                                              <p className="card-text small mb-1">
+                                                                <strong>
+                                                                  位置:
+                                                                </strong>{" "}
+                                                                [
+                                                                {
+                                                                  lawSpan.start_char
+                                                                }
+                                                                -
+                                                                {
+                                                                  lawSpan.end_char
+                                                                }
+                                                                ]
+                                                              </p>
+                                                              <p className="card-text small mb-1">
+                                                                <strong>
+                                                                  重疊:
+                                                                </strong>{" "}
+                                                                {(
+                                                                  lawSpan.overlap_ratio *
+                                                                  100
+                                                                ).toFixed(1)}
+                                                                %
+                                                              </p>
+                                                              <p className="card-text small mb-0">
+                                                                <strong>
+                                                                  章節:
+                                                                </strong>{" "}
+                                                                {
+                                                                  lawSpan.chapter_name
+                                                                }{" "}
+                                                                &gt;{" "}
+                                                                {
+                                                                  lawSpan.section_name
+                                                                }
+                                                              </p>
+                                                            </div>
+                                                          </div>
+                                                        </div>
+                                                      )
+                                                    )}
+                                                  {metadata
+                                                    .overlapping_law_spans
+                                                    .length > 3 && (
+                                                    <div className="col-12">
+                                                      <small className="text-muted">
+                                                        還有{" "}
+                                                        {metadata
+                                                          .overlapping_law_spans
+                                                          .length - 3}{" "}
+                                                        個法條spans...
+                                                      </small>
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            )}
+
+                                            <pre
+                                              className="small text-muted mb-0"
+                                              style={{
+                                                whiteSpace: "pre-wrap",
+                                                maxHeight: "300px",
+                                                overflow: "auto",
+                                                backgroundColor: "#f8f9fa",
+                                                padding: "10px",
+                                                borderRadius: "4px",
+                                                border: "1px solid #dee2e6",
+                                              }}
+                                            >
+                                              {chunk}
+                                            </pre>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                )}
+                              </div>
+
+                              {showAllChunks &&
+                                getFilteredChunks().length === 0 && (
+                                  <div className="alert alert-warning">
+                                    <i className="bi bi-search me-2"></i>
+                                    沒有找到符合條件的分塊
+                                  </div>
+                                )}
+                            </div>
+
+                            {/* 操作按鈕 */}
+                            <div className="d-flex gap-2">
+                              <button
+                                className="btn btn-outline-primary"
+                                onClick={handleRetryChunking}
+                              >
+                                <i className="bi bi-arrow-clockwise me-1"></i>
+                                重新分塊
+                              </button>
+                              <button
+                                className="btn btn-primary"
+                                onClick={() => {
+                                  // 設置可以進行QA映射的狀態
+                                  setChunkingCompleted(true);
+                                  console.log("繼續到QA映射步驟");
+                                }}
+                                disabled={!uploadedQASetFile}
+                              >
+                                <i className="bi bi-arrow-right me-1"></i>
+                                繼續到QA映射
+                              </button>
+                            </div>
+                            {!uploadedQASetFile && (
+                              <div className="mt-2">
+                                <small className="text-muted">
+                                  <i className="bi bi-info-circle me-1"></i>
+                                  如需進行QA映射，請先上傳QA set文件
+                                </small>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div>
+                            {/* 分塊策略選擇 */}
+                            <div className="mb-4">
+                              <label className="form-label fw-bold">
+                                選擇分塊策略（可多選）
+                              </label>
+                              <div className="row g-2">
+                                {Object.entries(strategyInfo).map(
+                                  ([key, info]) => (
+                                    <div key={key} className="col-6">
+                                      <div className="form-check">
+                                        <input
+                                          className="form-check-input"
+                                          type="checkbox"
+                                          id={`strategy-${key}`}
+                                          checked={selectedStrategies.includes(
+                                            key as ChunkStrategy
+                                          )}
+                                          onChange={() =>
+                                            handleStrategyToggle(
+                                              key as ChunkStrategy
+                                            )
+                                          }
+                                        />
+                                        <label
+                                          className="form-check-label"
+                                          htmlFor={`strategy-${key}`}
+                                        >
+                                          {info.name}
+                                        </label>
+                                      </div>
+                                    </div>
+                                  )
+                                )}
+                              </div>
+                            </div>
+
+                            {/* 策略描述 */}
+                            {selectedStrategies.length > 0 && (
+                              <div className="mb-4">
+                                <h6 className="text-primary">已選擇的策略</h6>
+                                {selectedStrategies.map((strategy) => (
+                                  <div key={strategy} className="mb-2">
+                                    <strong>
+                                      {strategyInfo[strategy].name}
+                                    </strong>
+                                    <p className="text-muted small mb-1">
+                                      {strategyInfo[strategy].description}
+                                    </p>
+                                    <div className="small text-muted">
+                                      評估指標：
+                                      {strategyInfo[strategy].metrics.join(
+                                        "、"
                                       )}
                                     </div>
                                   </div>
-                                )}
+                                ))}
+                              </div>
+                            )}
 
-                                <div className="mt-2">
-                                  <small className="text-muted">
-                                    估算Token數: {question.estimated_tokens}
+                            {/* 參數配置 */}
+                            <div className="mb-4">
+                              <h6>分塊參數組合</h6>
+                              <div className="row g-3">
+                                <div className="col-md-6">
+                                  <label className="form-label">
+                                    分塊大小（字符）
+                                  </label>
+                                  <div className="d-flex flex-wrap gap-2">
+                                    {[
+                                      200, 300, 400, 500, 600, 800, 1000, 1200,
+                                    ].map((size) => (
+                                      <div key={size} className="form-check">
+                                        <input
+                                          className="form-check-input"
+                                          type="checkbox"
+                                          id={`size-${size}`}
+                                          checked={chunkSizes.includes(size)}
+                                          onChange={() =>
+                                            handleChunkSizeToggle(size)
+                                          }
+                                        />
+                                        <label
+                                          className="form-check-label small"
+                                          htmlFor={`size-${size}`}
+                                        >
+                                          {size}
+                                        </label>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                                <div className="col-md-6">
+                                  <label className="form-label">重疊比例</label>
+                                  <div className="d-flex flex-wrap gap-2">
+                                    {[0.0, 0.1, 0.2, 0.3].map((ratio) => (
+                                      <div key={ratio} className="form-check">
+                                        <input
+                                          className="form-check-input"
+                                          type="checkbox"
+                                          id={`ratio-${ratio}`}
+                                          checked={overlapRatios.includes(
+                                            ratio
+                                          )}
+                                          onChange={() =>
+                                            handleOverlapRatioToggle(ratio)
+                                          }
+                                        />
+                                        <label
+                                          className="form-check-label small"
+                                          htmlFor={`ratio-${ratio}`}
+                                        >
+                                          {(ratio * 100).toFixed(0)}%
+                                        </label>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="mt-3">
+                                <div className="alert alert-info">
+                                  <small>
+                                    <strong>組合數量：</strong>
+                                    {selectedStrategies.length *
+                                      chunkSizes.length *
+                                      overlapRatios.length}{" "}
+                                    種組合
+                                    <br />
+                                    <strong>選中的策略：</strong>
+                                    {selectedStrategies
+                                      .map((s) => strategyInfo[s].name)
+                                      .join("、")}
+                                    <br />
+                                    <strong>分塊大小：</strong>
+                                    {chunkSizes.join("、")} 字符
+                                    <br />
+                                    <strong>重疊比例：</strong>
+                                    {overlapRatios
+                                      .map((r) => `${(r * 100).toFixed(0)}%`)
+                                      .join("、")}
                                   </small>
                                 </div>
                               </div>
                             </div>
+
+                            {/* 開始分塊按鈕 */}
+                            <div className="d-grid">
+                              <button
+                                className="btn btn-warning btn-lg"
+                                onClick={handleRunMultipleChunking}
+                                disabled={
+                                  isChunking ||
+                                  selectedStrategies.length === 0 ||
+                                  chunkSizes.length === 0 ||
+                                  overlapRatios.length === 0
+                                }
+                              >
+                                {isChunking ? (
+                                  <>
+                                    <span
+                                      className="spinner-border spinner-border-sm me-2"
+                                      role="status"
+                                      aria-hidden="true"
+                                    ></span>
+                                    分塊中... ({chunkingProgress.toFixed(1)}%)
+                                  </>
+                                ) : (
+                                  `開始批量分塊 (${
+                                    selectedStrategies.length *
+                                    chunkSizes.length *
+                                    overlapRatios.length
+                                  } 種組合)`
+                                )}
+                              </button>
+                            </div>
+
+                            {/* 分塊錯誤提示 */}
+                            {chunkingError && (
+                              <div
+                                className="alert alert-danger mt-3"
+                                role="alert"
+                              >
+                                {chunkingError}
+                              </div>
+                            )}
                           </div>
-                        ))}
+                        )}
                       </div>
                     </div>
                   </div>
-                )}
-              </>
-            )}
+
+                  {/* 步驟3: QA Set映射 (可選) */}
+                  <div className="col-12">
+                    <div
+                      className={`card ${
+                        uploadedQASetFile && qaMappingResult
+                          ? "border-success"
+                          : chunkingResults.length > 0 && uploadedQASetFile
+                          ? "border-warning"
+                          : "border-secondary"
+                      }`}
+                    >
+                      <div
+                        className={`card-header ${
+                          uploadedQASetFile && qaMappingResult
+                            ? "bg-success text-white"
+                            : chunkingResults.length > 0 && uploadedQASetFile
+                            ? "bg-warning text-dark"
+                            : "bg-secondary text-white"
+                        }`}
+                      >
+                        <h5 className="mb-0">步驟 3: QA Set映射 (可選)</h5>
+                      </div>
+                      <div className="card-body">
+                        {!uploadedQASetFile ? (
+                          <div className="text-center text-muted py-3">
+                            <i className="bi bi-info-circle fs-1 d-block mb-2"></i>
+                            <p>此步驟為可選，用於將QA set與分塊結果進行映射</p>
+                            <p className="small">
+                              如需進行評測，建議上傳QA set文件
+                            </p>
+                          </div>
+                        ) : chunkingResults.length === 0 ? (
+                          <div className="text-center text-muted py-3">
+                            <i className="bi bi-hourglass-split fs-1 d-block mb-2"></i>
+                            <p>請先完成步驟2：多種分塊組合處理</p>
+                          </div>
+                        ) : !chunkingCompleted ? (
+                          <div className="text-center text-muted py-3">
+                            <i className="bi bi-exclamation-triangle fs-1 d-block mb-2"></i>
+                            <p>請先點擊「繼續到QA映射」按鈕</p>
+                          </div>
+                        ) : qaMappingResult ? (
+                          <div>
+                            <div className="alert alert-success mb-4">
+                              <h6>✅ QA Set映射完成</h6>
+                              <p className="mb-0">
+                                已成功完成QA set與分塊的映射，共處理{" "}
+                                {qaMappingResult.original_qa_set?.length || 0}{" "}
+                                個問題
+                              </p>
+                            </div>
+
+                            {/* 映射摘要 */}
+                            {qaMappingResult.mapping_summary && (
+                              <div className="row g-3 mb-4">
+                                <div className="col-md-3">
+                                  <div className="card bg-light">
+                                    <div className="card-body text-center">
+                                      <h5 className="card-title text-primary">
+                                        {
+                                          qaMappingResult.mapping_summary
+                                            .total_configs
+                                        }
+                                      </h5>
+                                      <p className="card-text small">
+                                        分塊配置數
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="col-md-3">
+                                  <div className="card bg-light">
+                                    <div className="card-body text-center">
+                                      <h5 className="card-title text-info">
+                                        {qaMappingResult.original_qa_set
+                                          ?.length || 0}
+                                      </h5>
+                                      <p className="card-text small">
+                                        QA問題數
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 映射結果詳情 */}
+                            {qaMappingResult.mapping_results && (
+                              <div className="mb-4">
+                                <h6>映射結果詳情</h6>
+                                <div className="table-responsive">
+                                  <table className="table table-sm table-striped">
+                                    <thead>
+                                      <tr>
+                                        <th>配置</th>
+                                        <th>策略</th>
+                                        <th>分塊數量</th>
+                                        <th>正例問題</th>
+                                        <th>負例問題</th>
+                                        <th>平均chunk數/問題</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {Object.entries(
+                                        qaMappingResult.mapping_results
+                                      ).map(
+                                        ([configId, result]: [string, any]) => (
+                                          <tr key={configId}>
+                                            <td>
+                                              <small>
+                                                {result.strategy} |{" "}
+                                                {result.config.chunk_size} |{" "}
+                                                {(
+                                                  result.config.overlap_ratio *
+                                                  100
+                                                ).toFixed(0)}
+                                                %
+                                              </small>
+                                            </td>
+                                            <td>{result.strategy}</td>
+                                            <td>{result.chunk_count}</td>
+                                            <td>
+                                              {
+                                                result.mapping_stats
+                                                  .positive_questions
+                                              }
+                                            </td>
+                                            <td>
+                                              {
+                                                result.mapping_stats
+                                                  .negative_questions
+                                              }
+                                            </td>
+                                            <td>
+                                              {result.mapping_stats.avg_chunks_per_question.toFixed(
+                                                1
+                                              )}
+                                            </td>
+                                          </tr>
+                                        )
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+
+                                {/* 映射後的QA set詳細內容 */}
+                                <QAMappingDetails
+                                  mappingResults={
+                                    qaMappingResult.mapping_results
+                                  }
+                                />
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="alert alert-info">
+                              <h6>📋 準備進行QA映射</h6>
+                              <p className="mb-0">
+                                已上傳QA set文件，可以開始進行QA
+                                set與分塊結果的映射
+                              </p>
+                            </div>
+
+                            <div className="d-grid">
+                              <button
+                                className="btn btn-primary btn-lg"
+                                onClick={handleStartQAMapping}
+                                disabled={
+                                  !chunkingCompleted || !!qaMappingTaskId
+                                }
+                              >
+                                {qaMappingTaskId ? (
+                                  <>
+                                    <span
+                                      className="spinner-border spinner-border-sm me-2"
+                                      role="status"
+                                      aria-hidden="true"
+                                    ></span>
+                                    QA映射中... ({qaMappingProgress.toFixed(1)}
+                                    %)
+                                  </>
+                                ) : (
+                                  <>
+                                    <i className="bi bi-link-45deg me-2"></i>
+                                    開始QA Set映射
+                                  </>
+                                )}
+                              </button>
+                            </div>
+
+                            {/* 進度條 */}
+                            {qaMappingTaskId && (
+                              <div className="mt-3">
+                                <div className="progress">
+                                  <div
+                                    className="progress-bar progress-bar-striped progress-bar-animated"
+                                    role="progressbar"
+                                    style={{ width: `${qaMappingProgress}%` }}
+                                    aria-valuenow={qaMappingProgress}
+                                    aria-valuemin={0}
+                                    aria-valuemax={100}
+                                  >
+                                    {qaMappingProgress.toFixed(1)}%
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 錯誤提示 */}
+                            {qaMappingError && (
+                              <div className="mt-3">
+                                <div
+                                  className="alert alert-danger"
+                                  role="alert"
+                                >
+                                  <i className="bi bi-exclamation-triangle me-1"></i>
+                                  {qaMappingError}
+                                </div>
+                              </div>
+                            )}
+
+                            {!chunkingCompleted && (
+                              <div className="mt-2">
+                                <div
+                                  className="alert alert-warning"
+                                  role="alert"
+                                >
+                                  <i className="bi bi-exclamation-triangle me-1"></i>
+                                  請先完成分塊組合處理
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 步驟4: 策略評估 */}
+                  <div className="col-12">
+                    <div
+                      className={`card ${
+                        evaluationResults.length > 0
+                          ? "border-success"
+                          : "border-warning"
+                      }`}
+                    >
+                      <div
+                        className={`card-header ${
+                          evaluationResults.length > 0
+                            ? "bg-success text-white"
+                            : "bg-warning text-dark"
+                        }`}
+                      >
+                        <h5 className="mb-0">步驟 4: 策略評估</h5>
+                      </div>
+                      <div className="card-body">
+                        {chunkingResults.length > 0 ? (
+                          <div>
+                            {/* 評測配置信息 */}
+                            <div className="mb-4">
+                              <h6>策略評估配置</h6>
+                              <div className="alert alert-info">
+                                <h6>📊 評估說明</h6>
+                                <p className="mb-2">
+                                  將使用步驟3中映射的QA Set對步驟2中生成的{" "}
+                                  {chunkingResults.length}{" "}
+                                  種分塊組合進行檢索測試，
+                                  計算P@K和R@K指標來評估各分割策略的表現。
+                                </p>
+                                <div className="row">
+                                  <div className="col-md-6">
+                                    <strong>分塊組合數：</strong>{" "}
+                                    {chunkingResults.length}
+                                  </div>
+                                  <div className="col-md-6">
+                                    <strong>QA問題數：</strong>{" "}
+                                    {qaMappingResult?.original_qa_set?.length ||
+                                      0}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* 開始評測按鈕 */}
+                            <div className="d-grid mb-4">
+                              <button
+                                className="btn btn-primary btn-lg"
+                                onClick={startEvaluation}
+                                disabled={
+                                  evaluationLoading ||
+                                  !qaMappingResult ||
+                                  chunkingResults.length === 0
+                                }
+                              >
+                                {evaluationLoading ? (
+                                  <>
+                                    <span
+                                      className="spinner-border spinner-border-sm me-2"
+                                      role="status"
+                                      aria-hidden="true"
+                                    ></span>
+                                    評測中...
+                                  </>
+                                ) : !qaMappingResult ? (
+                                  "請先完成QA Set映射"
+                                ) : chunkingResults.length === 0 ? (
+                                  "請先完成多種分塊組合處理"
+                                ) : (
+                                  "開始策略評估"
+                                )}
+                              </button>
+                            </div>
+
+                            {/* 評測錯誤提示 */}
+                            {evaluationError && (
+                              <div className="alert alert-danger" role="alert">
+                                {evaluationError}
+                              </div>
+                            )}
+
+                            {/* 評測進度 */}
+                            {currentTask && (
+                              <div className="mb-4">
+                                <h6>評測進度</h6>
+                                <div className="progress mb-2">
+                                  <div
+                                    className="progress-bar"
+                                    role="progressbar"
+                                    style={{
+                                      width: `${currentTask.progress * 100}%`,
+                                    }}
+                                    aria-valuenow={currentTask.progress * 100}
+                                    aria-valuemin={0}
+                                    aria-valuemax={100}
+                                  >
+                                    {(currentTask.progress * 100).toFixed(1)}%
+                                  </div>
+                                </div>
+                                <div className="d-flex justify-content-between small text-muted">
+                                  <span>
+                                    已完成 {currentTask.completed_configs} /{" "}
+                                    {currentTask.total_configs} 個配置
+                                  </span>
+                                  <span>
+                                    預計剩餘時間:{" "}
+                                    {calculateEstimatedTime(currentTask)} 分鐘
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 評測結果 */}
+                            {evaluationResults.length > 0 && (
+                              <div>
+                                <h6>評測結果</h6>
+
+                                {/* 最佳配置 */}
+                                {getBestConfig() && (
+                                  <div className="alert alert-success mb-4">
+                                    <h6 className="alert-heading">
+                                      🎯 最佳配置 (綜合評分最高)
+                                    </h6>
+                                    <div className="row">
+                                      <div className="col-md-6">
+                                        <h6>配置參數</h6>
+                                        <div className="table-responsive">
+                                          <table className="table table-sm">
+                                            <tbody>
+                                              <tr>
+                                                <td>
+                                                  <strong>分塊大小:</strong>
+                                                </td>
+                                                <td>
+                                                  {
+                                                    getBestConfig()?.config
+                                                      .chunk_size
+                                                  }
+                                                </td>
+                                              </tr>
+                                              <tr>
+                                                <td>
+                                                  <strong>重疊比例:</strong>
+                                                </td>
+                                                <td>
+                                                  {(
+                                                    (getBestConfig()?.config
+                                                      .overlap_ratio || 0) * 100
+                                                  ).toFixed(0)}
+                                                  %
+                                                </td>
+                                              </tr>
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                      <div className="col-md-6">
+                                        <h6>性能指標</h6>
+                                        <div className="table-responsive">
+                                          <table className="table table-sm">
+                                            <tbody>
+                                              <tr>
+                                                <td>
+                                                  <strong>Precision@3:</strong>
+                                                </td>
+                                                <td>
+                                                  <span className="badge bg-success">
+                                                    {getBestConfig()?.metrics.precision_at_k[3]?.toFixed(
+                                                      3
+                                                    ) || "0.000"}
+                                                  </span>
+                                                </td>
+                                              </tr>
+                                              <tr>
+                                                <td>
+                                                  <strong>Recall@3:</strong>
+                                                </td>
+                                                <td>
+                                                  <span className="badge bg-info">
+                                                    {getBestConfig()?.metrics.recall_at_k[3]?.toFixed(
+                                                      3
+                                                    ) || "0.000"}
+                                                  </span>
+                                                </td>
+                                              </tr>
+                                              <tr>
+                                                <td>
+                                                  <strong>
+                                                    Precision Omega:
+                                                  </strong>
+                                                </td>
+                                                <td>
+                                                  <span className="badge bg-warning">
+                                                    {getBestConfig()?.metrics.precision_omega?.toFixed(
+                                                      3
+                                                    ) || "0.000"}
+                                                  </span>
+                                                </td>
+                                              </tr>
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* 詳細結果表格 */}
+                                <div className="table-responsive mb-4">
+                                  <table className="table table-striped">
+                                    <thead>
+                                      <tr>
+                                        <th>配置</th>
+                                        <th>Precision@3</th>
+                                        <th>Recall@3</th>
+                                        <th>Precision Omega</th>
+                                        <th>分塊數量</th>
+                                        <th>平均長度</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {evaluationResults.map(
+                                        (result, index) => (
+                                          <tr key={index}>
+                                            <td>
+                                              <div className="small">
+                                                <strong>固定大小分割</strong>
+                                                <br />
+                                                Size: {result.config.chunk_size}
+                                                <br />
+                                                Overlap:{" "}
+                                                {(
+                                                  result.config.overlap_ratio *
+                                                  100
+                                                ).toFixed(0)}
+                                                %
+                                              </div>
+                                            </td>
+                                            <td>
+                                              <span
+                                                className={`badge ${
+                                                  result.metrics
+                                                    .precision_at_k[3] > 0.4
+                                                    ? "bg-success"
+                                                    : result.metrics
+                                                        .precision_at_k[3] > 0.2
+                                                    ? "bg-warning"
+                                                    : "bg-danger"
+                                                }`}
+                                              >
+                                                {result.metrics.precision_at_k[3]?.toFixed(
+                                                  3
+                                                ) || "0.000"}
+                                              </span>
+                                            </td>
+                                            <td>
+                                              <span
+                                                className={`badge ${
+                                                  result.metrics
+                                                    .recall_at_k[3] > 0.8
+                                                    ? "bg-success"
+                                                    : result.metrics
+                                                        .recall_at_k[3] > 0.6
+                                                    ? "bg-warning"
+                                                    : "bg-danger"
+                                                }`}
+                                              >
+                                                {result.metrics.recall_at_k[3]?.toFixed(
+                                                  3
+                                                ) || "0.000"}
+                                              </span>
+                                            </td>
+                                            <td>
+                                              <span
+                                                className={`badge ${
+                                                  result.metrics
+                                                    .precision_omega > 0.4
+                                                    ? "bg-success"
+                                                    : result.metrics
+                                                        .precision_omega > 0.2
+                                                    ? "bg-warning"
+                                                    : "bg-danger"
+                                                }`}
+                                              >
+                                                {result.metrics.precision_omega?.toFixed(
+                                                  3
+                                                ) || "0.000"}
+                                              </span>
+                                            </td>
+                                            <td>
+                                              {result.metrics.chunk_count}
+                                            </td>
+                                            <td>
+                                              {result.metrics.avg_chunk_length.toFixed(
+                                                1
+                                              )}{" "}
+                                              字符
+                                            </td>
+                                          </tr>
+                                        )
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+
+                                {/* 導出報告按鈕 */}
+                                <div className="d-grid">
+                                  <button
+                                    className="btn btn-outline-primary"
+                                    onClick={exportEvaluationReport}
+                                  >
+                                    導出評測報告
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-center text-muted py-3">
+                            <i className="bi bi-hourglass-split fs-1 d-block mb-2"></i>
+                            <p>請先完成前面的步驟</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>

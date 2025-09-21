@@ -8,19 +8,23 @@ from datetime import datetime
 from typing import List, Dict, Any
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 from .models import (
     DocRecord, EvaluationTask, ChunkConfig, EvaluationRequest, 
     GenerateQuestionsRequest
 )
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 from .store import InMemoryStore
 from .pdf_processor import convert_pdf_to_text, convert_pdf_fallback
 from .chunking import chunk_text
 from .evaluation import evaluate_chunk_config
+from .qa_converter import convert_qa_set_with_law_data
 # from .question_generator import generate_questions  # 使用main.py中的函數
 
 # 創建路由器
@@ -31,6 +35,9 @@ from .main import store
 
 # 簡單的任務狀態存儲
 task_status_store = {}
+
+# 批量分塊任務存儲
+chunking_task_store = {}
 
 
 class EvaluationMetrics(BaseModel):
@@ -109,6 +116,47 @@ class EvaluationStore:
                 self.tasks[task_id].progress = 1.0
 
 
+class QASetItem(BaseModel):
+    query: str
+    label: str
+    answer: str
+    snippets: Optional[List[Dict[str, Any]]] = []
+    spans: Optional[List[Dict[str, Any]]] = []
+    article_metadata: Optional[Dict[str, Any]] = None
+    relevant_chunks: Optional[List[str]] = []  # 映射後的chunk IDs
+
+
+class QASetUploadRequest(BaseModel):
+    doc_id: str
+    chunk_sizes: List[int] = [300, 500, 800]
+    overlap_ratios: List[float] = [0.0, 0.1, 0.2]
+    strategy: str = "fixed_size"
+    k_values: List[int] = [1, 3, 5, 10]
+
+
+class ChunkMappingResult(BaseModel):
+    task_id: str
+    status: str
+    qa_set: List[QASetItem]
+    chunk_configs: List[Dict[str, Any]]
+    mapping_results: Dict[str, Dict[str, List[str]]]  # config_id -> question_id -> chunk_ids
+
+
+class MultipleChunkingRequest(BaseModel):
+    doc_id: str
+    strategies: List[str] = ["fixed_size"]
+    chunk_sizes: List[int] = [300, 500, 800]
+    overlap_ratios: List[float] = [0.0, 0.1, 0.2]
+
+
+class StrategyEvaluationRequest(BaseModel):
+    doc_id: str
+    chunking_results: List[Dict[str, Any]]
+    qa_mapping_result: Dict[str, Any]
+    test_queries: List[str]
+    k_values: List[int] = [1, 3, 5, 10]
+
+
 class FixedSizeEvaluationRequest(BaseModel):
     doc_id: str
     chunk_sizes: List[int] = [300, 500, 800]
@@ -143,6 +191,270 @@ class FixedSizeEvaluationRequest(BaseModel):
 
 # 創建評估存儲實例
 eval_store = EvaluationStore()
+
+
+def calculate_iou(span1: Tuple[int, int], span2: Tuple[int, int]) -> float:
+    """計算兩個span的IoU (Intersection over Union)"""
+    start1, end1 = span1
+    start2, end2 = span2
+    
+    # 計算交集
+    intersection_start = max(start1, start2)
+    intersection_end = min(end1, end2)
+    intersection_length = max(0, intersection_end - intersection_start)
+    
+    # 計算聯集
+    union_length = (end1 - start1) + (end2 - start2) - intersection_length
+    
+    if union_length == 0:
+        return 0.0
+    
+    return intersection_length / union_length
+
+
+def map_spans_to_chunks(qa_items: List[Dict], chunks_with_span: List[Dict[str, Any]], iou_threshold: float = 0.5) -> List[Dict]:
+    """
+    將QA set中的spans映射到chunks（使用帶span信息的chunks）
+    
+    參數:
+    - qa_items: QA set項目列表
+    - chunks_with_span: 帶span信息的chunk列表 [{"content": str, "span": {"start": int, "end": int}, "chunk_id": str, "metadata": dict}, ...]
+    - iou_threshold: IoU閾值，默認為0.5
+    
+    返回:
+    - 映射後的QA items，包含relevant_chunks字段
+    """
+    mapped_qa_items = []
+    
+    print(f"開始映射: {len(qa_items)} 個QA項目, {len(chunks_with_span)} 個chunks, IoU閾值: {iou_threshold}")
+    
+    for qa_item in qa_items:
+        mapped_item = qa_item.copy()
+        relevant_chunks = []
+        
+        # 處理spans字段
+        if 'spans' in qa_item and qa_item['spans']:
+            print(f"處理問題 '{qa_item.get('query', '')[:50]}...' 的 {len(qa_item['spans'])} 個spans")
+            for span in qa_item['spans']:
+                span_start = span.get('start_char', 0)
+                span_end = span.get('end_char', span_start)
+                print(f"  Span: [{span_start}-{span_end}]")
+                
+                # 找到與此span有IoU > threshold的chunks
+                for chunk_info in chunks_with_span:
+                    chunk_span = chunk_info['span']
+                    chunk_start = chunk_span['start']
+                    chunk_end = chunk_span['end']
+                    chunk_id = chunk_info['chunk_id']
+                    
+                    iou = calculate_iou((span_start, span_end), (chunk_start, chunk_end))
+                    if iou > iou_threshold:
+                        if chunk_id not in relevant_chunks:
+                            relevant_chunks.append(chunk_id)
+                            print(f"    找到匹配chunk: {chunk_id} (IoU: {iou:.3f})")
+                    elif iou > 0.3:  # 提高閾值，平衡成功率和精確性
+                        # 檢查是否有部分重疊
+                        overlap_start = max(span_start, chunk_start)
+                        overlap_end = min(span_end, chunk_end)
+                        if overlap_start < overlap_end:
+                            overlap_ratio = (overlap_end - overlap_start) / (span_end - span_start)
+                            if overlap_ratio > 0.5:  # 如果span的50%以上被chunk覆蓋
+                                if chunk_id not in relevant_chunks:
+                                    relevant_chunks.append(chunk_id)
+                                    print(f"    基於部分重疊找到chunk: {chunk_id} (IoU: {iou:.3f}, 重疊率: {overlap_ratio:.3f})")
+        
+        # 處理snippets字段（如果存在）
+        if 'snippets' in qa_item and qa_item['snippets']:
+            print(f"處理問題 '{qa_item.get('query', '')[:50]}...' 的 {len(qa_item['snippets'])} 個snippets")
+            for snippet in qa_item['snippets']:
+                if 'span' in snippet:
+                    span_start, span_end = snippet['span']
+                    print(f"  Snippet span: [{span_start}-{span_end}]")
+                    
+                    # 找到與此span有IoU > threshold的chunks
+                    for chunk_info in chunks_with_span:
+                        chunk_span = chunk_info['span']
+                        chunk_start = chunk_span['start']
+                        chunk_end = chunk_span['end']
+                        chunk_id = chunk_info['chunk_id']
+                        
+                        iou = calculate_iou((span_start, span_end), (chunk_start, chunk_end))
+                        if iou > iou_threshold:
+                            if chunk_id not in relevant_chunks:
+                                relevant_chunks.append(chunk_id)
+                                print(f"    找到匹配chunk: {chunk_id} (IoU: {iou:.3f})")
+        
+        # 如果沒有找到相關chunks，嘗試基於內容匹配
+        if not relevant_chunks and qa_item.get('label', '').lower() == 'yes':
+            # 對於正例，嘗試基於答案內容匹配chunks
+            answer = qa_item.get('answer', '')
+            if answer:
+                print(f"嘗試基於答案內容匹配: '{qa_item.get('query', '')[:50]}...'")
+                
+                # 改進的關鍵詞匹配邏輯
+                # 1. 提取法條號碼
+                import re
+                article_patterns = [
+                    r"第(\d+)條",
+                    r"第(\d+)條之(\d+)",
+                    r"第(\d+)-(\d+)條"
+                ]
+                
+                article_numbers = []
+                for pattern in article_patterns:
+                    matches = re.findall(pattern, answer)
+                    for match in matches:
+                        if isinstance(match, tuple):
+                            article_numbers.append(match[0])
+                        else:
+                            article_numbers.append(match)
+                
+                # 2. 提取關鍵詞
+                keywords = []
+                # 從答案中提取關鍵詞
+                answer_words = answer.split()
+                keywords.extend(answer_words[:5])  # 前5個詞
+                
+                # 從問題中提取關鍵詞
+                query_words = qa_item.get('query', '').split()
+                keywords.extend(query_words[:3])  # 前3個詞
+                
+                # 3. 使用cosine相似度進行精確匹配
+                if chunks_with_span:
+                    # 準備文本數據
+                    texts = [answer] + [chunk_info['content'] for chunk_info in chunks_with_span]
+                    
+                    # 使用TF-IDF向量化
+                    vectorizer = TfidfVectorizer(
+                        max_features=1000,
+                        stop_words=None,  # 中文不需要停用詞
+                        ngram_range=(1, 2)  # 使用1-gram和2-gram
+                    )
+                    
+                    try:
+                        tfidf_matrix = vectorizer.fit_transform(texts)
+                        cosine_similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:])
+                        
+                        # 找到相似度超過閾值的chunks
+                        similarity_threshold = 0.8
+                        for i, similarity in enumerate(cosine_similarities[0]):
+                            if similarity > similarity_threshold:
+                                chunk_id = chunks_with_span[i]['chunk_id']
+                                if chunk_id not in relevant_chunks:
+                                    relevant_chunks.append(chunk_id)
+                                    print(f"    基於cosine相似度找到chunk: {chunk_id} (相似度: {similarity:.3f})")
+                    except Exception as e:
+                        print(f"    cosine相似度計算失敗: {e}")
+                        # 回退到法條號碼和關鍵詞匹配
+                        for chunk_info in chunks_with_span:
+                            chunk_content = chunk_info['content']
+                            chunk_id = chunk_info['chunk_id']
+                            
+                            # 檢查法條號碼匹配
+                            article_match = False
+                            for article_num in article_numbers:
+                                if f"第{article_num}條" in chunk_content:
+                                    article_match = True
+                                    break
+                            
+                            # 檢查關鍵詞匹配
+                            keyword_match = any(keyword in chunk_content for keyword in keywords if len(keyword) > 1)
+                            
+                            # 如果法條號碼匹配或關鍵詞匹配，則添加
+                            if (article_match or keyword_match) and chunk_id not in relevant_chunks:
+                                relevant_chunks.append(chunk_id)
+                                match_type = "法條號碼" if article_match else "關鍵詞"
+                                print(f"    基於{match_type}匹配找到chunk: {chunk_id}")
+        
+        # 如果沒有找到相關chunks，檢查是否為負例
+        if not relevant_chunks and qa_item.get('label', '').lower() == 'no':
+            # 負例不需要相關chunks
+            print(f"負例問題 '{qa_item.get('query', '')[:50]}...' 無需相關chunks")
+        elif not relevant_chunks:
+            # 正例但沒有找到相關chunks，可能需要調整IoU閾值或檢查數據
+            print(f"警告: 問題 '{qa_item.get('query', '')[:50]}...' 沒有找到相關chunks")
+            if 'spans' in qa_item and qa_item['spans']:
+                print(f"  該問題有 {len(qa_item['spans'])} 個spans但未匹配到任何chunk")
+            else:
+                print(f"  該問題沒有spans信息，也無法基於內容匹配")
+        
+        mapped_item['relevant_chunks'] = relevant_chunks
+        mapped_qa_items.append(mapped_item)
+    
+    print(f"映射完成: {sum(1 for item in mapped_qa_items if item['relevant_chunks'])} 個問題有相關chunks")
+    return mapped_qa_items
+
+
+def map_spans_to_chunks_legacy(qa_items: List[Dict], chunks: List[str], chunk_size: int, overlap: int, strategy: str = "fixed_size") -> List[Dict]:
+    """
+    將QA set中的spans映射到chunks（舊版本，向後兼容）
+    
+    參數:
+    - qa_items: QA set項目列表
+    - chunks: 分塊後的文本列表
+    - chunk_size: 分塊大小
+    - overlap: 重疊大小
+    - strategy: 分塊策略
+    
+    返回:
+    - 映射後的QA items，包含relevant_chunks字段
+    """
+    # 計算每個chunk的字符範圍
+    chunk_ranges = []
+    current_pos = 0
+    
+    for i, chunk in enumerate(chunks):
+        chunk_start = current_pos
+        chunk_end = current_pos + len(chunk)
+        chunk_ranges.append((chunk_start, chunk_end, f"chunk_{i+1:03d}"))
+        
+        # 計算下一個chunk的起始位置（考慮重疊）
+        current_pos = chunk_end - overlap
+    
+    mapped_qa_items = []
+    
+    for qa_item in qa_items:
+        mapped_item = qa_item.copy()
+        relevant_chunks = []
+        
+        # 處理spans字段
+        if 'spans' in qa_item and qa_item['spans']:
+            for span in qa_item['spans']:
+                span_start = span.get('start_char', 0)
+                span_end = span.get('end_char', span_start)
+                
+                # 找到與此span有IoU > 0.5的chunks
+                for chunk_start, chunk_end, chunk_id in chunk_ranges:
+                    iou = calculate_iou((span_start, span_end), (chunk_start, chunk_end))
+                    if iou > 0.5:
+                        if chunk_id not in relevant_chunks:
+                            relevant_chunks.append(chunk_id)
+        
+        # 處理snippets字段（如果存在）
+        if 'snippets' in qa_item and qa_item['snippets']:
+            for snippet in qa_item['snippets']:
+                if 'span' in snippet:
+                    span_start, span_end = snippet['span']
+                    
+                    # 找到與此span有IoU > 0.5的chunks
+                    for chunk_start, chunk_end, chunk_id in chunk_ranges:
+                        iou = calculate_iou((span_start, span_end), (chunk_start, chunk_end))
+                        if iou > 0.5:
+                            if chunk_id not in relevant_chunks:
+                                relevant_chunks.append(chunk_id)
+        
+        # 如果沒有找到相關chunks，檢查是否為負例
+        if not relevant_chunks and qa_item.get('label', '').lower() == 'no':
+            # 負例不需要相關chunks
+            pass
+        elif not relevant_chunks:
+            # 正例但沒有找到相關chunks，可能需要調整IoU閾值或檢查數據
+            print(f"警告: 問題 '{qa_item.get('query', '')[:50]}...' 沒有找到相關chunks")
+        
+        mapped_item['relevant_chunks'] = relevant_chunks
+        mapped_qa_items.append(mapped_item)
+    
+    return mapped_qa_items
 
 
 def generate_text_from_merged_doc(merged_doc: Dict[str, Any]) -> str:
@@ -283,7 +595,86 @@ async def health_check():
     return {"status": "healthy", "message": "RAG API 運行正常"}
 
 
+@router.get("/docs")
+async def list_documents():
+    """列出所有文檔"""
+    docs = store.list_docs()
+    return {
+        "docs": [
+            {
+                "id": doc.id,
+                "filename": doc.filename,
+                "text_length": len(doc.text) if doc.text else 0,
+                "has_json_data": bool(doc.json_data),
+                "chunks_count": len(doc.chunks) if doc.chunks else 0,
+                "chunk_size": doc.chunk_size,
+                "overlap": doc.overlap
+            }
+            for doc in docs
+        ],
+        "total": len(docs)
+    }
+
+
 # PDF 轉換路由
+@router.post("/upload-json")
+async def upload_json(file: UploadFile = File(...)):
+    """上傳JSON文件（法條JSON）"""
+    try:
+        # 驗證文件格式
+        if not file.filename or not file.filename.lower().endswith('.json'):
+            raise HTTPException(status_code=400, detail="只支持JSON格式文件")
+        
+        # 讀取文件內容
+        file_content = await file.read()
+        
+        # 解析JSON內容
+        try:
+            json_data = json.loads(file_content.decode('utf-8'))
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"JSON格式錯誤: {str(e)}")
+        
+        # 驗證JSON結構（檢查是否為法條JSON格式）
+        if not isinstance(json_data, dict) or "laws" not in json_data:
+            raise HTTPException(status_code=400, detail="JSON文件格式不正確，應包含'laws'字段")
+        
+        # 生成文檔ID
+        doc_id = str(uuid.uuid4())
+        
+        # 從JSON結構生成文本內容
+        text_content = generate_text_from_merged_doc(json_data)
+        
+        if not text_content or not text_content.strip():
+            raise HTTPException(status_code=400, detail="JSON文件中沒有可用的文本內容")
+        
+        # 創建文檔記錄
+        doc_record = DocRecord(
+            id=doc_id,
+            filename=file.filename,
+            text=text_content,
+            chunks=[],
+            chunk_size=0,
+            overlap=0,
+            json_data=json_data
+        )
+        
+        # 存儲文檔
+        store.add_doc(doc_record)
+        
+        return {
+            "doc_id": doc_id,
+            "filename": file.filename,
+            "text_length": len(text_content),
+            "laws_count": len(json_data.get("laws", [])),
+            "message": "JSON文件上傳成功"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/convert")
 async def convert_pdf(
     file: UploadFile = File(...),
@@ -1154,6 +1545,635 @@ async def get_multiple_convert_status(task_id: str):
         )
 
 
+# QA Set上傳和映射相關的存儲
+qa_mapping_store = {}
+
+# 新增：QA映射請求模型
+class QAMappingRequest(BaseModel):
+    doc_id: str
+    qa_set: List[Dict[str, Any]]
+    chunking_results: List[Dict[str, Any]]  # 來自批量分塊的結果
+    iou_threshold: Optional[float] = 0.5  # IoU閾值
+
+@router.post("/upload-qa-set")
+async def upload_qa_set(
+    file: UploadFile = File(...),
+    doc_id: str = Form(...),
+    chunk_sizes: str = Form("[300, 500, 800]"),
+    overlap_ratios: str = Form("[0.0, 0.1, 0.2]"),
+    strategy: str = Form("fixed_size"),
+    background_tasks: BackgroundTasks = None
+):
+    """上傳QA set並進行chunk映射"""
+    try:
+        # 驗證文檔是否存在
+        doc = store.get_doc(doc_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="文檔不存在")
+        
+        # 驗證文件格式
+        if not file.filename or not file.filename.lower().endswith('.json'):
+            raise HTTPException(status_code=400, detail="只支持JSON格式的QA set文件")
+        
+        # 讀取並解析QA set文件
+        file_content = await file.read()
+        try:
+            qa_set = json.loads(file_content.decode('utf-8'))
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"JSON格式錯誤: {str(e)}")
+        
+        # 驗證QA set格式
+        if not isinstance(qa_set, list):
+            raise HTTPException(status_code=400, detail="QA set必須是一個列表")
+        
+        # 檢查是否有法條JSON數據用於轉換
+        law_json_data = doc.json_data if hasattr(doc, 'json_data') and doc.json_data else None
+        
+        # 轉換QA set，補充缺失的span信息
+        if law_json_data:
+            print(f"開始轉換QA set，原始項目數: {len(qa_set)}")
+            try:
+                converted_qa_set, conversion_stats = convert_qa_set_with_law_data(qa_set, law_json_data)
+                print(f"QA set轉換完成:")
+                print(f"  - 總項目數: {conversion_stats['total_items']}")
+                print(f"  - 有span的項目: {conversion_stats['items_with_spans']}")
+                print(f"  - 有file_path的項目: {conversion_stats['items_with_file_path']}")
+                print(f"  - span覆蓋率: {conversion_stats['span_coverage']:.2%}")
+                print(f"  - file_path覆蓋率: {conversion_stats['file_path_coverage']:.2%}")
+                qa_set = converted_qa_set
+            except Exception as e:
+                print(f"QA set轉換失敗: {e}")
+                # 轉換失敗時繼續使用原始QA set
+        else:
+            print("沒有法條JSON數據，跳過QA set轉換")
+        
+        # 解析配置參數
+        try:
+            chunk_sizes_list = json.loads(chunk_sizes)
+            overlap_ratios_list = json.loads(overlap_ratios)
+        except json.JSONDecodeError:
+            chunk_sizes_list = [300, 500, 800]
+            overlap_ratios_list = [0.0, 0.1, 0.2]
+        
+        # 創建任務ID
+        task_id = str(uuid.uuid4())
+        
+        # 在後台處理映射
+        background_tasks.add_task(
+            process_qa_mapping,
+            task_id,
+            doc_id,
+            qa_set,
+            chunk_sizes_list,
+            overlap_ratios_list,
+            strategy
+        )
+        
+        return {
+            "task_id": task_id,
+            "status": "processing",
+            "message": "QA set上傳成功，正在進行chunk映射..."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/qa-mapping/status/{task_id}")
+async def get_qa_mapping_status(task_id: str):
+    """獲取QA映射任務狀態"""
+    if task_id not in qa_mapping_store:
+        raise HTTPException(status_code=404, detail="任務不存在")
+    
+    status_info = qa_mapping_store[task_id]
+    return {
+        "task_id": task_id,
+        "status": status_info["status"],
+        "progress": status_info.get("progress", 0.0),
+        "result": status_info.get("result"),
+        "error": status_info.get("error")
+    }
+
+
+@router.get("/qa-mapping/result/{task_id}")
+async def get_qa_mapping_result(task_id: str):
+    """獲取QA映射結果"""
+    if task_id not in qa_mapping_store:
+        raise HTTPException(status_code=404, detail="任務不存在")
+    
+    status_info = qa_mapping_store[task_id]
+    if status_info["status"] != "completed":
+        raise HTTPException(status_code=400, detail="任務未完成")
+    
+    return status_info["result"]
+
+
+# 調試端點：測試QA映射請求
+@router.post("/qa-mapping/debug")
+async def debug_qa_mapping(req: dict):
+    """調試QA映射請求"""
+    try:
+        print("調試QA映射請求:")
+        print(f"- 請求類型: {type(req)}")
+        print(f"- 請求鍵: {list(req.keys()) if isinstance(req, dict) else 'Not a dict'}")
+        
+        if isinstance(req, dict):
+            print(f"- doc_id: {req.get('doc_id')}")
+            print(f"- qa_set類型: {type(req.get('qa_set'))}")
+            print(f"- qa_set長度: {len(req.get('qa_set', []))}")
+            print(f"- chunking_results類型: {type(req.get('chunking_results'))}")
+            print(f"- chunking_results長度: {len(req.get('chunking_results', []))}")
+            print(f"- iou_threshold: {req.get('iou_threshold')}")
+            
+            # 檢查chunking_results結構
+            chunking_results = req.get('chunking_results', [])
+            if chunking_results:
+                print(f"- 第一個chunking_result鍵: {list(chunking_results[0].keys()) if isinstance(chunking_results[0], dict) else 'Not a dict'}")
+                if isinstance(chunking_results[0], dict):
+                    print(f"- 是否有chunks_with_span: {'chunks_with_span' in chunking_results[0]}")
+                    if 'chunks_with_span' in chunking_results[0]:
+                        print(f"- chunks_with_span長度: {len(chunking_results[0]['chunks_with_span'])}")
+        
+        return {"status": "debug_success", "message": "調試信息已輸出到控制台"}
+        
+    except Exception as e:
+        print(f"調試端點錯誤: {e}")
+        return {"status": "debug_error", "error": str(e)}
+
+
+# 新增：直接進行QA映射的API端點
+@router.post("/qa-mapping/map")
+async def map_qa_to_chunks(req: QAMappingRequest, background_tasks: BackgroundTasks):
+    """
+    將QA set映射到分塊結果
+    
+    這個API接收QA set和分塊結果，進行映射並返回結果
+    """
+    try:
+        # 添加調試信息
+        print(f"QA映射請求 - doc_id: {req.doc_id}")
+        print(f"QA映射請求 - qa_set長度: {len(req.qa_set) if req.qa_set else 0}")
+        print(f"QA映射請求 - chunking_results長度: {len(req.chunking_results) if req.chunking_results else 0}")
+        print(f"QA映射請求 - iou_threshold: {req.iou_threshold}")
+        
+        # 驗證輸入數據
+        if not req.qa_set:
+            raise HTTPException(status_code=400, detail="QA set不能為空")
+        
+        if not req.chunking_results:
+            raise HTTPException(status_code=400, detail="分塊結果不能為空")
+        
+        # 驗證文檔是否存在
+        doc = store.get_doc(req.doc_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="文檔不存在")
+        
+        # 創建任務ID
+        task_id = str(uuid.uuid4())
+        
+        # 在後台處理映射
+        background_tasks.add_task(
+            process_qa_mapping_with_chunks,
+            task_id,
+            req.doc_id,
+            req.qa_set,
+            req.chunking_results,
+            req.iou_threshold
+        )
+        
+        return {
+            "task_id": task_id,
+            "status": "processing",
+            "message": "QA映射任務已開始"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"QA映射API錯誤: {e}")
+        raise HTTPException(status_code=500, detail=f"QA映射失敗: {str(e)}")
+
+
+async def process_qa_mapping_with_chunks(
+    task_id: str,
+    doc_id: str,
+    qa_set: List[Dict],
+    chunking_results: List[Dict[str, Any]],
+    iou_threshold: float
+):
+    """處理QA映射的後台任務（使用已生成的分塊結果）"""
+    try:
+        # 初始化任務狀態
+        qa_mapping_store[task_id] = {
+            "status": "processing",
+            "progress": 0.0
+        }
+        
+        # 獲取文檔
+        doc = store.get_doc(doc_id)
+        if not doc:
+            qa_mapping_store[task_id] = {
+                "status": "failed",
+                "error": "文檔不存在"
+            }
+            return
+        
+        total_configs = len(chunking_results)
+        mapping_results = {}
+        
+        # 為每個分塊配置進行映射
+        for i, chunking_result in enumerate(chunking_results):
+            try:
+                # 獲取帶span信息的chunks
+                chunks_with_span = chunking_result.get('chunks_with_span', [])
+                
+                if not chunks_with_span:
+                    print(f"警告: 配置 {i} 沒有chunks_with_span信息，跳過")
+                    continue
+                
+                # 映射spans到chunks
+                mapped_qa_set = map_spans_to_chunks(
+                    qa_set,
+                    chunks_with_span,
+                    iou_threshold
+                )
+                
+                # 存儲映射結果
+                config_id = f"config_{i+1:03d}_{chunking_result['strategy']}_{chunking_result['config']['chunk_size']}_{chunking_result['config']['overlap_ratio']}"
+                mapping_results[config_id] = {
+                    "config": chunking_result['config'],
+                    "strategy": chunking_result['strategy'],
+                    "chunks_with_span": chunks_with_span,
+                    "mapped_qa_set": mapped_qa_set,
+                    "chunk_count": chunking_result['chunk_count'],
+                    "mapping_stats": _calculate_mapping_stats(mapped_qa_set)
+                }
+                
+                # 更新進度
+                progress = (i + 1) / total_configs
+                qa_mapping_store[task_id]["progress"] = progress
+                
+            except Exception as e:
+                print(f"配置 {i} 映射失敗: {e}")
+                continue
+        
+        # 完成任務
+        qa_mapping_store[task_id] = {
+            "status": "completed",
+            "progress": 1.0,
+            "result": {
+                "task_id": task_id,
+                "doc_id": doc_id,
+                "original_qa_set": qa_set,
+                "chunking_results": chunking_results,
+                "mapping_results": mapping_results,
+                "total_configs": len(chunking_results),
+                "iou_threshold": iou_threshold,
+                "mapping_summary": _generate_mapping_summary(mapping_results)
+            }
+        }
+        
+    except Exception as e:
+        qa_mapping_store[task_id] = {
+            "status": "failed",
+            "error": str(e)
+        }
+        print(f"QA映射失敗: {e}")
+
+
+def _calculate_mapping_stats(mapped_qa_set: List[Dict]) -> Dict[str, Any]:
+    """計算映射統計信息"""
+    total_questions = len(mapped_qa_set)
+    questions_with_chunks = sum(1 for item in mapped_qa_set if item.get('relevant_chunks'))
+    positive_questions = sum(1 for item in mapped_qa_set if item.get('label', '').lower() == 'yes')
+    negative_questions = total_questions - positive_questions
+    
+    return {
+        "total_questions": total_questions,
+        "questions_with_chunks": questions_with_chunks,
+        "mapping_coverage": questions_with_chunks / total_questions if total_questions > 0 else 0,
+        "positive_questions": positive_questions,
+        "negative_questions": negative_questions,
+        "avg_chunks_per_question": sum(len(item.get('relevant_chunks', [])) for item in mapped_qa_set) / total_questions if total_questions > 0 else 0
+    }
+
+
+def _generate_mapping_summary(mapping_results: Dict[str, Dict]) -> Dict[str, Any]:
+    """生成映射摘要"""
+    if not mapping_results:
+        return {}
+    
+    best_coverage = 0
+    best_config = None
+    
+    for config_id, result in mapping_results.items():
+        coverage = result['mapping_stats']['mapping_coverage']
+        if coverage > best_coverage:
+            best_coverage = coverage
+            best_config = config_id
+    
+    return {
+        "best_config": best_config,
+        "best_coverage": best_coverage,
+        "total_configs": len(mapping_results),
+        "avg_coverage": sum(result['mapping_stats']['mapping_coverage'] for result in mapping_results.values()) / len(mapping_results)
+    }
+
+
+async def process_qa_mapping(
+    task_id: str,
+    doc_id: str,
+    qa_set: List[Dict],
+    chunk_sizes: List[int],
+    overlap_ratios: List[float],
+    strategy: str
+):
+    """處理QA映射的後台任務"""
+    try:
+        # 初始化任務狀態
+        qa_mapping_store[task_id] = {
+            "status": "processing",
+            "progress": 0.0
+        }
+        
+        # 獲取文檔
+        doc = store.get_doc(doc_id)
+        if not doc:
+            qa_mapping_store[task_id] = {
+                "status": "failed",
+                "error": "文檔不存在"
+            }
+            return
+        
+        # 生成所有配置組合
+        configs = []
+        for chunk_size in chunk_sizes:
+            for overlap_ratio in overlap_ratios:
+                overlap = int(chunk_size * overlap_ratio)
+                configs.append({
+                    "chunk_size": chunk_size,
+                    "overlap_ratio": overlap_ratio,
+                    "overlap": overlap,
+                    "strategy": strategy
+                })
+        
+        total_configs = len(configs)
+        mapping_results = {}
+        
+        # 為每個配置進行映射
+        for i, config in enumerate(configs):
+            try:
+                # 生成分塊
+                chunks = chunk_text(
+                    doc.text,
+                    strategy=strategy,
+                    chunk_size=config["chunk_size"],
+                    overlap_ratio=config["overlap_ratio"]
+                )
+                
+                # 映射spans到chunks
+                mapped_qa_set = map_spans_to_chunks(
+                    qa_set,
+                    chunks,
+                    config["chunk_size"],
+                    config["overlap"],
+                    strategy
+                )
+                
+                # 存儲映射結果
+                config_id = f"config_{i+1:03d}_{config['chunk_size']}_{config['overlap_ratio']}"
+                mapping_results[config_id] = {
+                    "config": config,
+                    "chunks": chunks,
+                    "mapped_qa_set": mapped_qa_set,
+                    "chunk_count": len(chunks)
+                }
+                
+                # 更新進度
+                progress = (i + 1) / total_configs
+                qa_mapping_store[task_id]["progress"] = progress
+                
+            except Exception as e:
+                print(f"配置 {config} 映射失敗: {e}")
+                continue
+        
+        # 完成任務
+        qa_mapping_store[task_id] = {
+            "status": "completed",
+            "progress": 1.0,
+            "result": {
+                "task_id": task_id,
+                "doc_id": doc_id,
+                "original_qa_set": qa_set,
+                "configs": configs,
+                "mapping_results": mapping_results,
+                "total_configs": len(configs)
+            }
+        }
+        
+    except Exception as e:
+        qa_mapping_store[task_id] = {
+            "status": "failed",
+            "error": str(e)
+        }
+        print(f"QA映射失敗: {e}")
+
+
+async def process_multiple_chunking(
+    task_id: str,
+    doc_id: str,
+    strategies: List[str],
+    chunk_sizes: List[int],
+    overlap_ratios: List[float]
+):
+    """處理批量分塊的後台任務"""
+    try:
+        # 初始化任務狀態
+        chunking_task_store[task_id] = {
+            "status": "processing",
+            "progress": 0.0,
+            "results": []
+        }
+        
+        # 獲取文檔
+        doc = store.get_doc(doc_id)
+        if not doc:
+            chunking_task_store[task_id] = {
+                "status": "failed",
+                "error": "文檔不存在"
+            }
+            return
+        
+        # 生成所有配置組合
+        total_combinations = len(strategies) * len(chunk_sizes) * len(overlap_ratios)
+        completed_combinations = 0
+        results = []
+        
+        for strategy in strategies:
+            for chunk_size in chunk_sizes:
+                for overlap_ratio in overlap_ratios:
+                    try:
+                        # 準備分塊參數
+                        chunk_kwargs = {
+                            "chunk_size": chunk_size,
+                            "max_chunk_size": chunk_size,
+                            "overlap_ratio": overlap_ratio
+                        }
+                        
+                        # 根據策略添加特定參數
+                        if strategy == "structured_hierarchical":
+                            chunk_kwargs["chunk_by"] = "article"
+                        elif strategy == "rcts_hierarchical":
+                            chunk_kwargs["preserve_structure"] = True
+                        elif strategy == "hierarchical":
+                            chunk_kwargs["level_depth"] = 3
+                            chunk_kwargs["min_chunk_size"] = 200
+                        elif strategy == "semantic":
+                            chunk_kwargs["similarity_threshold"] = 0.6
+                            chunk_kwargs["context_window"] = 100
+                        elif strategy == "sliding_window":
+                            chunk_kwargs["window_size"] = chunk_size
+                            chunk_kwargs["step_size"] = int(chunk_size * 0.5)
+                            chunk_kwargs["boundary_aware"] = True
+                            chunk_kwargs["preserve_sentences"] = True
+                            chunk_kwargs["min_chunk_size_sw"] = 100
+                            chunk_kwargs["max_chunk_size_sw"] = chunk_size * 2
+                        
+                        # 生成分塊（帶span信息）
+                        from .chunking import chunk_text_with_span
+                        chunks_with_span = chunk_text_with_span(
+                            doc.text,
+                            strategy=strategy,
+                            json_data=doc.json_data,
+                            **chunk_kwargs
+                        )
+                        
+                        # 提取chunks文本（向後兼容）
+                        chunks = [chunk_info['content'] for chunk_info in chunks_with_span]
+                        
+                        # 計算統計信息
+                        chunk_lengths = [len(chunk) for chunk in chunks] if chunks else []
+                        avg_chunk_length = sum(chunk_lengths) / len(chunk_lengths) if chunk_lengths else 0
+                        min_length = min(chunk_lengths) if chunk_lengths else 0
+                        max_length = max(chunk_lengths) if chunk_lengths else 0
+                        
+                        # 計算長度方差
+                        if chunk_lengths:
+                            variance = sum((length - avg_chunk_length) ** 2 for length in chunk_lengths) / len(chunk_lengths)
+                        else:
+                            variance = 0
+                        
+                        # 創建結果
+                        result = {
+                            "strategy": strategy,
+                            "config": {
+                                "chunk_size": chunk_size,
+                                "overlap_ratio": overlap_ratio,
+                                "strategy": strategy,
+                                **chunk_kwargs
+                            },
+                            "chunks": chunks,
+                            "all_chunks": chunks,
+                            "chunks_with_span": chunks_with_span,  # 新增：帶span信息的chunks
+                            "chunk_count": len(chunks),
+                            "metrics": {
+                                "avg_length": avg_chunk_length,
+                                "length_variance": variance,
+                                "overlap_rate": overlap_ratio,
+                                "min_length": min_length,
+                                "max_length": max_length,
+                            },
+                            "sample_chunks": chunks[:3] if chunks else [],
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                        
+                        results.append(result)
+                        
+                        # 更新進度
+                        completed_combinations += 1
+                        progress = completed_combinations / total_combinations
+                        chunking_task_store[task_id]["progress"] = progress
+                        
+                    except Exception as e:
+                        print(f"分塊組合 {strategy}-{chunk_size}-{overlap_ratio} 失敗: {e}")
+                        continue
+        
+        # 完成任務
+        chunking_task_store[task_id] = {
+            "status": "completed",
+            "progress": 1.0,
+            "results": results
+        }
+        
+    except Exception as e:
+        chunking_task_store[task_id] = {
+            "status": "failed",
+            "error": str(e)
+        }
+        print(f"批量分塊失敗: {e}")
+
+
+async def process_strategy_evaluation(
+    task_id: str,
+    doc_id: str,
+    chunking_results: List[Dict[str, Any]],
+    qa_mapping_result: Dict[str, Any],
+    test_queries: List[str],
+    k_values: List[int]
+):
+    """處理策略評估的後台任務"""
+    try:
+        # 初始化任務狀態
+        eval_store.update_task_status(task_id, "running", progress=0.0)
+        
+        # 獲取文檔
+        doc = store.get_doc(doc_id)
+        if not doc:
+            eval_store.update_task_status(task_id, "failed", error_message="文檔不存在")
+            return
+        
+        results = []
+        total_configs = len(chunking_results)
+        
+        for i, chunking_result in enumerate(chunking_results):
+            try:
+                # 使用分塊結果進行評估
+                result = evaluate_chunk_config(
+                    doc.text,
+                    test_queries,
+                    chunking_result["config"]["chunk_size"],
+                    chunking_result["config"]["overlap_ratio"],
+                    strategy=chunking_result["strategy"],
+                    **{k: v for k, v in chunking_result["config"].items() if k not in ["chunk_size", "overlap_ratio", "strategy"]}
+                )
+                
+                # 添加分塊結果信息
+                result.config.update({
+                    "strategy": chunking_result["strategy"],
+                    "chunk_count": chunking_result["chunk_count"],
+                    "avg_chunk_length": chunking_result["metrics"]["avg_length"]
+                })
+                
+                results.append(result)
+                
+                # 更新進度
+                progress = (i + 1) / total_configs
+                eval_store.update_task_status(task_id, "running", progress=progress)
+                
+            except Exception as e:
+                print(f"評估分塊結果 {i} 時出錯: {e}")
+                continue
+        
+        # 完成任務
+        eval_store.update_task_status(task_id, "completed", results=results)
+        
+    except Exception as e:
+        eval_store.update_task_status(task_id, "failed", error_message=str(e))
+        print(f"策略評估失敗: {e}")
+
+
 async def process_multiple_pdf_conversion(task_id: str, file_contents: List[Dict], options):
     """處理多個PDF轉換的後台任務"""
     try:
@@ -1246,3 +2266,114 @@ async def process_multiple_pdf_conversion(task_id: str, file_contents: List[Dict
             "error": str(e)
         }
         print(f"多文件轉換失敗: {e}")
+
+
+# 批量分塊路由
+@router.post("/chunk/multiple")
+async def start_multiple_chunking(req: MultipleChunkingRequest, background_tasks: BackgroundTasks):
+    """開始批量分塊任務"""
+    try:
+        # 驗證文檔是否存在
+        doc = store.get_doc(req.doc_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="文檔不存在")
+        
+        # 創建任務ID
+        task_id = str(uuid.uuid4())
+        
+        # 在後台處理批量分塊
+        background_tasks.add_task(
+            process_multiple_chunking,
+            task_id,
+            req.doc_id,
+            req.strategies,
+            req.chunk_sizes,
+            req.overlap_ratios
+        )
+        
+        return {
+            "task_id": task_id,
+            "status": "started",
+            "total_combinations": len(req.strategies) * len(req.chunk_sizes) * len(req.overlap_ratios),
+            "message": "批量分塊任務已開始"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/chunk/status/{task_id}")
+async def get_chunking_status(task_id: str):
+    """獲取批量分塊任務狀態"""
+    if task_id not in chunking_task_store:
+        raise HTTPException(status_code=404, detail="任務不存在")
+    
+    status_info = chunking_task_store[task_id]
+    return {
+        "task_id": task_id,
+        "status": status_info["status"],
+        "progress": status_info.get("progress", 0.0),
+        "error": status_info.get("error")
+    }
+
+
+@router.get("/chunk/results/{task_id}")
+async def get_chunking_results(task_id: str):
+    """獲取批量分塊結果"""
+    if task_id not in chunking_task_store:
+        raise HTTPException(status_code=404, detail="任務不存在")
+    
+    status_info = chunking_task_store[task_id]
+    if status_info["status"] != "completed":
+        raise HTTPException(status_code=400, detail="任務未完成")
+    
+    return {
+        "task_id": task_id,
+        "status": status_info["status"],
+        "results": status_info["results"]
+    }
+
+
+# 策略評估路由
+@router.post("/evaluate/strategy")
+async def start_strategy_evaluation(req: StrategyEvaluationRequest, background_tasks: BackgroundTasks):
+    """開始策略評估任務"""
+    try:
+        # 驗證文檔是否存在
+        doc = store.get_doc(req.doc_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="文檔不存在")
+        
+        # 創建評估任務
+        task_id = eval_store.create_task(
+            doc_id=req.doc_id,
+            configs=[],  # 不需要預先生成配置
+            test_queries=req.test_queries,
+            k_values=req.k_values,
+            strategy="strategy_evaluation"
+        )
+        
+        # 在後台處理策略評估
+        background_tasks.add_task(
+            process_strategy_evaluation,
+            task_id,
+            req.doc_id,
+            req.chunking_results,
+            req.qa_mapping_result,
+            req.test_queries,
+            req.k_values
+        )
+        
+        return {
+            "task_id": task_id,
+            "status": "started",
+            "total_configs": len(req.chunking_results),
+            "message": "策略評估任務已開始"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -25,6 +25,7 @@ type RagContextType = {
   // actions
   upload: (file: File) => Promise<void>;
   convert: (file: File, metadataOptions?: any) => Promise<void>;
+  uploadJson: (file: File) => Promise<void>;
   updateJsonData: (newJsonData: any) => void;
   setDocId: (docId: string | null) => void;
   chunk: (
@@ -168,6 +169,34 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  async function uploadJson(file: File) {
+    setLoading(true);
+    try {
+      const res = await api.uploadJson(file);
+
+      // 設置文檔信息
+      setDocId(res.doc_id);
+      setJsonData(res.metadata || null);
+      setFileName(file.name);
+
+      // 重置下游狀態
+      setChunkMeta(null);
+      setEmbedProvider(null);
+      setRetrieval(null);
+      setAnswer(null);
+      setSteps(null);
+    } catch (error) {
+      console.error("Upload JSON error:", error);
+      // Reset state on error
+      setDocId(null);
+      setJsonData(null);
+      setFileName(null);
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function chunk(
     size: number,
     overlap: number,
@@ -234,6 +263,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     canGenerate,
     upload,
     convert,
+    uploadJson,
     updateJsonData,
     setDocId,
     chunk,

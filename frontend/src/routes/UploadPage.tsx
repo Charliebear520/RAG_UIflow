@@ -14,6 +14,7 @@ export function UploadPage() {
   const {
     upload,
     convert,
+    uploadJson,
     updateJsonData,
     jsonData,
     fileName,
@@ -38,11 +39,14 @@ export function UploadPage() {
   const isPDF = (f: File) =>
     f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
 
+  const isJSON = (f: File) =>
+    f.type === "application/json" || f.name.toLowerCase().endsWith(".json");
+
   const convertMultiple = async (
     files: File[],
     metadataOptions: MetadataOptions
   ) => {
-    // 調用新的多文件轉換API
+    // 只處理PDF文件的多文件轉換
     const formData = new FormData();
     files.forEach((file, index) => {
       formData.append(`files`, file);
@@ -56,8 +60,15 @@ export function UploadPage() {
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || "多文件轉換失敗");
+      let errorMessage = "多文件轉換失敗";
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || errorData.detail || errorMessage;
+      } catch (e) {
+        // 如果響應不是JSON格式，使用狀態文本
+        errorMessage = `${response.status} ${response.statusText}`;
+      }
+      throw new Error(errorMessage);
     }
 
     const result = await response.json();
@@ -85,6 +96,18 @@ export function UploadPage() {
         const response = await fetch(
           `${base}/convert-multiple/status/${taskId}`
         );
+
+        if (!response.ok) {
+          let errorMessage = "獲取轉換狀態失敗";
+          try {
+            const errorData = await response.json();
+            errorMessage = errorData.error || errorData.detail || errorMessage;
+          } catch (e) {
+            errorMessage = `${response.status} ${response.statusText}`;
+          }
+          throw new Error(errorMessage);
+        }
+
         const status = await response.json();
 
         if (status.status === "completed") {
@@ -167,15 +190,21 @@ export function UploadPage() {
               ref={inputRef}
               className="form-control"
               type="file"
-              accept="application/pdf,.pdf"
+              accept="application/pdf,.pdf,application/json,.json"
               multiple
               onChange={async (e) => {
                 const files = Array.from(e.target.files || []);
                 const pdfFiles = files.filter(isPDF);
-                setSelectedFiles(pdfFiles);
-                if (pdfFiles.length > 0) {
-                  // 設置文件名（多文件時使用第一個文件名）
-                  await upload(pdfFiles[0]);
+                const jsonFiles = files.filter(isJSON);
+
+                if (jsonFiles.length > 0) {
+                  // JSON文件：只設置選中文件，不自動上傳
+                  setSelectedFiles(jsonFiles);
+                } else if (pdfFiles.length > 0) {
+                  // PDF文件：設置選中文件（恢復原本邏輯）
+                  setSelectedFiles(pdfFiles);
+                } else {
+                  setSelectedFiles([]);
                 }
               }}
             />
@@ -200,12 +229,31 @@ export function UploadPage() {
                         setConvertError(null);
                         try {
                           if (selectedFiles.length === 1) {
-                            await convert(selectedFiles[0], metadataOptions);
+                            const file = selectedFiles[0];
+                            if (isJSON(file)) {
+                              await uploadJson(file);
+                            } else {
+                              await convert(file, metadataOptions);
+                            }
                           } else {
-                            await convertMultiple(
-                              selectedFiles,
-                              metadataOptions
-                            );
+                            // 多文件處理
+                            const allPDF = selectedFiles.every(isPDF);
+                            const allJSON = selectedFiles.every(isJSON);
+
+                            if (allJSON) {
+                              throw new Error(
+                                "多個JSON文件上傳，請一次只上傳一個JSON文件"
+                              );
+                            } else if (allPDF) {
+                              await convertMultiple(
+                                selectedFiles,
+                                metadataOptions
+                              );
+                            } else {
+                              throw new Error(
+                                "不能混合上傳不同類型的文件，請分別上傳PDF或JSON文件"
+                              );
+                            }
                           }
                         } catch (error) {
                           console.error("Convert failed:", error);
@@ -221,10 +269,12 @@ export function UploadPage() {
                       disabled={converting}
                     >
                       {converting
-                        ? "轉換中..."
+                        ? "處理中..."
                         : selectedFiles.length === 1
-                        ? "Confirm Convert"
-                        : `轉換 ${selectedFiles.length} 個文件`}
+                        ? selectedFiles[0] && isJSON(selectedFiles[0])
+                          ? "上傳JSON"
+                          : "Confirm Convert"
+                        : `轉換 ${selectedFiles.length} 個PDF`}
                     </button>
                   )}
                   {(jsonData || selectedFiles.length > 0) && (
@@ -250,7 +300,7 @@ export function UploadPage() {
               </p>
             )}
 
-            {/* Metadata Options */}
+            {/* Metadata Options - 只對PDF文件顯示 */}
             {selectedFiles.length > 0 && selectedFiles.every(isPDF) && (
               <div className="mt-3">
                 <h6 className="mb-2">Metadata 選項</h6>
