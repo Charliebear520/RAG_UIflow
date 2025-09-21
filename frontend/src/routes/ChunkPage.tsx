@@ -19,8 +19,7 @@ type ChunkStrategy =
   | "rcts_hierarchical"
   | "structured_hierarchical"
   | "hybrid"
-  | "semantic"
-  | "llm_semantic";
+  | "semantic";
 
 // 策略參數接口
 interface ChunkParams {
@@ -50,19 +49,12 @@ interface ChunkParams {
     overlap: number;
     context_window: number;
   };
-  llm_semantic: {
-    target_size: number;
-    similarity_threshold: number;
-    overlap: number;
-    model: string;
-    temperature: number;
-  };
 }
 
 // 策略描述和評估指標
 const strategyInfo = {
   fixed_size: {
-    name: "固定大小分割",
+    name: "Fixed-Size",
     description: "將文檔按照固定的字符數進行分割，適合結構化文檔。",
     metrics: ["分塊數量", "平均長度", "長度變異係數", "重疊率"],
     params: {
@@ -83,7 +75,7 @@ const strategyInfo = {
     },
   },
   rcts_hierarchical: {
-    name: "RCTS層次分割",
+    name: "RCTS Hierarchical",
     description:
       "結合RecursiveCharacterTextSplitter和層次結構識別，智能分割法律文檔。",
     metrics: ["分隔符準確性", "結構保持度", "長文本處理", "語義完整性"],
@@ -111,7 +103,7 @@ const strategyInfo = {
     },
   },
   structured_hierarchical: {
-    name: "結構化層次分割",
+    name: "Structured Hierarchical (pending pilot)",
     description:
       "基於JSON結構數據，按照法律文檔的章-節-條-項結構進行智能分割。",
     metrics: ["結構準確性", "條文完整性", "引用關係保持", "分割粒度"],
@@ -144,55 +136,8 @@ const strategyInfo = {
       },
     },
   },
-  llm_semantic: {
-    name: "LLM輔助語義分割",
-    description: "使用大語言模型進行智能語義分割，提供最優的分塊策略。",
-    metrics: ["語義準確性", "上下文保持", "分塊質量", "模型性能"],
-    params: {
-      target_size: {
-        label: "目標大小",
-        min: 200,
-        max: 1500,
-        default: 500,
-        unit: "字符",
-      },
-      similarity_threshold: {
-        label: "相似度閾值",
-        min: 0.1,
-        max: 0.9,
-        default: 0.8,
-        unit: "分數",
-      },
-      overlap: {
-        label: "重疊大小",
-        min: 0,
-        max: 200,
-        default: 50,
-        unit: "字符",
-      },
-      model: {
-        label: "模型",
-        type: "select",
-        options: [
-          { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
-          { value: "gpt-4", label: "GPT-4" },
-          { value: "claude-3-sonnet", label: "Claude 3 Sonnet" },
-          { value: "claude-3-opus", label: "Claude 3 Opus" },
-        ],
-        default: "gpt-3.5-turbo",
-      },
-      temperature: {
-        label: "溫度",
-        min: 0,
-        max: 2,
-        default: 0.7,
-        unit: "分數",
-        step: 0.1,
-      },
-    },
-  },
   hybrid: {
-    name: "混合分割",
+    name: "Hybrid (Fixed + Semantic)",
     description: "結合多種策略，根據內容特徵動態選擇最適合的分割方法。",
     metrics: ["分塊數量", "策略使用率", "整體效果", "適應性評分"],
     params: {
@@ -227,7 +172,7 @@ const strategyInfo = {
     },
   },
   semantic: {
-    name: "語義分割",
+    name: "Semantic",
     description: "基於語義相似度進行分割，保持語義連貫性。",
     metrics: ["語義連貫性", "相似度", "分塊質量"],
     params: {

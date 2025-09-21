@@ -619,7 +619,7 @@ async def list_documents():
 # PDF 轉換路由
 @router.post("/upload-json")
 async def upload_json(file: UploadFile = File(...)):
-    """上傳JSON文件（法條JSON）"""
+    """上傳JSON文件"""
     try:
         # 驗證文件格式
         if not file.filename or not file.filename.lower().endswith('.json'):
@@ -634,15 +634,16 @@ async def upload_json(file: UploadFile = File(...)):
         except json.JSONDecodeError as e:
             raise HTTPException(status_code=400, detail=f"JSON格式錯誤: {str(e)}")
         
-        # 驗證JSON結構（檢查是否為法條JSON格式）
-        if not isinstance(json_data, dict) or "laws" not in json_data:
-            raise HTTPException(status_code=400, detail="JSON文件格式不正確，應包含'laws'字段")
-        
         # 生成文檔ID
         doc_id = str(uuid.uuid4())
         
         # 從JSON結構生成文本內容
-        text_content = generate_text_from_merged_doc(json_data)
+        # 如果是法條JSON格式（包含laws字段），使用專門的函數
+        if isinstance(json_data, dict) and "laws" in json_data:
+            text_content = generate_text_from_merged_doc(json_data)
+        else:
+            # 對於其他JSON格式，直接轉換為字符串
+            text_content = json.dumps(json_data, ensure_ascii=False, indent=2)
         
         if not text_content or not text_content.strip():
             raise HTTPException(status_code=400, detail="JSON文件中沒有可用的文本內容")
@@ -661,13 +662,20 @@ async def upload_json(file: UploadFile = File(...)):
         # 存儲文檔
         store.add_doc(doc_record)
         
-        return {
+        # 計算響應數據
+        response_data = {
             "doc_id": doc_id,
             "filename": file.filename,
             "text_length": len(text_content),
-            "laws_count": len(json_data.get("laws", [])),
+            "metadata": json_data,  # 添加JSON數據到響應中
             "message": "JSON文件上傳成功"
         }
+        
+        # 如果是法條JSON，添加laws_count
+        if isinstance(json_data, dict) and "laws" in json_data:
+            response_data["laws_count"] = len(json_data.get("laws", []))
+        
+        return response_data
         
     except HTTPException:
         raise

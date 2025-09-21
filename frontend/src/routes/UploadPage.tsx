@@ -186,28 +186,62 @@ export function UploadPage() {
         <div className="card h-100">
           <div className="card-body">
             <h2 className="h5 mb-3">Upload</h2>
-            <input
-              ref={inputRef}
-              className="form-control"
-              type="file"
-              accept="application/pdf,.pdf,application/json,.json"
-              multiple
-              onChange={async (e) => {
-                const files = Array.from(e.target.files || []);
-                const pdfFiles = files.filter(isPDF);
-                const jsonFiles = files.filter(isJSON);
 
-                if (jsonFiles.length > 0) {
-                  // JSON文件：只設置選中文件，不自動上傳
-                  setSelectedFiles(jsonFiles);
-                } else if (pdfFiles.length > 0) {
-                  // PDF文件：設置選中文件（恢復原本邏輯）
+            {/* PDF Upload Section */}
+            <div className="mb-4">
+              <h6 className="text-primary mb-2">
+                <i className="bi bi-file-earmark-pdf me-2"></i>
+                PDF 法條文件上傳
+              </h6>
+              <p className="text-muted small mb-2">
+                上傳PDF格式的法律文件，系統將自動轉換為結構化JSON格式
+              </p>
+              <input
+                ref={inputRef}
+                className="form-control"
+                type="file"
+                accept="application/pdf,.pdf"
+                multiple
+                onChange={async (e) => {
+                  const files = Array.from(e.target.files || []);
+                  const pdfFiles = files.filter(isPDF);
                   setSelectedFiles(pdfFiles);
-                } else {
-                  setSelectedFiles([]);
-                }
-              }}
-            />
+                }}
+              />
+            </div>
+
+            {/* JSON Upload Section */}
+            <div className="mb-3">
+              <h6 className="text-success mb-2">
+                <i className="bi bi-file-earmark-code me-2"></i>
+                法條JSON文件上傳
+              </h6>
+              <p className="text-muted small mb-2">
+                如果您已經有結構化的法條JSON文件，可以直接上傳以節省轉換時間
+              </p>
+              <input
+                className="form-control"
+                type="file"
+                accept="application/json,.json"
+                onChange={async (e) => {
+                  const files = Array.from(e.target.files || []);
+                  const jsonFiles = files.filter(isJSON);
+                  if (jsonFiles.length > 0) {
+                    setSelectedFiles(jsonFiles);
+                  }
+                }}
+              />
+              <div className="mt-2">
+                <small className="text-muted">
+                  <i className="bi bi-info-circle me-1"></i>
+                  JSON文件應包含 <code>laws</code> 字段，格式如：
+                  <br />
+                  <code>
+                    {'{ "laws": [{ "law_name": "...", "chapters": [...] }] }'}
+                  </code>
+                </small>
+              </div>
+            </div>
 
             {selectedFiles.length > 0 && (
               <div className="mt-3 d-flex align-items-center justify-content-between">
@@ -222,7 +256,11 @@ export function UploadPage() {
                 <div className="d-flex gap-2">
                   {selectedFiles.length > 0 && (
                     <button
-                      className="btn btn-primary btn-sm"
+                      className={`btn btn-sm ${
+                        selectedFiles.length === 1 && isJSON(selectedFiles[0])
+                          ? "btn-success"
+                          : "btn-primary"
+                      }`}
                       onClick={async () => {
                         if (selectedFiles.length === 0) return;
                         setConverting(true);
@@ -272,8 +310,8 @@ export function UploadPage() {
                         ? "處理中..."
                         : selectedFiles.length === 1
                         ? selectedFiles[0] && isJSON(selectedFiles[0])
-                          ? "上傳JSON"
-                          : "Confirm Convert"
+                          ? "上傳法條JSON"
+                          : "轉換PDF"
                         : `轉換 ${selectedFiles.length} 個PDF`}
                     </button>
                   )}
@@ -381,10 +419,18 @@ export function UploadPage() {
           <div className="card-body">
             <h2 className="h5 mb-3">JSON Preview</h2>
             {!jsonData && !converting && !convertError && (
-              <p className="text-muted mb-0">
-                Select a PDF on the left and click "Confirm Convert" to preview
-                structured JSON here.
-              </p>
+              <div className="text-center text-muted">
+                <i className="bi bi-file-earmark-code display-4 mb-3"></i>
+                <p className="mb-2">
+                  上傳PDF文件或法條JSON文件後，
+                  <br />
+                  結構化內容將在此處預覽
+                </p>
+                <small className="text-muted">
+                  • PDF文件將自動轉換為結構化JSON格式
+                  <br />• JSON文件將直接載入並預覽
+                </small>
+              </div>
             )}
             {converting && (
               <div className="d-flex align-items-center gap-2 text-secondary">
@@ -392,7 +438,11 @@ export function UploadPage() {
                   className="spinner-border spinner-border-sm"
                   role="status"
                 />
-                <span>Converting PDF to JSON…</span>
+                <span>
+                  {selectedFiles.length > 0 && isJSON(selectedFiles[0])
+                    ? "正在上傳法條JSON文件..."
+                    : "正在轉換PDF為結構化JSON..."}
+                </span>
               </div>
             )}
             {convertError && (

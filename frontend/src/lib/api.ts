@@ -1,4 +1,4 @@
-const base = import.meta.env.VITE_API_BASE_URL || "http://localhost:8001/api";
+const base = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {

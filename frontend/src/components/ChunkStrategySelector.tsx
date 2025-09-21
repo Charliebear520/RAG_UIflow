@@ -6,8 +6,7 @@ export type ChunkStrategy =
   | "rcts_hierarchical"
   | "structured_hierarchical"
   | "hybrid"
-  | "semantic"
-  | "llm_semantic";
+  | "semantic";
 
 // 策略參數接口
 export interface ChunkParams {
@@ -37,26 +36,19 @@ export interface ChunkParams {
     overlap: number;
     context_window: number;
   };
-  llm_semantic: {
-    target_size: number;
-    similarity_threshold: number;
-    overlap: number;
-    model: string;
-    temperature: number;
-  };
 }
 
 // 策略描述和評估指標
 export const strategyInfo = {
   fixed_size: {
-    name: "固定大小分割",
+    name: "Fixed-Size",
     description: "將文檔按照固定的字符數進行分割，適合結構化文檔。",
     pros: ["簡單易用", "可控性強", "適合大部分場景"],
     cons: ["可能切斷語義", "不考慮內容結構"],
     metrics: ["平均長度", "長度變異", "分塊數量"],
   },
   rcts_hierarchical: {
-    name: "RCTS層次分割",
+    name: "RCTS Hierarchical",
     description:
       "結合RecursiveCharacterTextSplitter和層次結構識別，智能分割法律文檔。",
     pros: ["智能分隔符識別", "保持結構完整性", "處理長文本", "中文優化"],
@@ -64,7 +56,7 @@ export const strategyInfo = {
     metrics: ["分隔符準確性", "結構保持度", "長文本處理"],
   },
   structured_hierarchical: {
-    name: "結構化層次分割",
+    name: "Structured Hierarchical (pending pilot)",
     description:
       "基於JSON結構數據，按照法律文檔的章-節-條-項結構進行智能分割。",
     pros: ["精確結構識別", "保持法律邏輯", "支持條文引用", "適合法律文檔"],
@@ -72,25 +64,18 @@ export const strategyInfo = {
     metrics: ["結構準確性", "條文完整性", "引用關係保持"],
   },
   hybrid: {
-    name: "混合分割",
-    description: "結合多種分割策略，根據內容特徵選擇最適合的方法。",
+    name: "Hybrid (Fixed + Semantic)",
+    description: "結合固定大小和語義分割策略，根據內容特徵選擇最適合的方法。",
     pros: ["綜合優勢", "適應性強", "效果最佳"],
     cons: ["實現複雜", "參數調優難"],
     metrics: ["綜合評分", "策略切換", "效果提升"],
   },
   semantic: {
-    name: "語義分割",
+    name: "Semantic",
     description: "基於語義相似度進行分割，保持語義連貫性。",
     pros: ["語義完整", "連貫性好", "適合問答"],
     cons: ["計算複雜", "需要預訓練模型"],
     metrics: ["語義連貫性", "相似度", "分塊質量"],
-  },
-  llm_semantic: {
-    name: "LLM輔助語義分割",
-    description: "使用大語言模型進行智能語義分割，提供最優的分塊策略。",
-    pros: ["智能語義理解", "上下文感知", "高質量分塊", "適應性強"],
-    cons: ["需要API調用", "成本較高", "依賴模型性能"],
-    metrics: ["語義準確性", "上下文保持", "分塊質量", "模型性能"],
   },
 };
 
@@ -447,99 +432,6 @@ export const ChunkStrategySelector: React.FC<ChunkStrategySelectorProps> = ({
                 className="w-full px-3 py-2 border rounded-md"
                 min="100"
                 max="1000"
-              />
-            </div>
-          </div>
-        );
-
-      case "llm_semantic":
-        return (
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">目標大小</label>
-              <input
-                type="number"
-                value={params.llm_semantic.target_size}
-                onChange={(e) =>
-                  handleParamChange(
-                    "llm_semantic",
-                    "target_size",
-                    parseInt(e.target.value)
-                  )
-                }
-                className="w-full px-3 py-2 border rounded-md"
-                min="200"
-                max="1500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                相似度閾值
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                value={params.llm_semantic.similarity_threshold}
-                onChange={(e) =>
-                  handleParamChange(
-                    "llm_semantic",
-                    "similarity_threshold",
-                    parseFloat(e.target.value)
-                  )
-                }
-                className="w-full px-3 py-2 border rounded-md"
-                min="0"
-                max="1"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">重疊大小</label>
-              <input
-                type="number"
-                value={params.llm_semantic.overlap}
-                onChange={(e) =>
-                  handleParamChange(
-                    "llm_semantic",
-                    "overlap",
-                    parseInt(e.target.value)
-                  )
-                }
-                className="w-full px-3 py-2 border rounded-md"
-                min="0"
-                max="200"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">模型</label>
-              <select
-                value={params.llm_semantic.model}
-                onChange={(e) =>
-                  handleParamChange("llm_semantic", "model", e.target.value)
-                }
-                className="w-full px-3 py-2 border rounded-md"
-              >
-                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                <option value="gpt-4">GPT-4</option>
-                <option value="claude-3-sonnet">Claude 3 Sonnet</option>
-                <option value="claude-3-opus">Claude 3 Opus</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">溫度</label>
-              <input
-                type="number"
-                step="0.1"
-                value={params.llm_semantic.temperature}
-                onChange={(e) =>
-                  handleParamChange(
-                    "llm_semantic",
-                    "temperature",
-                    parseFloat(e.target.value)
-                  )
-                }
-                className="w-full px-3 py-2 border rounded-md"
-                min="0"
-                max="2"
               />
             </div>
           </div>
