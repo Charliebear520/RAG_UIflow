@@ -3,11 +3,25 @@ import { api } from "./api";
 
 type ChunkMeta = { size: number; overlap: number; count: number };
 
+type ChunkingResult = {
+  strategy: string;
+  config: any;
+  chunk_count: number;
+  metrics: any;
+  chunks_with_span?: any[];
+  all_chunks?: string[];
+  chunks?: string[];
+};
+
 type RagContextType = {
   // data
   docId: string | null;
   chunkMeta: ChunkMeta | null;
+  chunkingResults: ChunkingResult[] | null;
+  selectedStrategy: string | null;
   embedProvider: string | null;
+  embedModel: string | null;
+  embedDimension: number | null;
   retrieval: any[] | null;
   answer: string | null;
   steps: any[] | null;
@@ -34,8 +48,13 @@ type RagContextType = {
     strategy?: string,
     extraParams?: any
   ) => Promise<any>;
+  setChunkingResultsAndStrategy: (
+    results: ChunkingResult[],
+    strategy: string
+  ) => void;
   embed: () => Promise<void>;
   retrieve: (query: string, k: number) => Promise<void>;
+  hybridRetrieve: (query: string, k: number) => Promise<void>;
   generate: (query: string, topK: number) => Promise<void>;
   reset: () => void;
 };
@@ -45,7 +64,13 @@ const RagContext = createContext<RagContextType | undefined>(undefined);
 export function RagProvider({ children }: { children: React.ReactNode }) {
   const [docId, setDocId] = useState<string | null>(null);
   const [chunkMeta, setChunkMeta] = useState<ChunkMeta | null>(null);
+  const [chunkingResults, setChunkingResults] = useState<
+    ChunkingResult[] | null
+  >(null);
+  const [selectedStrategy, setSelectedStrategy] = useState<string | null>(null);
   const [embedProvider, setEmbedProvider] = useState<string | null>(null);
+  const [embedModel, setEmbedModel] = useState<string | null>(null);
+  const [embedDimension, setEmbedDimension] = useState<number | null>(null);
   const [retrieval, setRetrieval] = useState<any[] | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
   const [steps, setSteps] = useState<any[] | null>(null);
@@ -55,7 +80,10 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(false);
 
   const canChunk = useMemo(() => !!docId, [docId]);
-  const canEmbed = useMemo(() => !!docId && !!chunkMeta, [docId, chunkMeta]);
+  const canEmbed = useMemo(
+    () => !!docId && !!chunkingResults,
+    [docId, chunkingResults]
+  );
   const canRetrieve = useMemo(() => !!embedProvider, [embedProvider]);
   const canGenerate = useMemo(
     () => !!retrieval && retrieval.length > 0,
@@ -68,7 +96,11 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     // reset downstream state
     setDocId(null);
     setChunkMeta(null);
+    setChunkingResults(null);
+    setSelectedStrategy(null);
     setEmbedProvider(null);
+    setEmbedModel(null);
+    setEmbedDimension(null);
     setRetrieval(null);
     setAnswer(null);
     setSteps(null);
@@ -88,7 +120,11 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
 
         // 重置下游狀態
         setChunkMeta(null);
+        setChunkingResults(null);
+        setSelectedStrategy(null);
         setEmbedProvider(null);
+        setEmbedModel(null);
+        setEmbedDimension(null);
         setRetrieval(null);
         setAnswer(null);
         setSteps(null);
@@ -127,7 +163,11 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
 
           // 重置下游狀態
           setChunkMeta(null);
+          setChunkingResults(null);
+          setSelectedStrategy(null);
           setEmbedProvider(null);
+          setEmbedModel(null);
+          setEmbedDimension(null);
           setRetrieval(null);
           setAnswer(null);
           setSteps(null);
@@ -181,7 +221,11 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
 
       // 重置下游狀態
       setChunkMeta(null);
+      setChunkingResults(null);
+      setSelectedStrategy(null);
       setEmbedProvider(null);
+      setEmbedModel(null);
+      setEmbedDimension(null);
       setRetrieval(null);
       setAnswer(null);
       setSteps(null);
@@ -217,14 +261,50 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     return res;
   }
 
+  function setChunkingResultsAndStrategy(
+    results: ChunkingResult[],
+    strategy: string
+  ) {
+    setChunkingResults(results);
+    setSelectedStrategy(strategy);
+    // 重置下游狀態
+    setEmbedProvider(null);
+    setEmbedModel(null);
+    setEmbedDimension(null);
+    setRetrieval(null);
+    setAnswer(null);
+    setSteps(null);
+  }
+
   async function embed() {
     const res = await api.embed();
     setEmbedProvider(res.provider);
+    setEmbedModel(res.model);
+    setEmbedDimension(res.dimension || res.num_features || null);
   }
 
   async function retrieve(query: string, k: number) {
     const res = await api.retrieve({ query, k });
     setRetrieval(res.results);
+    // 更新 embedding 信息（如果檢索端點返回了這些信息）
+    if (res.embedding_provider) {
+      setEmbedProvider(res.embedding_provider);
+    }
+    if (res.embedding_model) {
+      setEmbedModel(res.embedding_model);
+    }
+  }
+
+  async function hybridRetrieve(query: string, k: number) {
+    const res = await api.hybridRetrieve({ query, k });
+    setRetrieval(res.results);
+    // 更新 embedding 信息（如果檢索端點返回了這些信息）
+    if (res.embedding_provider) {
+      setEmbedProvider(res.embedding_provider);
+    }
+    if (res.embedding_model) {
+      setEmbedModel(res.embedding_model);
+    }
   }
 
   async function generate(query: string, topK: number) {
@@ -237,7 +317,11 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
   function reset() {
     setDocId(null);
     setChunkMeta(null);
+    setChunkingResults(null);
+    setSelectedStrategy(null);
     setEmbedProvider(null);
+    setEmbedModel(null);
+    setEmbedDimension(null);
     setRetrieval(null);
     setAnswer(null);
     setSteps(null);
@@ -249,7 +333,11 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
   const value: RagContextType = {
     docId,
     chunkMeta,
+    chunkingResults,
+    selectedStrategy,
     embedProvider,
+    embedModel,
+    embedDimension,
     retrieval,
     answer,
     steps,
@@ -267,8 +355,10 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     updateJsonData,
     setDocId,
     chunk,
+    setChunkingResultsAndStrategy,
     embed,
     retrieve,
+    hybridRetrieve,
     generate,
     reset,
   };

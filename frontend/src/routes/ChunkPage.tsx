@@ -2,9 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRag } from "../lib/ragStore";
 import { api } from "../lib/api";
-import { QASetUploader } from "../components/QASetUploader";
-import { ChunkQASetUploader } from "../components/ChunkQASetUploader";
-import { QAMappingDetails } from "../components/QAMappingDetails";
+// 無映射模式：移除與 QA 映射相關的元件
 
 // 擴展Window接口以包含Bootstrap
 declare global {
@@ -248,10 +246,10 @@ interface EvaluationTask {
 
 export function ChunkPage() {
   const nav = useNavigate();
-  const { canChunk, chunk, docId, chunkMeta } = useRag();
+  const { canChunk, chunk, docId, chunkMeta, setChunkingResultsAndStrategy } =
+    useRag();
 
-  // 步驟1: QA Set上傳狀態
-  const [uploadedQASetFile, setUploadedQASetFile] = useState<File | null>(null);
+  // 無映射模式：不需要 QA Set 上傳狀態（移除）
 
   // 步驟2: 多種分塊組合配置狀態
   const [selectedStrategies, setSelectedStrategies] = useState<ChunkStrategy[]>(
@@ -264,12 +262,7 @@ export function ChunkPage() {
   const [chunkingProgress, setChunkingProgress] = useState(0);
   const [chunkingTaskId, setChunkingTaskId] = useState<string | null>(null);
 
-  // 步驟3: QA映射狀態
-  const [qaMappingResult, setQAMappingResult] = useState<any>(null);
-  const [chunkingCompleted, setChunkingCompleted] = useState(false); // 新增：分塊處理完成狀態
-  const [qaMappingTaskId, setQAMappingTaskId] = useState<string | null>(null);
-  const [qaMappingProgress, setQAMappingProgress] = useState(0);
-  const [qaMappingError, setQAMappingError] = useState<string | null>(null);
+  // 無映射模式：不需要 QA 映射狀態（移除）
 
   // 步驟4: 評測狀態
   const [evaluationConfig, setEvaluationConfig] = useState({
@@ -360,9 +353,7 @@ export function ChunkPage() {
   };
 
   // 步驟1: 處理QA Set文件上傳
-  const handleQASetFileUploaded = (file: File) => {
-    setUploadedQASetFile(file);
-  };
+  // 無映射模式：不需要 QA 上傳處理（移除）
 
   // 步驟2: 處理多種分塊組合配置
   const handleStrategyToggle = (strategy: ChunkStrategy) => {
@@ -448,7 +439,17 @@ export function ChunkPage() {
               response.task_id
             );
             setChunkingResults(resultsResponse.results);
-            // 注意：不自動設置chunkingCompleted，需要用戶手動點擊「繼續到QA映射」
+
+            // 將分塊結果存儲到 RAG store 中
+            if (resultsResponse.results && resultsResponse.results.length > 0) {
+              // 使用第一個結果的策略作為主要策略
+              const primaryStrategy = resultsResponse.results[0].strategy;
+              setChunkingResultsAndStrategy(
+                resultsResponse.results,
+                primaryStrategy
+              );
+            }
+
             setIsChunking(false);
           } else if (statusResponse.status === "failed") {
             setChunkingError(statusResponse.error_message || "分塊操作失敗");
@@ -476,11 +477,6 @@ export function ChunkPage() {
   // 重新進行分塊
   const handleRetryChunking = () => {
     setChunkingResults([]);
-    setChunkingCompleted(false); // 重置分塊完成狀態
-    setQAMappingResult(null);
-    setQAMappingTaskId(null); // 重置QA映射任務ID
-    setQAMappingProgress(0); // 重置QA映射進度
-    setQAMappingError(null); // 重置QA映射錯誤
     setEvaluationResults([]);
     setCurrentTask(null);
     setShowAllChunks(false);
@@ -548,168 +544,15 @@ export function ChunkPage() {
   };
 
   // 步驟3: 處理QA映射完成的回調函數
-  const handleQAMappingComplete = (result: any) => {
-    setQAMappingResult(result);
-  };
+  // 無映射模式：不需要 QA 映射完成回調（移除）
 
   // 步驟3: 開始QA映射
-  const handleStartQAMapping = async () => {
-    if (!uploadedQASetFile || !chunkingResults.length) {
-      setQAMappingError("請先完成QA set上傳和分塊處理");
-      return;
-    }
-
-    try {
-      setQAMappingError(null);
-      setQAMappingProgress(0);
-
-      // 讀取QA set文件內容
-      const qaSetContent = await uploadedQASetFile.text();
-      const qaSet = JSON.parse(qaSetContent);
-
-      // 驗證QA set格式
-      if (!Array.isArray(qaSet)) {
-        setQAMappingError("QA set文件格式錯誤：應該是一個包含問題答案對的數組");
-        return;
-      }
-
-      // 檢查是否有基本的QA結構
-      if (qaSet.length === 0) {
-        setQAMappingError("QA set文件為空");
-        return;
-      }
-
-      // 檢查第一個項目是否有必要的字段
-      const firstItem = qaSet[0];
-      if (!firstItem.query || !firstItem.label) {
-        setQAMappingError("QA set文件格式錯誤：缺少必要的字段（query, label）");
-        return;
-      }
-
-      // 添加調試信息
-      console.log("QA映射請求數據:");
-      console.log("- doc_id:", docId);
-      console.log("- qa_set長度:", qaSet.length);
-      console.log("- qa_set結構:", {
-        isArray: Array.isArray(qaSet),
-        firstItemKeys: Object.keys(firstItem),
-        sampleItem: {
-          query: firstItem.query?.substring(0, 50) + "...",
-          label: firstItem.label,
-          hasSpans: !!firstItem.spans,
-        },
-      });
-      console.log("- chunking_results長度:", chunkingResults.length);
-      console.log(
-        "- chunking_results結構:",
-        chunkingResults.map((r) => ({
-          strategy: r.strategy,
-          has_chunks_with_span: !!r.chunks_with_span,
-          chunks_with_span_length: r.chunks_with_span?.length || 0,
-        }))
-      );
-
-      // 啟動QA映射任務
-      const response = await api.startQAMapping({
-        doc_id: docId!,
-        qa_set: qaSet,
-        chunking_results: chunkingResults,
-        iou_threshold: 0.5,
-      });
-
-      setQAMappingTaskId(response.task_id);
-
-      // 開始輪詢進度
-      const pollProgress = async () => {
-        try {
-          const statusResponse = await api.getQAMappingStatus(response.task_id);
-          setQAMappingProgress(statusResponse.progress * 100);
-
-          if (statusResponse.status === "completed") {
-            const resultResponse = await api.getQAMappingResult(
-              response.task_id
-            );
-            setQAMappingResult(resultResponse);
-            setQAMappingTaskId(null);
-          } else if (statusResponse.status === "failed") {
-            setQAMappingError(statusResponse.error || "QA映射失敗");
-            setQAMappingTaskId(null);
-          } else {
-            // 繼續輪詢
-            setTimeout(pollProgress, 1000);
-          }
-        } catch (error) {
-          console.error("輪詢QA映射進度失敗:", error);
-          setQAMappingError("獲取QA映射進度失敗");
-          setQAMappingTaskId(null);
-        }
-      };
-
-      // 開始輪詢
-      setTimeout(pollProgress, 1000);
-    } catch (error) {
-      console.error("QA映射失敗:", error);
-      setQAMappingError(error instanceof Error ? error.message : "QA映射失敗");
-    }
-  };
+  // 無映射模式：不需要 QA 映射啟動（移除）
 
   // 評測相關函數
+  // 無映射模式：此頁不再啟動評測，改由首頁 Evaluate(beta) 執行
   const startEvaluation = async () => {
-    if (!docId) {
-      setEvaluationError("請先上傳文檔");
-      return;
-    }
-
-    if (!qaMappingResult) {
-      setEvaluationError("請先完成QA Set映射");
-      return;
-    }
-
-    if (chunkingResults.length === 0) {
-      setEvaluationError("請先完成多種分塊組合處理");
-      return;
-    }
-
-    setEvaluationLoading(true);
-    setEvaluationError(null);
-    setEvaluationResults([]);
-    setEvaluationComparison(null);
-
-    try {
-      // 使用QA set中的問題進行評測
-      const testQueries = qaMappingResult.original_qa_set.map(
-        (item: any) => item.query
-      );
-
-      // 使用新的策略評估API，基於已完成的分塊結果
-      const response = await api.startStrategyEvaluation({
-        doc_id: docId,
-        chunking_results: chunkingResults,
-        qa_mapping_result: qaMappingResult,
-        test_queries: testQueries,
-        k_values: [1, 3, 5, 10],
-      });
-
-      setCurrentTask({
-        task_id: response.task_id,
-        status: "running",
-        created_at: new Date().toISOString(),
-        total_configs: response.total_configs,
-        completed_configs: 0,
-        progress: 0,
-      });
-
-      // 開始輪詢進度更新
-      clearProgressPolling(); // 清理之前的輪詢
-      const interval = setInterval(() => {
-        pollProgress(response.task_id);
-      }, 1000); // 每秒輪詢一次
-      setProgressInterval(interval);
-    } catch (err) {
-      setEvaluationError(`啟動評測失敗: ${err}`);
-    } finally {
-      setEvaluationLoading(false);
-    }
+    setEvaluationError("請前往首頁 Evaluate(beta) 進行評測");
   };
 
   const loadEvaluationResults = async (taskId: string) => {
@@ -822,8 +665,7 @@ export function ChunkPage() {
             <div className="card-header">
               <h2 className="h4 mb-0">分塊策略評測</h2>
               <p className="text-muted mb-0">
-                通過四個步驟完成分塊策略的評測：上傳QA set → 進行分塊 →
-                分塊後映射 → 策略評估
+                無映射模式：Upload → Chunk → Embed（可選）→ Evaluate(beta)
               </p>
             </div>
             <div className="card-body">
@@ -835,27 +677,13 @@ export function ChunkPage() {
 
               {canChunk && (
                 <div className="row g-4">
-                  {/* 步驟1: 上傳QA Set */}
+                  {/* 步驟 1: 說明與引導（無映射模式） */}
                   <div className="col-12">
-                    <div
-                      className={`card ${
-                        uploadedQASetFile ? "border-success" : "border-primary"
-                      }`}
-                    >
-                      <div
-                        className={`card-header ${
-                          uploadedQASetFile
-                            ? "bg-success text-white"
-                            : "bg-primary text-white"
-                        }`}
-                      >
-                        <h5 className="mb-0">步驟 1: 上傳QA Set</h5>
-                      </div>
-                      <div className="card-body">
-                        <ChunkQASetUploader
-                          onFileUploaded={handleQASetFileUploaded}
-                        />
-                      </div>
+                    <div className="alert alert-info" role="alert">
+                      <strong>提示：</strong>{" "}
+                      本頁專注於「批量分塊」。評測請到首頁 Evaluate(beta)
+                      區塊上傳 <code>qa_gold.json</code>，啟動分塊後一鍵計算 P@K
+                      / R@K。
                     </div>
                   </div>
 
@@ -865,8 +693,6 @@ export function ChunkPage() {
                       className={`card ${
                         chunkingResults.length > 0
                           ? "border-success"
-                          : uploadedQASetFile
-                          ? "border-warning"
                           : "border-secondary"
                       }`}
                     >
@@ -874,8 +700,6 @@ export function ChunkPage() {
                         className={`card-header ${
                           chunkingResults.length > 0
                             ? "bg-success text-white"
-                            : uploadedQASetFile
-                            ? "bg-warning text-dark"
                             : "bg-secondary text-white"
                         }`}
                       >
@@ -1336,26 +1160,12 @@ export function ChunkPage() {
                                 重新分塊
                               </button>
                               <button
-                                className="btn btn-primary"
-                                onClick={() => {
-                                  // 設置可以進行QA映射的狀態
-                                  setChunkingCompleted(true);
-                                  console.log("繼續到QA映射步驟");
-                                }}
-                                disabled={!uploadedQASetFile}
+                                className="btn btn-success"
+                                onClick={() => nav("/embed")}
                               >
-                                <i className="bi bi-arrow-right me-1"></i>
-                                繼續到QA映射
+                                前往 Embedding
                               </button>
                             </div>
-                            {!uploadedQASetFile && (
-                              <div className="mt-2">
-                                <small className="text-muted">
-                                  <i className="bi bi-info-circle me-1"></i>
-                                  如需進行QA映射，請先上傳QA set文件
-                                </small>
-                              </div>
-                            )}
                           </div>
                         ) : (
                           <div>
@@ -1549,569 +1359,43 @@ export function ChunkPage() {
                     </div>
                   </div>
 
-                  {/* 步驟3: QA Set映射 (可選) */}
+                  {/* 下一步：策略評測（導向 Evaluate(beta)） */}
                   <div className="col-12">
                     <div
                       className={`card ${
-                        uploadedQASetFile && qaMappingResult
+                        chunkingResults.length > 0
                           ? "border-success"
-                          : chunkingResults.length > 0 && uploadedQASetFile
-                          ? "border-warning"
                           : "border-secondary"
                       }`}
                     >
                       <div
                         className={`card-header ${
-                          uploadedQASetFile && qaMappingResult
+                          chunkingResults.length > 0
                             ? "bg-success text-white"
-                            : chunkingResults.length > 0 && uploadedQASetFile
-                            ? "bg-warning text-dark"
                             : "bg-secondary text-white"
                         }`}
                       >
-                        <h5 className="mb-0">步驟 3: QA Set映射 (可選)</h5>
-                      </div>
-                      <div className="card-body">
-                        {!uploadedQASetFile ? (
-                          <div className="text-center text-muted py-3">
-                            <i className="bi bi-info-circle fs-1 d-block mb-2"></i>
-                            <p>此步驟為可選，用於將QA set與分塊結果進行映射</p>
-                            <p className="small">
-                              如需進行評測，建議上傳QA set文件
-                            </p>
-                          </div>
-                        ) : chunkingResults.length === 0 ? (
-                          <div className="text-center text-muted py-3">
-                            <i className="bi bi-hourglass-split fs-1 d-block mb-2"></i>
-                            <p>請先完成步驟2：多種分塊組合處理</p>
-                          </div>
-                        ) : !chunkingCompleted ? (
-                          <div className="text-center text-muted py-3">
-                            <i className="bi bi-exclamation-triangle fs-1 d-block mb-2"></i>
-                            <p>請先點擊「繼續到QA映射」按鈕</p>
-                          </div>
-                        ) : qaMappingResult ? (
-                          <div>
-                            <div className="alert alert-success mb-4">
-                              <h6>✅ QA Set映射完成</h6>
-                              <p className="mb-0">
-                                已成功完成QA set與分塊的映射，共處理{" "}
-                                {qaMappingResult.original_qa_set?.length || 0}{" "}
-                                個問題
-                              </p>
-                            </div>
-
-                            {/* 映射摘要 */}
-                            {qaMappingResult.mapping_summary && (
-                              <div className="row g-3 mb-4">
-                                <div className="col-md-3">
-                                  <div className="card bg-light">
-                                    <div className="card-body text-center">
-                                      <h5 className="card-title text-primary">
-                                        {
-                                          qaMappingResult.mapping_summary
-                                            .total_configs
-                                        }
-                                      </h5>
-                                      <p className="card-text small">
-                                        分塊配置數
-                                      </p>
-                                    </div>
-                                  </div>
-                                </div>
-                                <div className="col-md-3">
-                                  <div className="card bg-light">
-                                    <div className="card-body text-center">
-                                      <h5 className="card-title text-info">
-                                        {qaMappingResult.original_qa_set
-                                          ?.length || 0}
-                                      </h5>
-                                      <p className="card-text small">
-                                        QA問題數
-                                      </p>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* 映射結果詳情 */}
-                            {qaMappingResult.mapping_results && (
-                              <div className="mb-4">
-                                <h6>映射結果詳情</h6>
-                                <div className="table-responsive">
-                                  <table className="table table-sm table-striped">
-                                    <thead>
-                                      <tr>
-                                        <th>配置</th>
-                                        <th>策略</th>
-                                        <th>分塊數量</th>
-                                        <th>正例問題</th>
-                                        <th>負例問題</th>
-                                        <th>映射成功率</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {Object.entries(
-                                        qaMappingResult.mapping_results
-                                      ).map(
-                                        ([configId, result]: [string, any]) => (
-                                          <tr key={configId}>
-                                            <td>
-                                              <small>
-                                                {result.strategy} |{" "}
-                                                {result.config.chunk_size} |{" "}
-                                                {(
-                                                  result.config.overlap_ratio *
-                                                  100
-                                                ).toFixed(0)}
-                                                %
-                                              </small>
-                                            </td>
-                                            <td>{result.strategy}</td>
-                                            <td>{result.chunk_count}</td>
-                                            <td>
-                                              {
-                                                result.mapping_stats
-                                                  .positive_questions
-                                              }
-                                            </td>
-                                            <td>
-                                              {
-                                                result.mapping_stats
-                                                  .negative_questions
-                                              }
-                                            </td>
-                                            <td>
-                                              {result.mapping_stats.mapping_success_rate?.toFixed(
-                                                1
-                                              ) || "0.0"}
-                                              %
-                                            </td>
-                                          </tr>
-                                        )
-                                      )}
-                                    </tbody>
-                                  </table>
-                                </div>
-
-                                {/* 映射後的QA set詳細內容 */}
-                                <QAMappingDetails
-                                  mappingResults={
-                                    qaMappingResult.mapping_results
-                                  }
-                                />
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <div>
-                            <div className="alert alert-info">
-                              <h6>📋 準備進行QA映射</h6>
-                              <p className="mb-0">
-                                已上傳QA set文件，可以開始進行QA
-                                set與分塊結果的映射
-                              </p>
-                            </div>
-
-                            <div className="d-grid">
-                              <button
-                                className="btn btn-primary btn-lg"
-                                onClick={handleStartQAMapping}
-                                disabled={
-                                  !chunkingCompleted || !!qaMappingTaskId
-                                }
-                              >
-                                {qaMappingTaskId ? (
-                                  <>
-                                    <span
-                                      className="spinner-border spinner-border-sm me-2"
-                                      role="status"
-                                      aria-hidden="true"
-                                    ></span>
-                                    QA映射中... ({qaMappingProgress.toFixed(1)}
-                                    %)
-                                  </>
-                                ) : (
-                                  <>
-                                    <i className="bi bi-link-45deg me-2"></i>
-                                    開始QA Set映射
-                                  </>
-                                )}
-                              </button>
-                            </div>
-
-                            {/* 進度條 */}
-                            {qaMappingTaskId && (
-                              <div className="mt-3">
-                                <div className="progress">
-                                  <div
-                                    className="progress-bar progress-bar-striped progress-bar-animated"
-                                    role="progressbar"
-                                    style={{ width: `${qaMappingProgress}%` }}
-                                    aria-valuenow={qaMappingProgress}
-                                    aria-valuemin={0}
-                                    aria-valuemax={100}
-                                  >
-                                    {qaMappingProgress.toFixed(1)}%
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* 錯誤提示 */}
-                            {qaMappingError && (
-                              <div className="mt-3">
-                                <div
-                                  className="alert alert-danger"
-                                  role="alert"
-                                >
-                                  <i className="bi bi-exclamation-triangle me-1"></i>
-                                  {qaMappingError}
-                                </div>
-                              </div>
-                            )}
-
-                            {!chunkingCompleted && (
-                              <div className="mt-2">
-                                <div
-                                  className="alert alert-warning"
-                                  role="alert"
-                                >
-                                  <i className="bi bi-exclamation-triangle me-1"></i>
-                                  請先完成分塊組合處理
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 步驟4: 策略評估 */}
-                  <div className="col-12">
-                    <div
-                      className={`card ${
-                        evaluationResults.length > 0
-                          ? "border-success"
-                          : "border-warning"
-                      }`}
-                    >
-                      <div
-                        className={`card-header ${
-                          evaluationResults.length > 0
-                            ? "bg-success text-white"
-                            : "bg-warning text-dark"
-                        }`}
-                      >
-                        <h5 className="mb-0">步驟 4: 策略評估</h5>
+                        <h5 className="mb-0">下一步：策略評測</h5>
                       </div>
                       <div className="card-body">
                         {chunkingResults.length > 0 ? (
-                          <div>
-                            {/* 評測配置信息 */}
-                            <div className="mb-4">
-                              <h6>策略評估配置</h6>
-                              <div className="alert alert-info">
-                                <h6>📊 評估說明</h6>
-                                <p className="mb-2">
-                                  將使用步驟3中映射的QA Set對步驟2中生成的{" "}
-                                  {chunkingResults.length}{" "}
-                                  種分塊組合進行檢索測試，
-                                  計算P@K和R@K指標來評估各分割策略的表現。
-                                </p>
-                                <div className="row">
-                                  <div className="col-md-6">
-                                    <strong>分塊組合數：</strong>{" "}
-                                    {chunkingResults.length}
-                                  </div>
-                                  <div className="col-md-6">
-                                    <strong>QA問題數：</strong>{" "}
-                                    {qaMappingResult?.original_qa_set?.length ||
-                                      0}
-                                  </div>
-                                </div>
-                              </div>
+                          <div className="d-flex align-items-center justify-content-between">
+                            <div className="text-muted small">
+                              已完成分塊，前往 Embedding 頁面進行向量化，然後到
+                              Retrieve 頁面測試檢索，最後到 Evaluate
+                              頁面進行評測。
                             </div>
-
-                            {/* 開始評測按鈕 */}
-                            <div className="d-grid mb-4">
-                              <button
-                                className="btn btn-primary btn-lg"
-                                onClick={startEvaluation}
-                                disabled={
-                                  evaluationLoading ||
-                                  !qaMappingResult ||
-                                  chunkingResults.length === 0
-                                }
-                              >
-                                {evaluationLoading ? (
-                                  <>
-                                    <span
-                                      className="spinner-border spinner-border-sm me-2"
-                                      role="status"
-                                      aria-hidden="true"
-                                    ></span>
-                                    評測中...
-                                  </>
-                                ) : !qaMappingResult ? (
-                                  "請先完成QA Set映射"
-                                ) : chunkingResults.length === 0 ? (
-                                  "請先完成多種分塊組合處理"
-                                ) : (
-                                  "開始策略評估"
-                                )}
-                              </button>
-                            </div>
-
-                            {/* 評測錯誤提示 */}
-                            {evaluationError && (
-                              <div className="alert alert-danger" role="alert">
-                                {evaluationError}
-                              </div>
-                            )}
-
-                            {/* 評測進度 */}
-                            {currentTask && (
-                              <div className="mb-4">
-                                <h6>評測進度</h6>
-                                <div className="progress mb-2">
-                                  <div
-                                    className="progress-bar"
-                                    role="progressbar"
-                                    style={{
-                                      width: `${currentTask.progress * 100}%`,
-                                    }}
-                                    aria-valuenow={currentTask.progress * 100}
-                                    aria-valuemin={0}
-                                    aria-valuemax={100}
-                                  >
-                                    {(currentTask.progress * 100).toFixed(1)}%
-                                  </div>
-                                </div>
-                                <div className="d-flex justify-content-between small text-muted">
-                                  <span>
-                                    已完成 {currentTask.completed_configs} /{" "}
-                                    {currentTask.total_configs} 個配置
-                                  </span>
-                                  <span>
-                                    預計剩餘時間:{" "}
-                                    {calculateEstimatedTime(currentTask)} 分鐘
-                                  </span>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* 評測結果 */}
-                            {evaluationResults.length > 0 && (
-                              <div>
-                                <h6>評測結果</h6>
-
-                                {/* 最佳配置 */}
-                                {getBestConfig() && (
-                                  <div className="alert alert-success mb-4">
-                                    <h6 className="alert-heading">
-                                      🎯 最佳配置 (綜合評分最高)
-                                    </h6>
-                                    <div className="row">
-                                      <div className="col-md-6">
-                                        <h6>配置參數</h6>
-                                        <div className="table-responsive">
-                                          <table className="table table-sm">
-                                            <tbody>
-                                              <tr>
-                                                <td>
-                                                  <strong>分塊大小:</strong>
-                                                </td>
-                                                <td>
-                                                  {
-                                                    getBestConfig()?.config
-                                                      .chunk_size
-                                                  }
-                                                </td>
-                                              </tr>
-                                              <tr>
-                                                <td>
-                                                  <strong>重疊比例:</strong>
-                                                </td>
-                                                <td>
-                                                  {(
-                                                    (getBestConfig()?.config
-                                                      .overlap_ratio || 0) * 100
-                                                  ).toFixed(0)}
-                                                  %
-                                                </td>
-                                              </tr>
-                                            </tbody>
-                                          </table>
-                                        </div>
-                                      </div>
-                                      <div className="col-md-6">
-                                        <h6>性能指標</h6>
-                                        <div className="table-responsive">
-                                          <table className="table table-sm">
-                                            <tbody>
-                                              <tr>
-                                                <td>
-                                                  <strong>Precision@3:</strong>
-                                                </td>
-                                                <td>
-                                                  <span className="badge bg-success">
-                                                    {getBestConfig()?.metrics.precision_at_k[3]?.toFixed(
-                                                      3
-                                                    ) || "0.000"}
-                                                  </span>
-                                                </td>
-                                              </tr>
-                                              <tr>
-                                                <td>
-                                                  <strong>Recall@3:</strong>
-                                                </td>
-                                                <td>
-                                                  <span className="badge bg-info">
-                                                    {getBestConfig()?.metrics.recall_at_k[3]?.toFixed(
-                                                      3
-                                                    ) || "0.000"}
-                                                  </span>
-                                                </td>
-                                              </tr>
-                                              <tr>
-                                                <td>
-                                                  <strong>
-                                                    Precision Omega:
-                                                  </strong>
-                                                </td>
-                                                <td>
-                                                  <span className="badge bg-warning">
-                                                    {getBestConfig()?.metrics.precision_omega?.toFixed(
-                                                      3
-                                                    ) || "0.000"}
-                                                  </span>
-                                                </td>
-                                              </tr>
-                                            </tbody>
-                                          </table>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-
-                                {/* 詳細結果表格 */}
-                                <div className="table-responsive mb-4">
-                                  <table className="table table-striped">
-                                    <thead>
-                                      <tr>
-                                        <th>配置</th>
-                                        <th>Precision@3</th>
-                                        <th>Recall@3</th>
-                                        <th>Precision Omega</th>
-                                        <th>分塊數量</th>
-                                        <th>平均長度</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {evaluationResults.map(
-                                        (result, index) => (
-                                          <tr key={index}>
-                                            <td>
-                                              <div className="small">
-                                                <strong>固定大小分割</strong>
-                                                <br />
-                                                Size: {result.config.chunk_size}
-                                                <br />
-                                                Overlap:{" "}
-                                                {(
-                                                  result.config.overlap_ratio *
-                                                  100
-                                                ).toFixed(0)}
-                                                %
-                                              </div>
-                                            </td>
-                                            <td>
-                                              <span
-                                                className={`badge ${
-                                                  result.metrics
-                                                    .precision_at_k[3] > 0.4
-                                                    ? "bg-success"
-                                                    : result.metrics
-                                                        .precision_at_k[3] > 0.2
-                                                    ? "bg-warning"
-                                                    : "bg-danger"
-                                                }`}
-                                              >
-                                                {result.metrics.precision_at_k[3]?.toFixed(
-                                                  3
-                                                ) || "0.000"}
-                                              </span>
-                                            </td>
-                                            <td>
-                                              <span
-                                                className={`badge ${
-                                                  result.metrics
-                                                    .recall_at_k[3] > 0.8
-                                                    ? "bg-success"
-                                                    : result.metrics
-                                                        .recall_at_k[3] > 0.6
-                                                    ? "bg-warning"
-                                                    : "bg-danger"
-                                                }`}
-                                              >
-                                                {result.metrics.recall_at_k[3]?.toFixed(
-                                                  3
-                                                ) || "0.000"}
-                                              </span>
-                                            </td>
-                                            <td>
-                                              <span
-                                                className={`badge ${
-                                                  result.metrics
-                                                    .precision_omega > 0.4
-                                                    ? "bg-success"
-                                                    : result.metrics
-                                                        .precision_omega > 0.2
-                                                    ? "bg-warning"
-                                                    : "bg-danger"
-                                                }`}
-                                              >
-                                                {result.metrics.precision_omega?.toFixed(
-                                                  3
-                                                ) || "0.000"}
-                                              </span>
-                                            </td>
-                                            <td>
-                                              {result.metrics.chunk_count}
-                                            </td>
-                                            <td>
-                                              {result.metrics.avg_chunk_length.toFixed(
-                                                1
-                                              )}{" "}
-                                              字符
-                                            </td>
-                                          </tr>
-                                        )
-                                      )}
-                                    </tbody>
-                                  </table>
-                                </div>
-
-                                {/* 導出報告按鈕 */}
-                                <div className="d-grid">
-                                  <button
-                                    className="btn btn-outline-primary"
-                                    onClick={exportEvaluationReport}
-                                  >
-                                    導出評測報告
-                                  </button>
-                                </div>
-                              </div>
-                            )}
+                            <button
+                              className="btn btn-success"
+                              onClick={() => nav("/embed")}
+                            >
+                              前往 Embedding
+                            </button>
                           </div>
                         ) : (
                           <div className="text-center text-muted py-3">
                             <i className="bi bi-hourglass-split fs-1 d-block mb-2"></i>
-                            <p>請先完成前面的步驟</p>
+                            <p>請先完成分塊</p>
                           </div>
                         )}
                       </div>

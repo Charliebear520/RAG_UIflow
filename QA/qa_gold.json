@@ -1,0 +1,2284 @@
+[
+  {
+    "query": "Consider ROC著作權法第3條；著作之定義是否包含電腦程式？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 1,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5條；電腦程式是否為受保護著作類型？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 5,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第10條；著作人於著作完成時是否享有著作權？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 10,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第10條之1；著作權保護是否及於思想？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 10,
+      "article_suffix": 1,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第11條；出資聘人完成之著作，著作權歸屬如何認定？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 11,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第12條；出資聘人完成之著作，著作權歸屬如何認定？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 12,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第22條；重製權是否為著作財產權之一？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 22,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第26條之1；公開傳輸權是否受保護？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 26,
+      "article_suffix": 1,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第28條；改作權是否為著作財產權？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 28,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第37條；著作財產權人得否授權他人利用著作？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 37,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第44條；中央或地方機關得否因立法或行政目的重製他人著作？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 44,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第45條；司法程序得否重製著作？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 45,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第46條；學校教學得否重製他人著作？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 46,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第51條；個人得否為非營利目的重製著作？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 51,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第52條；為評論得否引用他人著作？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 52,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第53條；視覺障礙者得否重製著作？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 53,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第54條；考試題目得否重製他人著作？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 54,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第55條；非營利活動得否公開演出他人著作？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 55,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第56條；廣播電視台得否錄音錄影？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 56,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第61條；報導時事得否利用他人著作？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 61,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第65條；合理使用判斷標準為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 65,
+      "article_suffix": null,
+      "item_number": 2,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第79條；製版權是否存在？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 79,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第80條；權利管理電子資訊是否受保護？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 80,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第80條之1；防盜拷措施是否受保護？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 80,
+      "article_suffix": 1,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第81條；著作權集體管理團體得否設立？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 81,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第84條；著作權人得否請求排除侵害？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 84,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第85條；著作人格權受侵害得否請求損害賠償？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 85,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第86條；著作人死亡後得否請求救濟？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 86,
+      "article_suffix": null,
+      "item_number": 2,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第87條；何種情形視為侵害著作權？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 87,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第88條；侵害著作權之損害賠償如何計算？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 88,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第89條；侵害著作權得否請求銷毀？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 89,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第90條；海關得否查扣侵害著作權之物？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 90,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第91條；擅自重製他人著作有何刑責？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 91,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第91條之1；擅自散布重製物有何刑責？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 91,
+      "article_suffix": 1,
+      "item_number": 1,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第92條；擅自公開演出有何刑責？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 92,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第93條；侵害著作人格權有何刑責？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 93,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 1,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第94條；法人之代表人有何責任？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 94,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第95條；侵害製版權有何刑責？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 95,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第96條；違反防盜拷措施有何處罰？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 80,
+      "article_suffix": 1,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第97條；侵害權利管理資訊有何處罰？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 97,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第98條；法院得否沒收侵害物？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 91,
+      "article_suffix": 1,
+      "item_number": 3,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第99條；告訴乃論之罪為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 96,
+      "article_suffix": 1,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第100條；外國人著作是否受保護？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 100,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第101條；專屬授權之被授權人得否行使權利？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 101,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第102條；著作權爭議得否調解？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 102,
+      "article_suffix": null,
+      "item_number": 4,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第2款；著作人之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 2,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第3款；著作權之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 3,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第4款；公開發表之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 4,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第5款；發行之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 5,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第6款；公開口述之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 6,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第7款；公開播送之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 7,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第8款；公開上映之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 8,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第9款；公開演出之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 9,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第10款；公開傳輸之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 10,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第11款；公開展示之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 11,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第12款；改作之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 12,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第13款；編輯之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 13,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第14款；出租之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 14,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3條第1項第15款；重製之定義為何？",
+    "label": "Yes",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 3,
+      "article_suffix": null,
+      "item_number": 1,
+      "clause_type": "款",
+      "clause_number": 15,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規定AI生成內容必須登記才能享有著作權？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4條; 此法是否有規範NFT交易之著作權強制授權規定？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 4,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規定元宇宙虛擬資產之著作權歸屬強制規範？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規範區塊鏈存證之法定效力標準？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5條; 此法是否有規定演算法生成音樂之強制權利金分配比例？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 5,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6章; 此法是否有規範深度偽造技術之著作權強制標記要求？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第8條; 此法是否有規定雲端儲存服務商之著作權監管義務？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範人工智慧訓練資料之強制授權機制？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定數位藝術之強制保險要求？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第9條; 此法是否有規範虛擬實境內容之著作權分級制度？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 9,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定社交媒體轉貼之強制稅務申報？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範串流平台之著作權保證金制度？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定開放原始碼軟體之強制專利授權？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範數位遺產之著作權繼承特別程序？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第10條; 此法是否有規定演算法創作之強制共同作者認定標準？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 10,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範元宇宙商標與著作權強制衝突解決機制？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定數位內容之強制備份義務？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第8條; 此法是否有規範AI生成藝術之稅務處罰規定？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定區塊鏈智能合約之著作權強制執行機制？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範數位收藏品之強制鑑價標準？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定雲端運算服務之著作權連帶責任保險？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範深度學習模型之強制權利金分配？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第9條; 此法是否有規定虛擬網紅內容之強制標記要求？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 9,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範數位雙胞胎之著作權特殊保護？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定演算法推薦內容之強制授權費用？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第8條; 此法是否有規範NFT智能合約之強制審計要求？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定元宇宙虛擬土地之著作權登記制度？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範AI輔助創作之強制共同著作權聲明？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定數位內容之強制環境影響評估？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範量子計算相關軟體之特殊保護條款？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第10條; 此法是否有規定腦機介面生成內容之強制權利歸屬？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 10,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範擴增實境內容之強制許可證制度？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定數位藝術之強制節能標準？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第8條; 此法是否有規範AI生成內容之強制倫理審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定元宇宙虛擬商品之強制關稅課徵？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範深度偽造技術之強制保險要求？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定區塊鏈存證之強制公證程序？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範神經網路模型之強制開源要求？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第9條; 此法是否有規定虛實整合內容之強制安全標準？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 9,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範數位人類之著作權人格權特別規定？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定AI訓練資料之強制補償機制？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第8條; 此法是否有規範元宇宙內容之強制分級制度？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定量子加密內容之特殊保護期限？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範腦波生成藝術之強制權利登記？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定數位內容之強制碳足跡計算？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範AI協作創作之強制利益分配公式？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第10條; 此法是否有規定虛擬貨幣藝術之強制鑑價機制？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 10,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範神經風格遷移技術之強制標記要求？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定全息投影內容之強制許可證制度？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第8條; 此法是否有規範AI生成小說之強制內容審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定數位雙胞胎之強制責任保險？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範元宇宙建築設計之強制備案制度？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定AI音樂生成之強制權利金計算公式？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範腦機介面創作之強制醫療認證？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第9條; 此法是否有規定量子藝術之強制技術審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 9,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範數位人類表演之強制授權費用？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定AI繪畫之強制藝術價值評估？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第8條; 此法是否有規範虛實整合內容之強制安全測試？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定NFT藝術之強制保管機制？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範AI生成電影之強制內容分級？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定元宇宙虛擬時裝之強制設計保護？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範神經網路創作之強制演算法公開？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第10條; 此法是否有規定腦波藝術之強制神經科學認證？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 10,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範量子計算藝術之強制技術審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定AI詩歌生成之強制文學價值評估？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第8條; 此法是否有規範虛擬網紅內容之強制道德審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定數位藝術之強制保存期限？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範AI生成劇本之強制戲劇審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定元宇宙虛擬音樂會之強制授權費用？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範神經風格藝術之強制技術認證？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第9條; 此法是否有規定AI生成建築設計之強制結構安全審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 9,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範數位人類之強制人格權保護？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定AI生成食譜之強制食品安全認證？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第8條; 此法是否有規範虛擬實境教育內容之強制教學評估？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定NFT音樂之強制音質標準？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範AI生成新聞之強制事實查核？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定元宇宙虛擬藝術展之強策展標準？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範腦波音樂之強制神經科學驗證？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第10條; 此法是否有規定量子藝術之強制物理原理審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 10,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範數位時尚之強制可持續性標準？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定AI生成法律文件之強制合規審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第8條; 此法是否有規範虛擬網紅之強制社會責任保險？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定NFT藝術之強制真偽鑑定機制？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範AI生成遊戲之強制年齡分級？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定元宇宙虛擬建築之強制結構審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範神經網路藝術之強制算法透明度？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第9條; 此法是否有規定腦波繪畫之強制神經醫學認證？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 9,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範量子音樂之強制物理原理驗證？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定AI生成時尚設計之強制實用性測試？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作権法第8條; 此法是否有規範虛擬實境治療內容之強制醫療認證？",
+    "label": "No",
+    "gold": {
+      "law": "",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定NFT文學之強制文學價值評估？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範AI生成廣告之強制消費者保護審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定元宇宙虛擬教育之強制教學品質標準？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範神經風格設計之強制美學審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第10條; 此法是否有規定量子文學之強制科學準確性審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 10,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範數位藝術之強制文化傳承義務？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第4章; 此法是否有規定AI生成醫療內容之強制醫學審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第8條; 此法是否有規範虛擬網紅之強制心理健康評估？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 8,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第3章; 此法是否有規定NFT收藏品之強制投資風險警示？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第5章; 此法是否有規範AI生成科學論文之強制同儕審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第6條; 此法是否有規定元宇宙虛擬運動之強制安全標準？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 6,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第7章; 此法是否有規範腦波創作之強制神經倫理審查？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第9條; 此法是否有規定量子計算藝術之強制數學正確性驗證？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": 9,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  },
+  {
+    "query": "Consider ROC著作權法第2章; 此法是否有規範數位音樂之強制音頻品質標準？",
+    "label": "No",
+    "gold": {
+      "law": "著作權法",
+      "article_number": null,
+      "article_suffix": null,
+      "item_number": null,
+      "clause_type": null,
+      "clause_number": null,
+      "clause_sub_number": null
+    },
+    "gold_source": "answer_first_then_query"
+  }
+]

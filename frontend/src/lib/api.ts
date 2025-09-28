@@ -90,6 +90,14 @@ export const api = {
     });
     return json<any>(res);
   },
+  async hybridRetrieve(body: { query: string; k: number }) {
+    const res = await fetch(`${base}/hybrid-retrieve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return json<any>(res);
+  },
   async generate(body: { query: string; top_k: number }) {
     const res = await fetch(`${base}/generate`, {
       method: "POST",

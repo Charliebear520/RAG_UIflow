@@ -12,3 +12,5 @@ jieba==0.42.1
 spacy==3.8.7
 google-generativeai==0.8.5
 rank-bm25==0.2.2
+sentence-transformers==3.1.1
+torch>=2.0.0

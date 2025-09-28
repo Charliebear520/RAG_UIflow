@@ -48,9 +48,12 @@
 ```bash
 cd backend
 pip install -r requirements.txt
-echo "GEMINI_API_KEY=your_gemini_api_key_here" > .env
-python -m uvicorn app.main_new:app --reload --host 0.0.0.0 --port 8000
+echo "GOOGLE_API_KEY=your_google_api_key_here" > .env
+echo "USE_GEMINI_COMPLETION=true" >> .env
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+**注意**: 如果您遇到 "GOOGLE_API_KEY not set" 錯誤，請參考 [Gemini API 設置指南](GEMINI_SETUP.md)
 
 ### 前端設置
 
@@ -87,8 +90,7 @@ RAG/
 │   │   ├── pdf_processor.py # PDF處理
 │   │   ├── question_generator.py # 問題生成
 │   │   ├── routes.py       # API路由
-│   │   ├── main.py         # 原始主文件
-│   │   └── main_new.py     # 模組化主文件
+│   │   └── main.py         # 主應用文件
 │   └── requirements.txt    # Python依賴
 ├── frontend/               # 前端代碼（組件化）
 │   ├── src/

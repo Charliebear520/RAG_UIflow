@@ -10,6 +10,7 @@ import { ChunkPage } from "./routes/ChunkPage";
 import { EmbedPage } from "./routes/EmbedPage";
 import { RetrievePage } from "./routes/RetrievePage";
 import { GeneratePage } from "./routes/GeneratePage";
+import { EvaluatePage } from "./routes/EvaluatePage";
 import { RagProvider } from "./lib/ragStore";
 
 const router = createBrowserRouter([
@@ -22,6 +23,7 @@ const router = createBrowserRouter([
       { path: "embed", element: <EmbedPage /> },
       { path: "retrieve", element: <RetrievePage /> },
       { path: "generate", element: <GeneratePage /> },
+      { path: "evaluate", element: <EvaluatePage /> },
     ],
   },
 ]);

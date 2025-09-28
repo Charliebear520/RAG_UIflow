@@ -6,6 +6,7 @@ import uuid
 import json
 from datetime import datetime
 from typing import List, Dict, Any
+import re
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 import numpy as np
@@ -47,6 +48,323 @@ class EvaluationMetrics(BaseModel):
     chunk_count: int
     avg_chunk_length: float
     length_variance: float
+
+# === Normalization helpers (add minimal keys for evaluation/alignment) ===
+def _nfkc(s: str) -> str:
+    try:
+        import unicodedata
+        return unicodedata.normalize('NFKC', s or '')
+    except Exception:
+        return s or ''
+
+
+def _to_int_cn_num_local(s: Any) -> int | None:  # type: ignore[valid-type]
+    if s is None:
+        return None
+    t = _nfkc(str(s))
+    if t.isdigit():
+        try:
+            return int(t)
+        except Exception:
+            return None
+    mapping = {'零':0,'〇':0,'一':1,'二':2,'兩':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,'百':100,'千':1000}
+    total, section, num = 0, 0, 0
+    found = False
+    for ch in t:
+        if ch in mapping:
+            v = mapping[ch]
+            if v < 10:
+                num = v
+                found = True
+            else:
+                if num == 0:
+                    num = 1
+                section += num * v
+                num = 0
+                found = True
+    total += section + num
+    return total if found else None
+
+
+def _parse_article_label(label: str) -> tuple[int | None, int | None]:
+    t = _nfkc(label)
+    m = re.search(r"第([0-9一二兩三四五六七八九十百千〇零]+)條之([0-9一二兩三四五六七八九十百千〇零]+)", t)
+    if m:
+        return (_to_int_cn_num_local(m.group(1)), _to_int_cn_num_local(m.group(2)))
+    m = re.search(r"第([0-9一二兩三四五六七八九十百千〇零]+)-([0-9一二兩三四五六七八九十百千〇零]+)條", t)
+    if m:
+        return (_to_int_cn_num_local(m.group(1)), _to_int_cn_num_local(m.group(2)))
+    m = re.search(r"第([0-9一二兩三四五六七八九十百千〇零]+)條", t)
+    if m:
+        return (_to_int_cn_num_local(m.group(1)), None)
+    return (None, None)
+
+
+def normalize_corpus_metadata(corpus: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        def _strip_keys(obj: Any, keys: set[str]):  # type: ignore[valid-type]
+            if isinstance(obj, dict):
+                # 先刪除目標鍵
+                for k in list(obj.keys()):
+                    if k in keys:
+                        del obj[k]
+                # 遞迴處理子節點
+                for v in list(obj.values()):
+                    _strip_keys(v, keys)
+            elif isinstance(obj, list):
+                for v in obj:
+                    _strip_keys(v, keys)
+
+        def _filter_metadata(md: Dict[str, Any]) -> Dict[str, Any]:
+            allowed = {
+                'id',
+                'category',
+                'article_label',
+                'article_number',
+                'article_suffix',
+                'item_number',
+                'clause_type',
+                'clause_number',
+                'clause_sub_number',
+            }
+            # 刪除 spans / global_span / page / page_range / note / matched_keywords / confidence / found
+            for drop in ['spans', 'global_span', 'page', 'page_range', 'note', 'matched_keywords', 'confidence', 'found']:
+                if drop in md:
+                    md.pop(drop, None)
+            # 僅保留必要鍵
+            return {k: v for k, v in md.items() if k in allowed}
+
+        for law in corpus.get('laws', []) or []:
+            law_name = law.get('law_name') or ''
+            clean_law = law_name.replace('法規名稱：', '')
+            # 覆寫 law_name，去掉前綴
+            law['law_name'] = clean_law
+            # 構建新章節（過濾掉未分類章/未標示條文）
+            new_chapters = []
+            for chapter in (law.get('chapters', []) or []):
+                new_sections = []
+                for section in (chapter.get('sections', []) or []):
+                    new_articles = []
+                    for article in (section.get('articles', []) or []):
+                        # 僅保留必要的文章層鍵
+                        a_label = article.get('article') or ''
+                        a_num, a_suf = _parse_article_label(a_label)
+                        md = article.get('metadata') or {}
+                        md['category'] = clean_law
+                        md['article_label'] = a_label
+                        md['article_number'] = a_num
+                        md['article_suffix'] = a_suf
+                        # 清理 id 前綴
+                        if 'id' in md and isinstance(md['id'], str):
+                            md['id'] = md['id'].replace('法規名稱：', '')
+                        # 過濾為最小 metadata
+                        article['metadata'] = _filter_metadata(md)
+                        # 刪除文章層非必要鍵（如 spans 等）；保留 article/content/items/metadata
+                        for drop_key in list(article.keys()):
+                            if drop_key not in {'article', 'content', 'items', 'metadata'}:
+                                article.pop(drop_key, None)
+
+                        # 過濾掉 PDF 首頁描述類的假條文：article == '未標示條文' 或 article_number 為 None 且內容是法規描述
+                        if article.get('article') == '未標示條文':
+                            continue
+                        if article['metadata'].get('article_number') is None and '法規名稱' in (article.get('content') or ''):
+                            # 進一步防守：若是純描述也過濾
+                            continue
+
+                        for item in article.get('items', []) or []:
+                            # 僅保留必要的項層鍵
+                            md_i = item.get('metadata') or {}
+                            md_i['category'] = clean_law
+                            md_i['article_label'] = a_label
+                            md_i['article_number'] = a_num
+                            md_i['article_suffix'] = a_suf
+                            md_i['item_number'] = _to_int_cn_num_local(item.get('item'))
+                            if 'id' in md_i and isinstance(md_i['id'], str):
+                                md_i['id'] = md_i['id'].replace('法規名稱：', '')
+                            item['metadata'] = _filter_metadata(md_i)
+                            # 刪除項層非必要鍵（保留 item/content/sub_items/metadata）
+                            for drop_key in list(item.keys()):
+                                if drop_key not in {'item', 'content', 'sub_items', 'metadata'}:
+                                    item.pop(drop_key, None)
+                            for sub in item.get('sub_items', []) or []:
+                                # 僅保留必要的子項層鍵
+                                md_s = sub.get('metadata') or {}
+                                md_s['category'] = clean_law
+                                md_s['article_label'] = a_label
+                                md_s['article_number'] = a_num
+                                md_s['article_suffix'] = a_suf
+                                md_s['clause_type'] = '目'
+                                md_s['clause_number'] = _to_int_cn_num_local(sub.get('sub_item'))
+                                md_s['clause_sub_number'] = None
+                                if 'id' in md_s and isinstance(md_s['id'], str):
+                                    md_s['id'] = md_s['id'].replace('法規名稱：', '')
+                                sub['metadata'] = _filter_metadata(md_s)
+                                # 刪除子項層非必要鍵（保留 sub_item/content/metadata）
+                                for drop_key in list(sub.keys()):
+                                    if drop_key not in {'sub_item', 'content', 'metadata'}:
+                                        sub.pop(drop_key, None)
+                        # 保留處理後的條文
+                        new_articles.append(article)
+
+                    # 若該節存在有效條文才保留
+                    if new_articles:
+                        section['articles'] = new_articles
+                        new_sections.append(section)
+                # 若該章存在有效節才保留
+                if new_sections:
+                    chapter['sections'] = new_sections
+                    new_chapters.append(chapter)
+            # 覆寫章節
+            law['chapters'] = new_chapters
+        return corpus
+    except Exception:
+        return corpus
+
+
+# === New: Evaluate with qa_gold (no mapping, regex-based relevance) ===
+@router.post("/evaluate/gold")
+async def evaluate_with_gold(payload: Dict[str, Any]):
+    """
+    以 qa_gold 與 chunking_results 計算 P@K / R@K / PrecisionΩ（簡化版）
+    payload = {
+      doc_id: str,
+      qa_gold: [ { query, label, gold: { law, article_number, article_suffix, ... } }, ... ],
+      chunking_results: [ { strategy, config: { chunk_size, overlap_ratio, ... }, chunks: [text], ... }, ... ],
+      k_values: [int]
+    }
+    """
+    try:
+        doc_id = payload.get('doc_id')
+        qa_gold = payload.get('qa_gold') or []
+        chunking_results = payload.get('chunking_results') or []
+        k_values = payload.get('k_values') or [1, 3, 5, 10]
+
+        if not isinstance(qa_gold, list) or not isinstance(chunking_results, list):
+            return JSONResponse(status_code=400, content={"error": "qa_gold 或 chunking_results 格式錯誤"})
+
+        # 僅取正例（大小寫寬鬆）
+        positives = [
+            q for q in qa_gold
+            if str(q.get('label', '')).strip().lower() == 'yes'
+        ]
+        if not positives:
+            return {"results": [], "summary": {"message": "沒有正例可供評測"}}
+
+        def mk_article_regex(art: Any, suf: Any) -> re.Pattern:
+            a = str(art) if art is not None else None
+            s = str(suf) if suf is not None else None
+            if a and s:
+                return re.compile(rf"第\s*{re.escape(a)}\s*條\s*(?:之|-)\s*{re.escape(s)}")
+            if a:
+                return re.compile(rf"第\s*{re.escape(a)}\s*條(?![\d之-])")
+            return re.compile(r"^$")  # 不匹配
+
+        results = []
+        for cr in chunking_results:
+            # 兼容不同字段命名：chunks / all_chunks / chunks_with_span
+            chunks_raw = (
+                cr.get('chunks')
+                or cr.get('all_chunks')
+                or cr.get('chunks_with_span')
+                or []
+            )
+            chunks: list[str] = []
+            if isinstance(chunks_raw, list):
+                for c in chunks_raw:
+                    if isinstance(c, str):
+                        chunks.append(c)
+                    elif isinstance(c, dict):
+                        # 嘗試多個常見鍵
+                        text = (
+                            c.get('content')
+                            or c.get('text')
+                            or c.get('chunk')
+                            or ''
+                        )
+                        if isinstance(text, str) and text:
+                            chunks.append(text)
+            # 若仍為空，保底為空列表
+            # 準備 TF-IDF 向量
+            try:
+                vec = TfidfVectorizer()
+                mat = vec.fit_transform(chunks) if chunks else None
+            except Exception:
+                vec, mat = None, None
+
+            # 逐題計算
+            per_k_precisions: Dict[int, list] = {k: [] for k in k_values}
+            per_k_recalls: Dict[int, list] = {k: [] for k in k_values}
+
+            for q in positives:
+                query = q.get('query', '')
+                g = q.get('gold', {}) or {}
+                law = (g.get('law') or '').strip()
+                art = g.get('article_number')
+                suf = g.get('article_suffix')
+                if art is None:
+                    # 無條號的題先跳過（或可擴充弱標註）
+                    continue
+                law_ok = law != ''
+                rx = mk_article_regex(art, suf)
+
+                # 構造 gold 單元集合：透過正則在 chunk 內容中檢測
+                gold_unit_hits = set()
+                for idx, text in enumerate(chunks):
+                    if not isinstance(text, str):
+                        continue
+                    if rx.search(text) and (not law_ok or (law in text)):
+                        gold_unit_hits.add(idx)
+                if not gold_unit_hits:
+                    # 無 gold，跳過此題
+                    continue
+
+                # 檢索：TF-IDF Top-K（若失敗則跳過）
+                retrieved_order = []
+                if vec is not None and mat is not None:
+                    try:
+                        qv = vec.transform([query])
+                        sims = cosine_similarity(qv, mat).flatten()
+                        order = sims.argsort()[::-1]
+                        retrieved_order = list(order)
+                    except Exception:
+                        retrieved_order = list(range(len(chunks)))
+                else:
+                    retrieved_order = list(range(len(chunks)))
+
+                for k in k_values:
+                    topk = set(retrieved_order[:k])
+                    # P@K: 命中比例
+                    prec = (len(topk & gold_unit_hits) / k) if k > 0 else 0.0
+                    # R@K: 覆蓋比例
+                    rec = (len(topk & gold_unit_hits) / len(gold_unit_hits)) if gold_unit_hits else 0.0
+                    per_k_precisions[k].append(prec)
+                    per_k_recalls[k].append(rec)
+
+            # 匯總
+            result_entry = {
+                "strategy": cr.get('strategy'),
+                "config": cr.get('config'),
+                "chunk_count": cr.get('chunk_count'),
+                "metrics": {
+                    "precision_at_k": {k: (sum(v)/len(v) if v else 0.0) for k, v in per_k_precisions.items()},
+                    "recall_at_k": {k: (sum(v)/len(v) if v else 0.0) for k, v in per_k_recalls.items()},
+                }
+            }
+            results.append(result_entry)
+
+        # 簡單摘要：以 P@5 排序
+        best = None
+        if results:
+            best = max(results, key=lambda r: r["metrics"]["precision_at_k"].get(5, 0))
+
+        return {
+            "results": results,
+            "summary": {
+                "best_by_p_at_5": best
+            }
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 class EvaluationResult(BaseModel):
@@ -880,6 +1198,12 @@ async def convert_pdf(
         # 生成文檔ID
         doc_id = str(uuid.uuid4())
         
+        # 正規化 metadata（補齊評測最小必要鍵，不受前端勾選影響）
+        try:
+            normalized_metadata = normalize_corpus_metadata(result["metadata"]) if isinstance(result.get("metadata"), dict) else result.get("metadata")
+        except Exception:
+            normalized_metadata = result.get("metadata")
+
         # 創建文檔記錄
         doc_record = DocRecord(
             id=doc_id,
@@ -888,7 +1212,7 @@ async def convert_pdf(
             chunks=[],
             chunk_size=0,
             overlap=0,
-            json_data=result["metadata"]
+            json_data=normalized_metadata
         )
         
         # 存儲文檔
@@ -898,7 +1222,7 @@ async def convert_pdf(
             "doc_id": doc_id,
             "filename": file.filename,
             "text_length": len(result["text"]),
-            "metadata": result["metadata"],
+            "metadata": normalized_metadata,
             "processing_time": result["processing_time"]
         }
         
@@ -2439,6 +2763,25 @@ async def process_multiple_chunking(
             "results": results
         }
         
+        # 將第一個結果同步到文檔中，以便後續的 embed 操作
+        if results:
+            # 選擇第一個結果作為主要分塊結果
+            primary_result = results[0]
+            doc = store.get_doc(doc_id)
+            if doc:
+                # 更新文檔的分塊信息
+                doc.chunks = primary_result.get("chunks", [])
+                doc.chunk_size = primary_result.get("config", {}).get("chunk_size", 500)
+                doc.overlap = int(doc.chunk_size * primary_result.get("config", {}).get("overlap_ratio", 0.1))
+                
+                # 如果有結構化chunks，也保存
+                if "chunks_with_span" in primary_result:
+                    doc.structured_chunks = primary_result["chunks_with_span"]
+                
+                # 保存文檔
+                store.add_doc(doc)
+                print(f"已將批量分塊結果同步到文檔 {doc_id}，分塊數量: {len(doc.chunks)}")
+        
     except Exception as e:
         chunking_task_store[task_id] = {
             "status": "failed",
@@ -2557,6 +2900,8 @@ async def process_multiple_pdf_conversion(task_id: str, file_contents: List[Dict
         
         # 整合多個法律文檔
         merged_doc = merge_law_documents(law_documents)
+        # 正規化合併後的 metadata（補齊必要鍵）
+        merged_doc = normalize_corpus_metadata(merged_doc)
         
         # 合併所有文本內容
         if all_texts:

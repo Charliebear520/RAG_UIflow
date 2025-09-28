@@ -1,5 +1,6 @@
 import React from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useRag } from "../lib/ragStore";
 
 const stages = [
   { key: "upload", label: "Upload", path: "/" },
@@ -7,11 +8,13 @@ const stages = [
   { key: "embed", label: "Embed", path: "/embed" },
   { key: "retrieve", label: "Retrieve", path: "/retrieve" },
   { key: "generate", label: "Generate", path: "/generate" },
+  { key: "evaluate", label: "Evaluate", path: "/evaluate" },
 ];
 
 export function Layout() {
   const loc = useLocation();
   const navigate = useNavigate();
+  const { embedProvider, embedModel } = useRag();
 
   const activeIndex = stages.findIndex(
     (s) => s.path === loc.pathname || (s.path === "/" && loc.pathname === "/")
@@ -20,7 +23,17 @@ export function Layout() {
   return (
     <div className="container py-3">
       <header className="mb-3">
-        <h1 className="h3 mb-3">RAG Visualizer</h1>
+        <div className="d-flex justify-content-between align-items-center mb-3">
+          <h1 className="h3 mb-0">RAG Visualizer</h1>
+          {embedProvider && (
+            <div className="text-end">
+              <small className="text-muted d-block">Embedding Model</small>
+              <span className="badge bg-success">
+                {embedProvider} {embedModel && `(${embedModel})`}
+              </span>
+            </div>
+          )}
+        </div>
         <div className="d-flex gap-2 flex-wrap align-items-center">
           {stages.map((s, i) => (
             <StageBadge

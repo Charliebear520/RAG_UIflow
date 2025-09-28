@@ -12,7 +12,8 @@ class QuestionGenerator:
     """問題生成器"""
     
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        # 優先使用 GOOGLE_API_KEY，如果沒有則使用 GEMINI_API_KEY
+        self.api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         if self.api_key:
             genai.configure(api_key=self.api_key)
             self.model = genai.GenerativeModel('gemini-pro')

@@ -3,7 +3,6 @@
 """
 
 from typing import Dict, Optional, List
-from sklearn.feature_extraction.text import TfidfVectorizer
 from .models import DocRecord, EvaluationTask
 
 
@@ -12,7 +11,6 @@ class InMemoryStore:
     
     def __init__(self) -> None:
         self.docs: Dict[str, DocRecord] = {}
-        self.tfidf: Optional[TfidfVectorizer] = None
         self.embeddings = None  # matrix for chunks (numpy array or list)
         self.chunk_doc_ids: List[str] = []
         self.chunks_flat: List[str] = []
@@ -20,7 +18,6 @@ class InMemoryStore:
 
     def reset_embeddings(self):
         """清除向量/索引狀態，以便重新計算嵌入"""
-        self.tfidf = None
         self.embeddings = None
         self.chunk_doc_ids = []
         self.chunks_flat = []

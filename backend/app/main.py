@@ -20,6 +20,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from .models import ChunkConfig, MetadataOptions
+from .hybrid_search import hybrid_rank, HybridConfig
+from .store import InMemoryStore
 try:
     from rank_bm25 import BM25Okapi  # type: ignore
     BM25_AVAILABLE = True
@@ -48,6 +50,13 @@ except ImportError:  # pragma: no cover - optional dependency
     genai = None  # type: ignore
     GEMINI_AVAILABLE = False
 
+try:
+    from sentence_transformers import SentenceTransformer  # type: ignore
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency
+    SentenceTransformer = None  # type: ignore
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+
 load_dotenv()
 
 
@@ -59,8 +68,18 @@ def get_env_bool(name: str, default: bool = False) -> bool:
 
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-USE_GEMINI_EMBEDDING = get_env_bool("USE_GEMINI_EMBEDDING", False)
+USE_GEMINI_EMBEDDING = get_env_bool("USE_GEMINI_EMBEDDING", True)  # 默認使用 Gemini
 USE_GEMINI_COMPLETION = get_env_bool("USE_GEMINI_COMPLETION", False)
+USE_BGE_M3_EMBEDDING = get_env_bool("USE_BGE_M3_EMBEDDING", False)  # BGE-M3 備用選項
+
+# 調試信息
+print(f"🔧 Embedding 配置:")
+print(f"   USE_GEMINI_EMBEDDING: {USE_GEMINI_EMBEDDING}")
+print(f"   GOOGLE_API_KEY: {'已設置' if GOOGLE_API_KEY else '未設置'}")
+print(f"   GEMINI_API_KEY: {'已設置' if os.getenv('GEMINI_API_KEY') else '未設置'}")
+print(f"   USE_BGE_M3_EMBEDDING: {USE_BGE_M3_EMBEDDING}")
+print(f"   GOOGLE_EMBEDDING_MODEL: {os.getenv('GOOGLE_EMBEDDING_MODEL', 'gemini-embedding-001')}")
+print(f"   USE_GEMINI_COMPLETION: {USE_GEMINI_COMPLETION}")
 
 try:
     import httpx
@@ -82,35 +101,6 @@ class DocRecord:
     generated_questions: Optional[List[str]] = None  # 存儲生成的問題
 
 
-class InMemoryStore:
-    def __init__(self) -> None:
-        self.docs: Dict[str, DocRecord] = {}
-        self.tfidf: Optional[TfidfVectorizer] = None
-        # embeddings can be: List[List[float]] (dense) or scipy.sparse.spmatrix (tf-idf)
-        from typing import Any as _Any
-        self.embeddings: _Any = None
-        self.chunk_doc_ids: List[str] = []
-        self.chunks_flat: List[str] = []
-
-    def reset_embeddings(self):
-        """Clear vector/index state so embeddings can be recomputed."""
-        self.tfidf = None
-        self.embeddings = None
-        self.chunk_doc_ids = []
-        self.chunks_flat = []
-    
-    def add_doc(self, doc_record: DocRecord):
-        """添加文檔記錄"""
-        self.docs[doc_record.id] = doc_record
-        self.reset_embeddings()
-    
-    def get_doc(self, doc_id: str) -> Optional[DocRecord]:
-        """獲取文檔記錄"""
-        return self.docs.get(doc_id)
-    
-    def list_docs(self) -> List[DocRecord]:
-        """列出所有文檔記錄"""
-        return list(self.docs.values())
 
 
 
@@ -340,8 +330,8 @@ def extract_keywords_with_gemini(text: str, top_k: int = 5) -> List[str]:
         return extract_keywords_fallback(text, top_k)
     
     try:
-        # 配置Gemini API
-        api_key = GOOGLE_API_KEY  # Use the already defined GOOGLE_API_KEY variable
+        # 優先使用 GOOGLE_API_KEY，如果沒有則使用 GEMINI_API_KEY
+        api_key = GOOGLE_API_KEY or os.getenv('GEMINI_API_KEY')
         if not api_key:
             return extract_keywords_fallback(text, top_k)
         
@@ -1413,9 +1403,10 @@ def generate_questions_with_gemini(text_content: str, num_questions: int,
         return generate_questions_fallback(text_content, num_questions)
     
     try:
-        api_key = os.getenv('GEMINI_API_KEY')
+        # 優先使用 GOOGLE_API_KEY，如果沒有則使用 GEMINI_API_KEY
+        api_key = GOOGLE_API_KEY or os.getenv('GEMINI_API_KEY')
         if not api_key:
-            print("警告：GEMINI_API_KEY 未設置，使用備用方法")
+            print("警告：GOOGLE_API_KEY 和 GEMINI_API_KEY 都未設置，使用備用方法")
             return generate_questions_fallback(text_content, num_questions)
         
         cfg = getattr(genai, "configure", None)
@@ -1907,21 +1898,47 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
         raise RuntimeError("httpx not available")
     if not GOOGLE_API_KEY:
         raise RuntimeError("GOOGLE_API_KEY not set")
-    model = os.getenv("GOOGLE_EMBEDDING_MODEL", "embed-gecko-001")
-    # endpoint pattern: models/{model}:embed
-    url = f"https://generativelanguage.googleapis.com/v1beta2/models/{model}:embed?key={GOOGLE_API_KEY}"
+    model = os.getenv("GOOGLE_EMBEDDING_MODEL", "text-embedding-004")
+    # 使用正確的 API 端點格式
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
+    headers = {
+        "x-goog-api-key": GOOGLE_API_KEY,
+        "Content-Type": "application/json"
+    }
     out: List[List[float]] = []
     async with httpx.AsyncClient(timeout=60) as client:
-        batch_size = 64
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i+batch_size]
-            payload = {"input": batch}
-            r = await client.post(url, json=payload)
+        # 逐個處理文本（Gemini API 需要單個請求）
+        for text in texts:
+            payload = {
+                "model": f"models/{model}",
+                "content": {"parts": [{"text": text}]}
+            }
+            r = await client.post(url, headers=headers, json=payload)
             r.raise_for_status()
             data = r.json()
-            # expected shape: { data: [ { embedding: [...] }, ... ] }
-            out.extend([d.get("embedding") for d in data.get("data", [])])
+            # 根據官方文檔，響應格式是 {"embedding": {"values": [...]}}
+            embedding_values = data.get("embedding", {}).get("values", [])
+            out.append(embedding_values)
     return out
+
+
+def embed_bge_m3(texts: List[str]) -> List[List[float]]:
+    """使用 BGE-M3 模型進行 embedding"""
+    if not SENTENCE_TRANSFORMERS_AVAILABLE:
+        raise RuntimeError("sentence-transformers not available")
+    
+    try:
+        # 載入 BGE-M3 模型
+        model = SentenceTransformer('BAAI/bge-m3')
+        
+        # 批量處理文本
+        embeddings = model.encode(texts, batch_size=32, show_progress_bar=True)
+        
+        # 轉換為列表格式
+        return embeddings.tolist()
+        
+    except Exception as e:
+        raise RuntimeError(f"BGE-M3 embedding failed: {e}")
 
 
 @app.post("/api/embed")
@@ -1939,44 +1956,237 @@ async def embed(req: EmbedRequest):
     if not all_chunks:
         return JSONResponse(status_code=400, content={"error": "no chunks to embed"})
 
-    if USE_GEMINI_EMBEDDING:
-        vectors = await embed_gemini(all_chunks)
-        # keep as numpy matrix-like list of lists; for cosine sim we'll rely on numpy if available
-        store.tfidf = None
-        store.embeddings = vectors
-        store.chunk_doc_ids = chunk_doc_ids
-        store.chunks_flat = all_chunks
-        return {"provider": "gemini", "num_vectors": len(vectors)}
-    else:
-        # TF-IDF fallback (per-chunk bag-of-words)
-        vectorizer = TfidfVectorizer(max_features=4096, stop_words="english")
-        X = vectorizer.fit_transform(all_chunks)
-        store.tfidf = vectorizer
-        store.embeddings = X
-        store.chunk_doc_ids = chunk_doc_ids
-        store.chunks_flat = all_chunks
-        return {"provider": "tfidf", "num_vectors": X.shape[0], "num_features": X.shape[1]}
+    # 嘗試使用 Gemini embedding（主要選項）
+    if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+        try:
+            vectors = await embed_gemini(all_chunks)
+            store.embeddings = vectors
+            store.chunk_doc_ids = chunk_doc_ids
+            store.chunks_flat = all_chunks
+            return {
+                "provider": "gemini", 
+                "model": "text-embedding-004",
+                "num_vectors": len(vectors),
+                "dimension": len(vectors[0]) if vectors else 0
+            }
+        except Exception as e:
+            print(f"Gemini embedding failed: {e}")
+            # 如果 Gemini 失敗，嘗試 BGE-M3
+    
+    # 嘗試使用 BGE-M3 embedding（備用選項）
+    if USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+        try:
+            vectors = embed_bge_m3(all_chunks)
+            store.embeddings = vectors
+            store.chunk_doc_ids = chunk_doc_ids
+            store.chunks_flat = all_chunks
+            return {
+                "provider": "bge-m3", 
+                "model": "BAAI/bge-m3",
+                "num_vectors": len(vectors),
+                "dimension": len(vectors[0]) if vectors else 0
+            }
+        except Exception as e:
+            print(f"BGE-M3 embedding failed: {e}")
+    
+    # 沒有可用的 embedding 方法
+    return JSONResponse(
+        status_code=500, 
+        content={
+            "error": "No embedding method available. Please configure Gemini API key or BGE-M3 model."
+        }
+    )
 
 
-def rank_with_tfidf(query: str, k: int):
-    assert store.tfidf is not None
-    q = store.tfidf.transform([query])
-    sims = cosine_similarity(q, store.embeddings).ravel()  # type: ignore[arg-type]
-    idxs = sims.argsort()[::-1][:k]
-    return idxs, sims[idxs]
-
-
-def rank_with_gemini(query: str, k: int):
-    # cosine similarity on dense vectors list
+def rank_with_dense_vectors(query: str, k: int):
+    """使用密集向量進行相似度計算（支持 Gemini 和 BGE-M3）"""
     import numpy as np
     vecs = np.array(store.embeddings, dtype=float)  # type: ignore[assignment]
-    qvec = np.array(asyncio_run(embed_gemini([query]))[0], dtype=float)
+    
+    # 根據當前配置選擇查詢向量化方法
+    if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+        try:
+            qvec = np.array(asyncio_run(embed_gemini([query]))[0], dtype=float)
+        except Exception as e:
+            print(f"Gemini query embedding failed: {e}")
+            # 如果 Gemini 失敗，嘗試 BGE-M3
+            if USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+                try:
+                    qvec = np.array(embed_bge_m3([query])[0], dtype=float)
+                except Exception as e2:
+                    print(f"BGE-M3 query embedding failed: {e2}")
+                    raise RuntimeError("Both Gemini and BGE-M3 query embedding failed")
+            else:
+                raise RuntimeError("Gemini query embedding failed and BGE-M3 not available")
+    elif USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+        try:
+            qvec = np.array(embed_bge_m3([query])[0], dtype=float)
+        except Exception as e:
+            print(f"BGE-M3 query embedding failed: {e}")
+            raise RuntimeError("BGE-M3 query embedding failed")
+    else:
+        raise RuntimeError("No dense embedding method available")
+    
     # normalize
     vecs_norm = vecs / (np.linalg.norm(vecs, axis=1, keepdims=True) + 1e-8)
     q_norm = qvec / (np.linalg.norm(qvec) + 1e-8)
     sims = vecs_norm @ q_norm
     idxs = np.argsort(-sims)[:k]
     return idxs.tolist(), sims[idxs].tolist()
+
+
+def calculate_retrieval_metrics(query: str, results: List[Dict], k: int) -> Dict[str, float]:
+    """計算檢索指標 P@K 和 R@K"""
+    try:
+        # 嘗試從 QA 數據中獲取相關文檔
+        qa_data = load_qa_data()
+        if not qa_data:
+            return {"p_at_k": 0.0, "r_at_k": 0.0, "note": "No QA data available"}
+        
+        # 找到與查詢最匹配的 QA 項目
+        best_match = None
+        best_similarity = 0.0
+        
+        for qa_item in qa_data:
+            # 改進的文本相似度匹配
+            qa_query = qa_item.get("query", "").lower()
+            query_lower = query.lower()
+            
+            # 方法1: 直接包含匹配
+            if query_lower in qa_query or qa_query in query_lower:
+                similarity = 1.0
+            else:
+                # 方法2: 提取法條號碼進行匹配
+                import re
+                query_article = re.search(r'第(\d+(?:之\d+)?)條', query_lower)
+                qa_article = re.search(r'第(\d+(?:之\d+)?)條', qa_query)
+                
+                if query_article and qa_article:
+                    if query_article.group(1) == qa_article.group(1):
+                        similarity = 0.8
+                    else:
+                        similarity = 0.0
+                else:
+                    # 方法3: 詞彙重疊度
+                    query_words = set(query_lower.split())
+                    qa_words = set(qa_query.split())
+                    overlap = len(query_words.intersection(qa_words))
+                    similarity = overlap / max(len(query_words), len(qa_words), 1)
+            
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_match = qa_item
+        
+        if not best_match or best_similarity < 0.3:  # 相似度閾值
+            return {"p_at_k": 0.0, "r_at_k": 0.0, "note": "No matching QA found"}
+        
+        # 從 gold 字段中提取相關的法條信息
+        gold = best_match.get("gold", {})
+        if gold:
+            # 從 gold 字段構建法條信息
+            law = gold.get("law", "")
+            article_number = gold.get("article_number")
+            article_suffix = gold.get("article_suffix")
+            
+            if law and article_number:
+                article_text = f"第{article_number}條"
+                if article_suffix:
+                    article_text += f"之{article_suffix}"
+                relevant_articles = [article_text]
+            else:
+                # 如果沒有 gold 信息，嘗試從查詢中提取
+                relevant_articles = extract_articles_from_text(best_match.get("query", ""))
+        else:
+            # 如果沒有 gold 字段，嘗試從查詢中提取
+            relevant_articles = extract_articles_from_text(best_match.get("query", ""))
+        
+        if not relevant_articles:
+            return {"p_at_k": 0.0, "r_at_k": 0.0, "note": "No relevant articles found"}
+        
+        # 計算 P@K 和 R@K
+        relevant_count = 0
+        for result in results[:k]:
+            content = result.get("content", "").lower()
+            # 檢查是否包含相關法條
+            for article in relevant_articles:
+                # 標準化法條格式進行匹配
+                article_normalized = article.lower().replace(" ", "")
+                content_normalized = content.replace(" ", "")
+                if article_normalized in content_normalized:
+                    relevant_count += 1
+                    break
+        
+        p_at_k = relevant_count / k if k > 0 else 0.0
+        r_at_k = relevant_count / len(relevant_articles) if relevant_articles else 0.0
+        
+        return {
+            "p_at_k": p_at_k,
+            "r_at_k": r_at_k,
+            "relevant_articles": relevant_articles,
+            "qa_similarity": best_similarity,
+            "matched_qa": best_match.get("query", "")[:100] + "..."
+        }
+        
+    except Exception as e:
+        return {"p_at_k": 0.0, "r_at_k": 0.0, "error": str(e)}
+
+
+def load_qa_data() -> List[Dict]:
+    """載入 QA 數據"""
+    try:
+        import json
+        import os
+        
+        # 嘗試載入不同的 QA 文件
+        qa_files = [
+            "QA/copyright_p.json",
+            "QA/copyright_n.json", 
+            "QA/copyright.json",
+            "QA/qa_gold.json"
+        ]
+        
+        for qa_file in qa_files:
+            qa_path = os.path.join(os.path.dirname(__file__), "..", "..", qa_file)
+            if os.path.exists(qa_path):
+                with open(qa_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, list) and len(data) > 0:
+                        return data
+        
+        return []
+    except Exception as e:
+        print(f"載入 QA 數據失敗: {e}")
+        return []
+
+
+def extract_articles_from_text(text: str) -> List[str]:
+    """從文本中提取法條信息"""
+    import re
+    
+    articles = []
+    
+    # 匹配 "第X條" 模式
+    patterns = [
+        r"第(\d+)條",
+        r"第(\d+)條之(\d+)",
+        r"第(\d+)-(\d+)條"
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, text)
+        for match in matches:
+            if isinstance(match, tuple):
+                if len(match) == 2:
+                    if match[1]:  # 有之N
+                        articles.append(f"第{match[0]}條之{match[1]}")
+                    else:  # 範圍
+                        articles.append(f"第{match[0]}-{match[1]}條")
+                else:
+                    articles.append(f"第{match[0]}條")
+            else:
+                articles.append(f"第{match}條")
+    
+    return list(set(articles))  # 去重
 
 
 def asyncio_run(coro):
@@ -1995,10 +2205,9 @@ def asyncio_run(coro):
 def retrieve(req: RetrieveRequest):
     if store.embeddings is None:
         return JSONResponse(status_code=400, content={"error": "run /embed first"})
-    if store.tfidf is not None:
-        idxs, sims = rank_with_tfidf(req.query, req.k)
-    else:
-        idxs, sims = rank_with_gemini(req.query, req.k)
+    
+    # 計算相似度並排序（只使用密集向量）
+    idxs, sims = rank_with_dense_vectors(req.query, req.k)
 
     # Use the same order as built in /embed
     chunks_flat = store.chunks_flat
@@ -2038,55 +2247,331 @@ def retrieve(req: RetrieveRequest):
         
         results.append(result)
     
-    return {"query": req.query, "k": req.k, "results": results}
+    # 計算 P@K 和 R@K（如果有 QA 數據）
+    metrics = calculate_retrieval_metrics(req.query, results, req.k)
+    
+    # 判斷 embedding provider 和 model（不再支持 TF-IDF）
+    if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+        embedding_provider = "gemini"
+        embedding_model = "text-embedding-004"
+    elif USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+        embedding_provider = "bge-m3"
+        embedding_model = "BAAI/bge-m3"
+    else:
+        embedding_provider = "unknown"
+        embedding_model = "unknown"
+
+    return {
+        "query": req.query, 
+        "k": req.k, 
+        "results": results,
+        "metrics": metrics,
+        "embedding_provider": embedding_provider,
+        "embedding_model": embedding_model
+    }
+
+
+@app.post("/api/hybrid-retrieve")
+def hybrid_retrieve(req: RetrieveRequest):
+    """HybridRAG 檢索：結合向量相似度和法律結構規則"""
+    if store.embeddings is None:
+        return JSONResponse(status_code=400, content={"error": "run /embed first"})
+    
+    # 獲取所有 chunks 和 metadata
+    chunks_flat = store.chunks_flat
+    mapping_doc_ids = store.chunk_doc_ids
+    
+    if not chunks_flat:
+        return JSONResponse(status_code=400, content={"error": "no chunks available"})
+    
+    # 構建 nodes 格式供 hybrid_rank 使用
+    nodes = []
+    for i, (chunk, doc_id) in enumerate(zip(chunks_flat, mapping_doc_ids)):
+        doc = store.docs.get(doc_id)
+        metadata = {}
+        
+        # 如果有結構化chunks，提取metadata
+        if doc and hasattr(doc, 'structured_chunks') and doc.structured_chunks and i < len(doc.structured_chunks):
+            structured_chunk = doc.structured_chunks[i]
+            metadata = structured_chunk.get("metadata", {})
+        
+        nodes.append({
+            "content": chunk,
+            "metadata": metadata,
+            "doc_id": doc_id,
+            "chunk_index": i
+        })
+    
+    # 先用密集向量得到每個節點的向量分數
+    # 我們對所有節點進行相似度計算，然後只取前 k 的結果做 Hybrid 排序
+    dense_top_k = min(len(nodes), max(req.k * 4, req.k))
+    all_vec_idxs, all_vec_sims = rank_with_dense_vectors(req.query, k=len(nodes))
+    # 映射出節點順序對應的分數，初始化為0
+    node_vector_scores = [0.0] * len(nodes)
+    for rank_idx, node_idx in enumerate(all_vec_idxs):
+        node_vector_scores[node_idx] = float(all_vec_sims[rank_idx])
+
+    # 取向量分數最高的前 dense_top_k 節點作為 Hybrid 候選
+    top_vec_pairs = sorted(
+        [(i, s) for i, s in enumerate(node_vector_scores)], key=lambda x: x[1], reverse=True
+    )[:dense_top_k]
+    candidate_nodes = [nodes[i] for i, _ in top_vec_pairs]
+    candidate_scores = [s for _, s in top_vec_pairs]
+
+    # 使用 hybrid_rank 進行檢索（向量分數 + metadata 加分）
+    config = HybridConfig(
+        alpha=0.8,  # 向量相似度權重
+        w_law_match=0.15,  # 法名對齊權重
+        w_article_match=0.15,  # 條號對齊權重
+        w_keyword_hit=0.05,  # 術語命中權重
+        max_bonus=0.4  # 最大加分
+    )
+
+    hybrid_results = hybrid_rank(
+        req.query, candidate_nodes, k=req.k, config=config, vector_scores=candidate_scores
+    )
+    
+    # 轉換為標準格式
+    results = []
+    for rank, item in enumerate(hybrid_results, start=1):
+        result = {
+            "rank": rank,
+            "score": item["score"],
+            "vector_score": item["vector_score"],
+            "bonus": item["bonus"],
+            "doc_id": item["doc_id"],
+            "chunk_index": item["chunk_index"],
+            "content": item["content"][:2000],
+            "metadata": item["metadata"]
+        }
+        
+        # 添加法律結構信息
+        if item["metadata"]:
+            result["legal_structure"] = {
+                "id": item["metadata"].get("id", ""),
+                "category": item["metadata"].get("category", ""),
+                "article_label": item["metadata"].get("article_label", ""),
+                "article_number": item["metadata"].get("article_number"),
+                "article_suffix": item["metadata"].get("article_suffix"),
+                "spans": item["metadata"].get("spans", {}),
+                "page_range": item["metadata"].get("page_range", {})
+            }
+        
+        results.append(result)
+    
+    # 計算 P@K 和 R@K（如果有 QA 數據）
+    metrics = calculate_retrieval_metrics(req.query, results, req.k)
+    
+    # 判斷 embedding provider 和 model（不再支持 TF-IDF）
+    if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+        embedding_provider = "gemini"
+        embedding_model = "text-embedding-004"
+    elif USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+        embedding_provider = "bge-m3"
+        embedding_model = "BAAI/bge-m3"
+    else:
+        embedding_provider = "unknown"
+        embedding_model = "unknown"
+    
+    return {
+        "query": req.query, 
+        "k": req.k, 
+        "results": results,
+        "method": "hybrid_rag",
+        "metrics": metrics,
+        "embedding_provider": embedding_provider,
+        "embedding_model": embedding_model,
+        "config": {
+            "alpha": config.alpha,
+            "w_law_match": config.w_law_match,
+            "w_article_match": config.w_article_match,
+            "w_keyword_hit": config.w_keyword_hit,
+            "max_bonus": config.max_bonus
+        }
+    }
 
 
 async def gemini_chat(messages: List[Dict[str, str]]) -> str:
     if not httpx:
         raise RuntimeError("httpx not available")
-    if not GOOGLE_API_KEY:
-        raise RuntimeError("GOOGLE_API_KEY not set")
-    model = os.getenv("GOOGLE_CHAT_MODEL", "gemini-1.5")
-    # Use Generative Language API: models/{model}:generateText
-    url = f"https://generativelanguage.googleapis.com/v1beta2/models/{model}:generateText?key={GOOGLE_API_KEY}"
-    # Flatten messages into a single prompt
-    prompt = "".join([f"{m.get('role','user')}: {m.get('content','')}\n" for m in messages])
-    payload = {"prompt": {"text": prompt}, "temperature": 0.2}
+    
+    # 優先使用 GOOGLE_API_KEY，如果沒有則使用 GEMINI_API_KEY
+    api_key = GOOGLE_API_KEY or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY or GEMINI_API_KEY not set")
+    
+    model = os.getenv("GOOGLE_CHAT_MODEL", "gemini-1.5-flash")
+    # Use Generative Language API: models/{model}:generateContent
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    # Convert messages to Gemini format
+    contents = []
+    for message in messages:
+        contents.append({
+            "parts": [{"text": message.get("content", "")}],
+            "role": "user" if message.get("role") == "user" else "model"
+        })
+    
+    payload = {
+        "contents": contents,
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 2048
+        }
+    }
+    
+    headers = {
+        "x-goog-api-key": api_key,
+        "Content-Type": "application/json"
+    }
+    
     async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(url, json=payload)
+        r = await client.post(url, headers=headers, json=payload)
         r.raise_for_status()
         data = r.json()
-        # Expect generatedText in response
-        if "candidates" in data:
-            return data["candidates"][0].get("output", "").strip()
-        return data.get("output", "").strip()
+        # Extract response from new format
+        if "candidates" in data and data["candidates"]:
+            candidate = data["candidates"][0]
+            if "content" in candidate and "parts" in candidate["content"]:
+                return candidate["content"]["parts"][0].get("text", "").strip()
+        return "No response generated"
 
 
 def simple_extractive_answer(query: str, contexts: List[str]) -> str:
-    # very simple heuristic: return the highest-overlap sentences as an extractive summary
+    """針對中英文改進的極簡抽取式回答：
+    - 支援中文斷句（。！？；）與換行
+    - 分詞同時考慮英文/數字詞與中文單字
+    - 若無明顯重疊，回退輸出前幾句最前面的內容
+    """
     import re
     from collections import Counter
-    q_terms = [t.lower() for t in re.findall(r"\w+", query)]
-    counts = Counter()
+
+    # 1) 斷句（同時支援中英標點與換行）
+    def split_sentences(text: str) -> List[str]:
+        # 保留原文片段，避免過度切碎
+        # 先按換行拆，再按中文/英文句末標點細分
+        parts: List[str] = []
+        for seg in re.split(r"[\n\r]+", text):
+            seg = seg.strip()
+            if not seg:
+                continue
+            parts.extend([s.strip() for s in re.split(r"(?<=[。！？!?；;])\s+", seg) if s.strip()])
+        return parts
+
+    # 2) 簡單分詞：英文/數字詞 + 中文單字
+    def tokenize(text: str) -> List[str]:
+        text_norm = text.lower()
+        en = re.findall(r"[a-z0-9_]+", text_norm)
+        zh = re.findall(r"[\u4e00-\u9fff]", text_norm)
+        return en + zh
+
+    q_tokens = set(tokenize(query))
+    if not q_tokens:
+        q_tokens = set(query.lower())  # 退化為字符集合
+
+    # 3) 聚合所有上下文的句子
     sents: List[str] = []
     for ctx in contexts:
-        sents.extend(re.split(r"(?<=[.!?])\s+", ctx))
+        sents.extend(split_sentences(ctx))
+
+    # 4) 計分：重疊 token 數量 + 輕度長度平衡
+    counts = Counter()
     for s in sents:
-        tokens = [t.lower() for t in re.findall(r"\w+", s)]
-        overlap = len(set(tokens) & set(q_terms))
-        if overlap:
-            counts[s] = overlap
-    best = [s for s, _ in counts.most_common(5)]
-    return " \n".join(best) if best else "No relevant answer found in context."
+        t = tokenize(s)
+        if not t:
+            continue
+        overlap = len(set(t) & q_tokens)
+        if overlap > 0:
+            # 輕度鼓勵較完整句子
+            counts[s] = overlap + min(len(s) / 200.0, 1.0)
+
+    # 5) 回傳：有匹配則取前5句，否則回退取最前面內容
+    if counts:
+        best = [s for s, _ in counts.most_common(5)]
+        return " \n".join(best)
+
+    # 回退：取前兩段的前兩句
+    fallback: List[str] = []
+    for ctx in contexts[:2]:
+        ss = split_sentences(ctx)
+        fallback.extend(ss[:2])
+        if len(fallback) >= 4:
+            break
+    if fallback:
+        return " \n".join(fallback[:4])
+    return "No relevant answer found in context."
 
 
 @app.post("/api/generate")
 def generate(req: GenerateRequest):
-    # retrieve first
-    r = retrieve(RetrieveRequest(query=req.query, k=req.top_k))
-    if isinstance(r, JSONResponse):
-        return r
-    results = r["results"]
+    # 使用 HybridRAG（向量檢索 + metadata 關鍵字加分）取得生成上下文
+    if store.embeddings is None:
+        return JSONResponse(status_code=400, content={"error": "run /embed first"})
+
+    # 構建 nodes（與 /api/hybrid-retrieve 保持一致）
+    chunks_flat = store.chunks_flat
+    mapping_doc_ids = store.chunk_doc_ids
+    if not chunks_flat:
+        return JSONResponse(status_code=400, content={"error": "no chunks available"})
+
+    nodes = []
+    for i, (chunk, doc_id) in enumerate(zip(chunks_flat, mapping_doc_ids)):
+        doc = store.docs.get(doc_id)
+        metadata = {}
+        if doc and hasattr(doc, 'structured_chunks') and doc.structured_chunks and i < len(doc.structured_chunks):
+            structured_chunk = doc.structured_chunks[i]
+            metadata = structured_chunk.get("metadata", {})
+        nodes.append({
+            "content": chunk,
+            "metadata": metadata,
+            "doc_id": doc_id,
+            "chunk_index": i
+        })
+
+    # 先用密集向量計算所有節點的相似度，取前 N 做 Hybrid 候選
+    dense_top_k = min(len(nodes), max(req.top_k * 4, req.top_k))
+    all_vec_idxs, all_vec_sims = rank_with_dense_vectors(req.query, k=len(nodes))
+    node_vector_scores = [0.0] * len(nodes)
+    for rank_idx, node_idx in enumerate(all_vec_idxs):
+        node_vector_scores[node_idx] = float(all_vec_sims[rank_idx])
+    top_vec_pairs = sorted(
+        [(i, s) for i, s in enumerate(node_vector_scores)], key=lambda x: x[1], reverse=True
+    )[:dense_top_k]
+    candidate_nodes = [nodes[i] for i, _ in top_vec_pairs]
+    candidate_scores = [s for _, s in top_vec_pairs]
+
+    config = HybridConfig(
+        alpha=0.8,
+        w_law_match=0.15,
+        w_article_match=0.15,
+        w_keyword_hit=0.05,
+        max_bonus=0.4,
+    )
+    hybrid_results = hybrid_rank(req.query, candidate_nodes, k=req.top_k, config=config, vector_scores=candidate_scores)
+
+    # 生成使用的結果
+    results = []
+    for rank, item in enumerate(hybrid_results, start=1):
+        result = {
+            "rank": rank,
+            "score": item.get("score"),
+            "vector_score": item.get("vector_score"),
+            "bonus": item.get("bonus"),
+            "doc_id": item.get("doc_id"),
+            "chunk_index": item.get("chunk_index"),
+            "content": item.get("content"),
+        }
+        md = (item.get("metadata") or {})
+        if md:
+            result["legal_structure"] = {
+                "id": md.get("id", ""),
+                "category": md.get("category", ""),
+                "article_label": md.get("article_label", ""),
+                "article_number": md.get("article_number"),
+                "article_suffix": md.get("article_suffix"),
+                "spans": md.get("spans", {}),
+                "page_range": md.get("page_range", {}),
+            }
+        results.append(result)
     contexts = [item["content"] for item in results]
 
     # 構建結構化上下文信息
