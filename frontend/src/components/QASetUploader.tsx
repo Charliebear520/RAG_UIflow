@@ -325,9 +325,6 @@ export const QASetUploader: React.FC<QASetUploaderProps> = ({
           >
             <option value="fixed_size">固定大小分割</option>
             <option value="structured_hierarchical">結構化層次分割</option>
-            <option value="hierarchical">層次分割</option>
-            <option value="semantic">語義分割</option>
-            <option value="sliding_window">滑動視窗分割</option>
           </select>
         </div>
 

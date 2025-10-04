@@ -250,15 +250,19 @@ async def evaluate_with_gold(payload: Dict[str, Any]):
         if not positives:
             return {"results": [], "summary": {"message": "沒有正例可供評測"}}
 
-        def mk_article_regex(art: Any, suf: Any) -> re.Pattern:
-            a = str(art) if art is not None else None
-            s = str(suf) if suf is not None else None
-            if a and s:
-                return re.compile(rf"第\s*{re.escape(a)}\s*條\s*(?:之|-)\s*{re.escape(s)}")
-            if a:
-                return re.compile(rf"第\s*{re.escape(a)}\s*條(?![\d之-])")
-            return re.compile(r"^$")  # 不匹配
+        def is_chunk_relevant(chunk_content: str, gold_info: Dict[str, Any]) -> bool:
+            """判斷chunk是否與gold標準相關（使用統一的評測邏輯）"""
+            from .main import is_relevant_chunk
+            return is_relevant_chunk(chunk_content, gold_info)
 
+        # 顯示評測配置信息
+        print(f"🔧 評測配置:")
+        print(f"   文檔ID: {doc_id}")
+        print(f"   QA數據數量: {len(qa_gold)}")
+        print(f"   正例數量: {len(positives)}")
+        print(f"   分塊策略數量: {len(chunking_results)}")
+        print(f"   K值: {k_values}")
+        
         results = []
         for cr in chunking_results:
             # 兼容不同字段命名：chunks / all_chunks / chunks_with_span
@@ -284,12 +288,65 @@ async def evaluate_with_gold(payload: Dict[str, Any]):
                         if isinstance(text, str) and text:
                             chunks.append(text)
             # 若仍為空，保底為空列表
-            # 準備 TF-IDF 向量
-            try:
-                vec = TfidfVectorizer()
-                mat = vec.fit_transform(chunks) if chunks else None
-            except Exception:
-                vec, mat = None, None
+            # 使用與實際檢索相同的embedding策略
+            print(f"🔄 開始為策略 '{cr.get('strategy')}' 進行embedding...")
+            
+            # 檢查是否有現有的embedding
+            from .main import store
+            current_embeddings = store.embeddings
+            current_chunks = store.chunks_flat
+            current_doc_ids = store.chunk_doc_ids
+            
+            # 如果chunks不同，需要重新計算embedding
+            chunks_changed = (len(chunks) != len(current_chunks) or 
+                            any(c1 != c2 for c1, c2 in zip(chunks, current_chunks)))
+            
+            if chunks_changed:
+                print(f"📊 Chunks已改變，重新計算embedding...")
+                # 臨時更新store中的chunks
+                store.chunks_flat = chunks
+                store.chunk_doc_ids = [doc_id] * len(chunks)  # 假設所有chunks都來自同一個doc
+                
+                # 重新計算embedding
+                try:
+                    import asyncio
+                    from .main import embed_bge_m3, embed_gemini
+                    import os
+                    
+                    # 根據配置選擇embedding方法
+                    if os.getenv('USE_BGE_M3_EMBEDDING', 'False').lower() == 'true':
+                        print(f"🔧 使用BGE-M3 embedding...")
+                        embeddings = embed_bge_m3(chunks)
+                    elif os.getenv('USE_GEMINI_EMBEDDING', 'False').lower() == 'true':
+                        print(f"🔧 使用Gemini embedding...")
+                        embeddings = asyncio.run(embed_gemini(chunks))
+                    else:
+                        raise Exception("沒有啟用任何embedding方法")
+                    
+                    import numpy as np
+                    embeddings = np.array(embeddings)
+                    store.embeddings = embeddings
+                    print(f"✅ Embedding計算完成，維度: {embeddings.shape}")
+                except Exception as e:
+                    print(f"❌ Embedding計算失敗: {e}")
+                    # 回退到TF-IDF
+                    try:
+                        vec = TfidfVectorizer()
+                        mat = vec.fit_transform(chunks) if chunks else None
+                        print(f"⚠️  回退到TF-IDF檢索")
+                    except Exception:
+                        vec, mat = None, None
+                        print(f"❌ TF-IDF也失敗了")
+            else:
+                if current_embeddings is not None:
+                    if hasattr(current_embeddings, 'shape'):
+                        print(f"✅ 使用現有embedding，維度: {current_embeddings.shape}")
+                    else:
+                        print(f"✅ 使用現有embedding，類型: {type(current_embeddings)}")
+                    embeddings = current_embeddings
+                else:
+                    print(f"⚠️  沒有現有embedding，跳過此策略")
+                    continue
 
             # 逐題計算
             per_k_precisions: Dict[int, list] = {k: [] for k in k_values}
@@ -297,38 +354,118 @@ async def evaluate_with_gold(payload: Dict[str, Any]):
 
             for q in positives:
                 query = q.get('query', '')
-                g = q.get('gold', {}) or {}
-                law = (g.get('law') or '').strip()
-                art = g.get('article_number')
-                suf = g.get('article_suffix')
-                if art is None:
-                    # 無條號的題先跳過（或可擴充弱標註）
-                    continue
-                law_ok = law != ''
-                rx = mk_article_regex(art, suf)
+                gold_info = q.get('gold', {}) or {}
+                
+                # 檢查是否有法條號碼
+                if gold_info.get('article_number') is None:
+                    continue  # 跳過沒有法條號碼的題目
+                
+                print(f"🔍 評測查詢: '{query[:50]}...'")
+                print(f"📋 Gold標準: {gold_info}")
 
-                # 構造 gold 單元集合：透過正則在 chunk 內容中檢測
+                # 使用統一的相關性判斷邏輯
                 gold_unit_hits = set()
                 for idx, text in enumerate(chunks):
                     if not isinstance(text, str):
                         continue
-                    if rx.search(text) and (not law_ok or (law in text)):
+                    if is_chunk_relevant(text, gold_info):
                         gold_unit_hits.add(idx)
+                        print(f"   ✅ Chunk {idx+1} 相關: {text[:50]}...")
+                
                 if not gold_unit_hits:
-                    # 無 gold，跳過此題
+                    print(f"   ❌ 沒有找到相關chunks")
                     continue
+                
+                print(f"📊 找到 {len(gold_unit_hits)} 個相關chunks: {list(gold_unit_hits)}")
 
-                # 檢索：TF-IDF Top-K（若失敗則跳過）
+                # 使用與實際檢索相同的策略（HybridRAG或密集向量）
                 retrieved_order = []
-                if vec is not None and mat is not None:
+                
+                if 'embeddings' in locals() and embeddings is not None:
+                    print(f"🔍 使用HybridRAG檢索...")
+                    try:
+                        # 使用HybridRAG檢索邏輯
+                        from .main import rank_with_dense_vectors, hybrid_rank
+                        from .hybrid_search import HybridConfig
+                        
+                        # 構建nodes格式
+                        nodes = []
+                        for i, chunk in enumerate(chunks):
+                            # 嘗試從chunking_results中獲取metadata
+                            metadata = {}
+                            if 'chunks_with_span' in cr and i < len(cr['chunks_with_span']):
+                                chunk_data = cr['chunks_with_span'][i]
+                                if isinstance(chunk_data, dict):
+                                    metadata = chunk_data.get('metadata', {})
+                            
+                            nodes.append({
+                                "content": chunk,
+                                "metadata": metadata,
+                                "doc_id": doc_id,
+                                "chunk_index": i
+                            })
+                        
+                        # 使用密集向量檢索
+                        max_k = max(k_values)
+                        dense_top_k = min(len(nodes), max_k * 4)
+                        all_vec_idxs, all_vec_sims = rank_with_dense_vectors(query, k=len(nodes))
+                        
+                        # 映射向量分數
+                        node_vector_scores = [0.0] * len(nodes)
+                        for rank_idx, node_idx in enumerate(all_vec_idxs):
+                            node_vector_scores[node_idx] = float(all_vec_sims[rank_idx])
+                        
+                        # 取前dense_top_k個候選
+                        top_vec_pairs = sorted(
+                            [(i, s) for i, s in enumerate(node_vector_scores)], 
+                            key=lambda x: x[1], reverse=True
+                        )[:dense_top_k]
+                        
+                        candidate_nodes = [nodes[i] for i, _ in top_vec_pairs]
+                        candidate_scores = [s for _, s in top_vec_pairs]
+                        
+                        # 使用HybridRAG排序
+                        config = HybridConfig(
+                            alpha=0.8,
+                            w_law_match=0.15,
+                            w_article_match=0.15,
+                            w_keyword_hit=0.05,
+                            max_bonus=0.4
+                        )
+                        
+                        hybrid_results = hybrid_rank(
+                            query, candidate_nodes, k=max_k, config=config, vector_scores=candidate_scores
+                        )
+                        
+                        # 提取檢索順序
+                        retrieved_order = [result['chunk_index'] for result in hybrid_results]
+                        print(f"🔍 HybridRAG檢索完成，檢索順序: {retrieved_order[:10]}...")
+                        
+                    except Exception as e:
+                        print(f"⚠️  HybridRAG檢索失敗: {e}，回退到密集向量檢索")
+                        try:
+                            from .main import rank_with_dense_vectors
+                            max_k = max(k_values)
+                            idxs, sims = rank_with_dense_vectors(query, k=max_k)
+                            retrieved_order = idxs
+                            print(f"🔍 使用密集向量檢索，檢索順序: {retrieved_order[:10]}...")
+                        except Exception as e2:
+                            print(f"⚠️  密集向量檢索也失敗: {e2}，使用順序檢索")
+                            retrieved_order = list(range(len(chunks)))
+                
+                elif 'vec' in locals() and vec is not None and 'mat' in locals() and mat is not None:
+                    print(f"🔍 使用TF-IDF檢索...")
                     try:
                         qv = vec.transform([query])
                         sims = cosine_similarity(qv, mat).flatten()
                         order = sims.argsort()[::-1]
                         retrieved_order = list(order)
-                    except Exception:
+                        print(f"🔍 TF-IDF檢索完成，檢索順序: {retrieved_order[:10]}...")
+                    except Exception as e:
+                        print(f"⚠️  TF-IDF檢索失敗: {e}，使用順序檢索")
                         retrieved_order = list(range(len(chunks)))
                 else:
+                    print("⚠️  沒有可用的檢索方法，使用順序檢索")
                     retrieved_order = list(range(len(chunks)))
 
                 for k in k_values:
@@ -339,6 +476,14 @@ async def evaluate_with_gold(payload: Dict[str, Any]):
                     rec = (len(topk & gold_unit_hits) / len(gold_unit_hits)) if gold_unit_hits else 0.0
                     per_k_precisions[k].append(prec)
                     per_k_recalls[k].append(rec)
+                    print(f"   📈 P@{k}={prec:.3f}, R@{k}={rec:.3f}")
+
+            # 恢復原始store狀態
+            if chunks_changed:
+                store.chunks_flat = current_chunks
+                store.chunk_doc_ids = current_doc_ids
+                store.embeddings = current_embeddings
+                print(f"🔄 已恢復原始store狀態")
 
             # 匯總
             result_entry = {
@@ -1077,7 +1222,9 @@ async def list_documents():
                 "has_json_data": bool(doc.json_data),
                 "chunks_count": len(doc.chunks) if doc.chunks else 0,
                 "chunk_size": doc.chunk_size,
-                "overlap": doc.overlap
+                "overlap": doc.overlap,
+                "chunking_strategy": getattr(doc, 'chunking_strategy', None),
+                "structured_chunks": getattr(doc, 'structured_chunks', None)
             }
             for doc in docs
         ],
@@ -1269,18 +1416,25 @@ async def chunk_document(request: ChunkConfig):
         if request.strategy == "structured_hierarchical":
             chunk_kwargs["chunk_by"] = request.chunk_by
         
-        # 生成分塊
-        chunks = chunk_text(
+        # 生成分塊 - 使用chunk_with_span來獲取結構化信息
+        from .chunking import chunk_text_with_span
+        
+        chunks_with_span = chunk_text_with_span(
             doc.text,
             strategy=request.strategy,
             json_data=doc.json_data,
             **chunk_kwargs
         )
         
+        # 提取純文本chunks
+        chunks = [chunk["content"] for chunk in chunks_with_span]
+        
         # 更新文檔記錄
         doc.chunks = chunks
         doc.chunk_size = request.chunk_size
         doc.overlap = int(request.chunk_size * request.overlap_ratio)
+        doc.structured_chunks = chunks_with_span  # 保存結構化分塊信息
+        doc.chunking_strategy = request.strategy  # 保存分塊策略
         store.add_doc(doc)
         
         # 重置嵌入

@@ -134,6 +134,31 @@ def _metadata_bonus(md: Dict[str, Any], qf: Dict[str, Any], cfg: HybridConfig) -
         variants = LEGAL_SYNONYMS.get(canonical, [])
         if any(v in text_meta for v in variants):
             bonus += cfg.w_keyword_hit
+    
+    # 新增：內容結構加分（即使沒有metadata也能工作）
+    content = md.get('content', '')
+    if content:
+        import re
+        # 法條結構加分
+        if re.search(r'第\s*\d+\s*條', content):
+            bonus += cfg.w_article_match * 0.3
+        
+        # 法律關鍵詞密度加分
+        legal_terms = ['權利', '義務', '禁止', '處罰', '規定', '適用', '違反', '侵害', '著作權', '商標', '專利']
+        term_count = sum(1 for term in legal_terms if term in content)
+        if term_count > 0:
+            bonus += min(term_count * cfg.w_keyword_hit * 0.2, cfg.max_bonus * 0.3)
+        
+        # 查詢關鍵詞在內容中的匹配
+        for canonical in qf['terms']:
+            if canonical in content:
+                bonus += cfg.w_keyword_hit * 0.5
+            # 檢查同義詞
+            variants = LEGAL_SYNONYMS.get(canonical, [])
+            for variant in variants:
+                if variant in content:
+                    bonus += cfg.w_keyword_hit * 0.3
+    
     return min(bonus, cfg.max_bonus)
 
 

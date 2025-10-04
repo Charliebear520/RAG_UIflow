@@ -53,8 +53,16 @@ type RagContextType = {
     strategy: string
   ) => void;
   embed: () => Promise<void>;
+  multiLevelEmbed: () => Promise<void>;
   retrieve: (query: string, k: number) => Promise<void>;
   hybridRetrieve: (query: string, k: number) => Promise<void>;
+  hierarchicalRetrieve: (query: string, k: number) => Promise<void>;
+  multiLevelRetrieve: (query: string, k: number) => Promise<void>;
+  multiLevelFusionRetrieve: (
+    query: string,
+    k: number,
+    fusionStrategy?: string
+  ) => Promise<void>;
   generate: (query: string, topK: number) => Promise<void>;
   reset: () => void;
 };
@@ -283,9 +291,38 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     setEmbedDimension(res.dimension || res.num_features || null);
   }
 
+  async function multiLevelEmbed() {
+    const res = await api.multiLevelEmbed();
+    setEmbedProvider(
+      res.levels?.conceptual?.provider ||
+        res.levels?.procedural?.provider ||
+        res.levels?.normative?.provider ||
+        "multi-level"
+    );
+    setEmbedModel(
+      res.levels?.conceptual?.model ||
+        res.levels?.procedural?.model ||
+        res.levels?.normative?.model ||
+        "multi-level"
+    );
+    setEmbedDimension(
+      res.levels?.conceptual?.dimension ||
+        res.levels?.procedural?.dimension ||
+        res.levels?.normative?.dimension ||
+        null
+    );
+  }
+
   async function retrieve(query: string, k: number) {
     const res = await api.retrieve({ query, k });
-    setRetrieval(res.results);
+    // 將results數組和額外信息合併保存到retrieval
+    const retrievalData = res.results.map((result: any) => ({
+      ...result,
+      metrics: res.metrics,
+      embedding_provider: res.embedding_provider,
+      embedding_model: res.embedding_model,
+    }));
+    setRetrieval(retrievalData);
     // 更新 embedding 信息（如果檢索端點返回了這些信息）
     if (res.embedding_provider) {
       setEmbedProvider(res.embedding_provider);
@@ -297,7 +334,14 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
 
   async function hybridRetrieve(query: string, k: number) {
     const res = await api.hybridRetrieve({ query, k });
-    setRetrieval(res.results);
+    // 將results數組和額外信息合併保存到retrieval
+    const retrievalData = res.results.map((result: any) => ({
+      ...result,
+      metrics: res.metrics,
+      embedding_provider: res.embedding_provider,
+      embedding_model: res.embedding_model,
+    }));
+    setRetrieval(retrievalData);
     // 更新 embedding 信息（如果檢索端點返回了這些信息）
     if (res.embedding_provider) {
       setEmbedProvider(res.embedding_provider);
@@ -305,6 +349,54 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     if (res.embedding_model) {
       setEmbedModel(res.embedding_model);
     }
+  }
+
+  async function hierarchicalRetrieve(query: string, k: number) {
+    const res = await api.hierarchicalRetrieve({ query, k });
+    // 將results數組和額外信息合併保存到retrieval
+    const retrievalData = res.results.map((result: any) => ({
+      ...result,
+      metrics: res.metrics,
+      embedding_provider: res.embedding_provider,
+      embedding_model: res.embedding_model,
+    }));
+    setRetrieval(retrievalData);
+    // 更新 embedding 信息（如果檢索端點返回了這些信息）
+    if (res.embedding_provider) {
+      setEmbedProvider(res.embedding_provider);
+    }
+    if (res.embedding_model) {
+      setEmbedModel(res.embedding_model);
+    }
+  }
+
+  async function multiLevelRetrieve(query: string, k: number) {
+    const res = await api.multiLevelRetrieve({ query, k });
+    const retrievalData = res.results.map((result: any) => ({
+      ...result,
+      metrics: res.metrics,
+      query_analysis: res.query_analysis,
+    }));
+    setRetrieval(retrievalData);
+  }
+
+  async function multiLevelFusionRetrieve(
+    query: string,
+    k: number,
+    fusionStrategy: string = "weighted_sum"
+  ) {
+    const res = await api.multiLevelFusionRetrieve({
+      query,
+      k,
+      fusion_strategy: fusionStrategy,
+    });
+    const retrievalData = res.results.map((result: any) => ({
+      ...result,
+      metrics: res.metrics,
+      query_analysis: res.query_analysis,
+      level_results: res.level_results,
+    }));
+    setRetrieval(retrievalData);
   }
 
   async function generate(query: string, topK: number) {
@@ -357,8 +449,12 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     chunk,
     setChunkingResultsAndStrategy,
     embed,
+    multiLevelEmbed,
     retrieve,
     hybridRetrieve,
+    hierarchicalRetrieve,
+    multiLevelRetrieve,
+    multiLevelFusionRetrieve,
     generate,
     reset,
   };

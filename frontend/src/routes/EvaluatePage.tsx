@@ -7,6 +7,7 @@ export function EvaluatePage() {
   const [qaGold, setQaGold] = useState<any[] | null>(null);
   const [evalResults, setEvalResults] = useState<any[] | null>(null);
   const [evalSummary, setEvalSummary] = useState<any | null>(null);
+  const [isEvaluating, setIsEvaluating] = useState(false);
 
   const canStart = useMemo(
     () => !!docId && !!chunkingResults && !!embedProvider,
@@ -21,7 +22,8 @@ export function EvaluatePage() {
             <div className="card-header">
               <h2 className="h5 mb-0">Evaluate (beta)</h2>
               <p className="text-muted mb-0">
-                使用已完成的分塊和檢索結果，上傳 qa_gold 計算 P@K / R@K。
+                使用您選擇的embedding和檢索策略，上傳 qa_gold 計算真實的 P@K /
+                R@K 評測指標。
               </p>
             </div>
             <div className="card-body">
@@ -46,7 +48,8 @@ export function EvaluatePage() {
               {docId && chunkingResults && embedProvider && (
                 <div className="alert alert-success" role="alert">
                   ✅ 已準備就緒：分塊策略 "{selectedStrategy}"，向量化提供者 "
-                  {embedProvider}"
+                  {embedProvider}"，檢索策略 "{retrieval}
+                  "。評測將使用真實的embedding和HybridRAG檢索。
                 </div>
               )}
 
@@ -116,8 +119,11 @@ export function EvaluatePage() {
                 <div className="mb-4">
                   <button
                     className="btn btn-success"
-                    disabled={!canStart}
+                    disabled={!canStart || isEvaluating}
                     onClick={async () => {
+                      if (isEvaluating) return;
+
+                      setIsEvaluating(true);
                       try {
                         const base =
                           (import.meta as any).env.VITE_API_BASE_URL || "/api";
@@ -138,11 +144,47 @@ export function EvaluatePage() {
                         setEvalSummary(data.summary || null);
                       } catch (e: any) {
                         alert(`策略評測失敗：${e.message || e}`);
+                      } finally {
+                        setIsEvaluating(false);
                       }
                     }}
                   >
-                    使用 qa_gold 計算 P@K / R@K
+                    {isEvaluating ? (
+                      <>
+                        <span
+                          className="spinner-border spinner-border-sm me-2"
+                          role="status"
+                          aria-hidden="true"
+                        ></span>
+                        評測進行中...
+                      </>
+                    ) : (
+                      "使用真實embedding和檢索策略計算 P@K / R@K"
+                    )}
                   </button>
+
+                  {isEvaluating && (
+                    <div className="mt-2">
+                      <div
+                        className="alert alert-info d-flex align-items-center"
+                        role="alert"
+                      >
+                        <span
+                          className="spinner-border spinner-border-sm me-2"
+                          role="status"
+                          aria-hidden="true"
+                        ></span>
+                        <div>
+                          <strong>評測進行中...</strong>
+                          <br />
+                          <small>
+                            正在使用 {embedProvider} embedding 和 {retrieval}{" "}
+                            檢索策略計算評估指標，請稍候...
+                          </small>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

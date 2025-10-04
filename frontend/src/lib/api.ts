@@ -82,6 +82,14 @@ export const api = {
     });
     return json<any>(res);
   },
+  async multiLevelEmbed(body?: { doc_ids?: string[] }) {
+    const res = await fetch(`${base}/multi-level-embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    return json<any>(res);
+  },
   async retrieve(body: { query: string; k: number }) {
     const res = await fetch(`${base}/retrieve`, {
       method: "POST",
@@ -92,6 +100,34 @@ export const api = {
   },
   async hybridRetrieve(body: { query: string; k: number }) {
     const res = await fetch(`${base}/hybrid-retrieve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return json<any>(res);
+  },
+  async hierarchicalRetrieve(body: { query: string; k: number }) {
+    const res = await fetch(`${base}/hierarchical-retrieve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return json<any>(res);
+  },
+  async multiLevelRetrieve(body: { query: string; k: number }) {
+    const res = await fetch(`${base}/multi-level-retrieve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return json<any>(res);
+  },
+  async multiLevelFusionRetrieve(body: {
+    query: string;
+    k: number;
+    fusion_strategy?: string;
+  }) {
+    const res = await fetch(`${base}/multi-level-fusion-retrieve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

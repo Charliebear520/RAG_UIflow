@@ -9,6 +9,7 @@ import { UploadPage } from "./routes/UploadPage";
 import { ChunkPage } from "./routes/ChunkPage";
 import { EmbedPage } from "./routes/EmbedPage";
 import { RetrievePage } from "./routes/RetrievePage";
+import { EnhancedRetrievePage } from "./routes/EnhancedRetrievePage";
 import { GeneratePage } from "./routes/GeneratePage";
 import { EvaluatePage } from "./routes/EvaluatePage";
 import { RagProvider } from "./lib/ragStore";
@@ -22,6 +23,7 @@ const router = createBrowserRouter([
       { path: "chunk", element: <ChunkPage /> },
       { path: "embed", element: <EmbedPage /> },
       { path: "retrieve", element: <RetrievePage /> },
+      { path: "enhanced-retrieve", element: <EnhancedRetrievePage /> },
       { path: "generate", element: <GeneratePage /> },
       { path: "evaluate", element: <EvaluatePage /> },
     ],

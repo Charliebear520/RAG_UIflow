@@ -12,12 +12,7 @@ declare global {
 }
 
 // 分塊策略類型定義
-type ChunkStrategy =
-  | "fixed_size"
-  | "rcts_hierarchical"
-  | "structured_hierarchical"
-  | "hybrid"
-  | "semantic";
+type ChunkStrategy = "fixed_size" | "structured_hierarchical";
 
 // 策略參數接口
 interface ChunkParams {
@@ -25,34 +20,15 @@ interface ChunkParams {
     chunk_size: number;
     overlap: number;
   };
-  rcts_hierarchical: {
-    max_chunk_size: number;
-    overlap_ratio: number;
-    preserve_structure: boolean;
-  };
   structured_hierarchical: {
-    max_chunk_size: number;
-    overlap_ratio: number;
-    chunk_by: "chapter" | "section" | "article" | "item";
-  };
-  hybrid: {
-    primary_size: number;
-    secondary_size: number;
-    overlap: number;
-    switch_threshold: number;
-  };
-  semantic: {
-    target_size: number;
-    similarity_threshold: number;
-    overlap: number;
-    context_window: number;
+    // 多層級結構化分割不需要額外參數，按照法律結構自然分割
   };
 }
 
 // 策略描述和評估指標
 const strategyInfo = {
   fixed_size: {
-    name: "Fixed-Size",
+    name: "固定大小分割",
     description: "將文檔按照固定的字符數進行分割，適合結構化文檔。",
     metrics: ["分塊數量", "平均長度", "長度變異係數", "重疊率"],
     params: {
@@ -72,46 +48,39 @@ const strategyInfo = {
       },
     },
   },
-  rcts_hierarchical: {
-    name: "RCTS Hierarchical",
+  structured_hierarchical: {
+    name: "多層級結構化分割",
     description:
-      "結合RecursiveCharacterTextSplitter和層次結構識別，智能分割法律文檔。",
-    metrics: ["分隔符準確性", "結構保持度", "長文本處理", "語義完整性"],
+      "基於六個粒度級別（文件-章-節-條-項-款/目）進行智能分割，一次性生成所有層次的分塊，確保法律概念完整性和上下文一致性。",
+    metrics: ["多層級覆蓋", "結構準確性", "上下文一致性", "語義完整性"],
     params: {
-      max_chunk_size: {
-        label: "最大分塊大小",
-        min: 200,
-        max: 2000,
-        default: 1000,
-        unit: "字符",
-      },
-      overlap_ratio: {
-        label: "重疊比例",
-        min: 0.05,
-        max: 0.3,
-        default: 0.1,
-        unit: "比例",
-      },
       preserve_structure: {
-        label: "保持層次結構",
+        label: "強制結構邊界分割",
         type: "boolean",
         default: true,
-        description: "在條文邊界強制分割，確保法律邏輯完整性",
+        description: "在結構邊界強制分割，確保法律邏輯完整性",
       },
-    },
-  },
-  structured_hierarchical: {
-    name: "Structured Hierarchical (pending pilot)",
-    description:
-      "基於JSON結構數據，按照法律文檔的章-節-條-項結構進行智能分割。",
-    metrics: ["結構準確性", "條文完整性", "引用關係保持", "分割粒度"],
-    params: {
+      min_chunk_size: {
+        label: "最小分塊大小",
+        min: 50,
+        max: 500,
+        default: 100,
+        unit: "字符",
+        description: "避免產生過短的分塊",
+      },
       max_chunk_size: {
         label: "最大分塊大小",
-        min: 200,
-        max: 2000,
-        default: 1000,
+        min: 500,
+        max: 5000,
+        default: 2000,
         unit: "字符",
+        description: "避免產生過長的分塊",
+      },
+      enable_overlap: {
+        label: "啟用重疊",
+        type: "boolean",
+        default: false,
+        description: "是否在結構邊界之間添加重疊內容",
       },
       overlap_ratio: {
         label: "重疊比例",
@@ -119,88 +88,7 @@ const strategyInfo = {
         max: 0.3,
         default: 0.1,
         unit: "比例",
-      },
-      chunk_by: {
-        label: "分割單位",
-        type: "select",
-        options: [
-          { value: "article", label: "按條文分割" },
-          { value: "item", label: "按項分割" },
-          { value: "section", label: "按節分割" },
-          { value: "chapter", label: "按章分割" },
-        ],
-        default: "article",
-        description: "選擇分割的粒度級別",
-      },
-    },
-  },
-  hybrid: {
-    name: "Hybrid (Fixed + Semantic)",
-    description: "結合多種策略，根據內容特徵動態選擇最適合的分割方法。",
-    metrics: ["分塊數量", "策略使用率", "整體效果", "適應性評分"],
-    params: {
-      primary_size: {
-        label: "主要大小",
-        min: 400,
-        max: 1200,
-        default: 600,
-        unit: "字符",
-      },
-      secondary_size: {
-        label: "次要大小",
-        min: 200,
-        max: 800,
-        default: 400,
-        unit: "字符",
-      },
-      overlap_ratio: {
-        label: "重疊比例",
-        min: 0.05,
-        max: 0.3,
-        default: 0.1,
-        unit: "比例",
-      },
-      switch_threshold: {
-        label: "切換閾值",
-        min: 0.1,
-        max: 0.9,
-        default: 0.5,
-        unit: "分數",
-      },
-    },
-  },
-  semantic: {
-    name: "Semantic",
-    description: "基於語義相似度進行分割，保持語義連貫性。",
-    metrics: ["語義連貫性", "相似度", "分塊質量"],
-    params: {
-      target_size: {
-        label: "目標大小",
-        min: 200,
-        max: 1500,
-        default: 500,
-        unit: "字符",
-      },
-      similarity_threshold: {
-        label: "相似度閾值",
-        min: 0.1,
-        max: 0.9,
-        default: 0.6,
-        unit: "分數",
-      },
-      overlap: {
-        label: "重疊大小",
-        min: 0,
-        max: 200,
-        default: 50,
-        unit: "字符",
-      },
-      context_window: {
-        label: "上下文窗口",
-        min: 100,
-        max: 1000,
-        default: 200,
-        unit: "字符",
+        description: "僅在啟用重疊時使用",
       },
     },
   },
@@ -251,16 +139,25 @@ export function ChunkPage() {
 
   // 無映射模式：不需要 QA Set 上傳狀態（移除）
 
-  // 步驟2: 多種分塊組合配置狀態
-  const [selectedStrategies, setSelectedStrategies] = useState<ChunkStrategy[]>(
-    ["fixed_size"]
+  // 步驟2: 分塊策略配置狀態
+  const [selectedStrategy, setSelectedStrategy] = useState<ChunkStrategy>(
+    "structured_hierarchical"
   );
-  const [chunkSizes, setChunkSizes] = useState<number[]>([300, 500, 800]);
-  const [overlapRatios, setOverlapRatios] = useState<number[]>([0.0, 0.1, 0.2]);
   const [isChunking, setIsChunking] = useState(false);
   const [chunkingError, setChunkingError] = useState<string | null>(null);
   const [chunkingProgress, setChunkingProgress] = useState(0);
   const [chunkingTaskId, setChunkingTaskId] = useState<string | null>(null);
+
+  // 分塊參數狀態
+  const [chunkParams, setChunkParams] = useState<ChunkParams>({
+    fixed_size: {
+      chunk_size: 500,
+      overlap: 50,
+    },
+    structured_hierarchical: {
+      // 多層級結構化分割不需要額外參數
+    },
+  });
 
   // 無映射模式：不需要 QA 映射狀態（移除）
 
@@ -355,25 +252,14 @@ export function ChunkPage() {
   // 步驟1: 處理QA Set文件上傳
   // 無映射模式：不需要 QA 上傳處理（移除）
 
-  // 步驟2: 處理多種分塊組合配置
-  const handleStrategyToggle = (strategy: ChunkStrategy) => {
-    setSelectedStrategies((prev) =>
-      prev.includes(strategy)
-        ? prev.filter((s) => s !== strategy)
-        : [...prev, strategy]
-    );
+  // 步驟2: 處理分塊策略選擇
+  const handleStrategyChange = (strategy: ChunkStrategy) => {
+    setSelectedStrategy(strategy);
   };
 
-  const handleChunkSizeToggle = (size: number) => {
-    setChunkSizes((prev) =>
-      prev.includes(size) ? prev.filter((s) => s !== size) : [...prev, size]
-    );
-  };
-
-  const handleOverlapRatioToggle = (ratio: number) => {
-    setOverlapRatios((prev) =>
-      prev.includes(ratio) ? prev.filter((r) => r !== ratio) : [...prev, ratio]
-    );
+  // 處理分塊參數變更
+  const handleParamsChange = (params: ChunkParams) => {
+    setChunkParams(params);
   };
 
   // 分塊結果狀態
@@ -408,8 +294,8 @@ export function ChunkPage() {
     }
   }, [chunkingResults, showAllChunks]);
 
-  // 步驟2: 執行多種分塊組合操作
-  const handleRunMultipleChunking = async () => {
+  // 步驟2: 執行分塊操作
+  const handleRunChunking = async () => {
     if (!canChunk) return;
 
     setIsChunking(true);
@@ -418,13 +304,25 @@ export function ChunkPage() {
     setChunkingProgress(0);
 
     try {
-      // 調用新的批量分塊API
-      const response = await api.startMultipleChunking({
+      // 根據策略準備參數
+      let apiParams: any = {
         doc_id: docId!,
-        strategies: selectedStrategies,
-        chunk_sizes: chunkSizes,
-        overlap_ratios: overlapRatios,
-      });
+        strategies: [selectedStrategy],
+      };
+
+      if (selectedStrategy === "fixed_size") {
+        apiParams.chunk_sizes = [chunkParams.fixed_size.chunk_size];
+        apiParams.overlap_ratios = [
+          chunkParams.fixed_size.overlap / chunkParams.fixed_size.chunk_size,
+        ];
+      } else if (selectedStrategy === "structured_hierarchical") {
+        // 多層級結構化分割不需要額外參數，按照法律結構自然分割
+        apiParams.chunk_sizes = [1000]; // 默認值，實際不會使用
+        apiParams.overlap_ratios = [0.1]; // 默認值，實際不會使用
+      }
+
+      // 調用分塊API
+      const response = await api.startMultipleChunking(apiParams);
 
       setChunkingTaskId(response.task_id);
 
@@ -442,11 +340,9 @@ export function ChunkPage() {
 
             // 將分塊結果存儲到 RAG store 中
             if (resultsResponse.results && resultsResponse.results.length > 0) {
-              // 使用第一個結果的策略作為主要策略
-              const primaryStrategy = resultsResponse.results[0].strategy;
               setChunkingResultsAndStrategy(
                 resultsResponse.results,
-                primaryStrategy
+                selectedStrategy
               );
             }
 
@@ -768,9 +664,7 @@ export function ChunkPage() {
                               <div className="col-md-3">
                                 <div className="card bg-light">
                                   <div className="card-body text-center">
-                                    <h5 className="card-title text-info">
-                                      {selectedStrategies.length}
-                                    </h5>
+                                    <h5 className="card-title text-info">1</h5>
                                     <p className="card-text small">
                                       使用策略數
                                     </p>
@@ -1172,22 +1066,21 @@ export function ChunkPage() {
                             {/* 分塊策略選擇 */}
                             <div className="mb-4">
                               <label className="form-label fw-bold">
-                                選擇分塊策略（可多選）
+                                選擇分塊策略
                               </label>
                               <div className="row g-2">
                                 {Object.entries(strategyInfo).map(
                                   ([key, info]) => (
-                                    <div key={key} className="col-6">
+                                    <div key={key} className="col-12">
                                       <div className="form-check">
                                         <input
                                           className="form-check-input"
-                                          type="checkbox"
+                                          type="radio"
+                                          name="strategy"
                                           id={`strategy-${key}`}
-                                          checked={selectedStrategies.includes(
-                                            key as ChunkStrategy
-                                          )}
+                                          checked={selectedStrategy === key}
                                           onChange={() =>
-                                            handleStrategyToggle(
+                                            handleStrategyChange(
                                               key as ChunkStrategy
                                             )
                                           }
@@ -1196,7 +1089,11 @@ export function ChunkPage() {
                                           className="form-check-label"
                                           htmlFor={`strategy-${key}`}
                                         >
-                                          {info.name}
+                                          <strong>{info.name}</strong>
+                                          <br />
+                                          <small className="text-muted">
+                                            {info.description}
+                                          </small>
                                         </label>
                                       </div>
                                     </div>
@@ -1206,109 +1103,142 @@ export function ChunkPage() {
                             </div>
 
                             {/* 策略描述 */}
-                            {selectedStrategies.length > 0 && (
-                              <div className="mb-4">
-                                <h6 className="text-primary">已選擇的策略</h6>
-                                {selectedStrategies.map((strategy) => (
-                                  <div key={strategy} className="mb-2">
-                                    <strong>
-                                      {strategyInfo[strategy].name}
-                                    </strong>
-                                    <p className="text-muted small mb-1">
-                                      {strategyInfo[strategy].description}
-                                    </p>
-                                    <div className="small text-muted">
-                                      評估指標：
-                                      {strategyInfo[strategy].metrics.join(
-                                        "、"
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* 參數配置 */}
                             <div className="mb-4">
-                              <h6>分塊參數組合</h6>
-                              <div className="row g-3">
-                                <div className="col-md-6">
-                                  <label className="form-label">
-                                    分塊大小（字符）
-                                  </label>
-                                  <div className="d-flex flex-wrap gap-2">
-                                    {[
-                                      200, 300, 400, 500, 600, 800, 1000, 1200,
-                                    ].map((size) => (
-                                      <div key={size} className="form-check">
-                                        <input
-                                          className="form-check-input"
-                                          type="checkbox"
-                                          id={`size-${size}`}
-                                          checked={chunkSizes.includes(size)}
-                                          onChange={() =>
-                                            handleChunkSizeToggle(size)
-                                          }
-                                        />
-                                        <label
-                                          className="form-check-label small"
-                                          htmlFor={`size-${size}`}
-                                        >
-                                          {size}
-                                        </label>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                                <div className="col-md-6">
-                                  <label className="form-label">重疊比例</label>
-                                  <div className="d-flex flex-wrap gap-2">
-                                    {[0.0, 0.1, 0.2, 0.3].map((ratio) => (
-                                      <div key={ratio} className="form-check">
-                                        <input
-                                          className="form-check-input"
-                                          type="checkbox"
-                                          id={`ratio-${ratio}`}
-                                          checked={overlapRatios.includes(
-                                            ratio
-                                          )}
-                                          onChange={() =>
-                                            handleOverlapRatioToggle(ratio)
-                                          }
-                                        />
-                                        <label
-                                          className="form-check-label small"
-                                          htmlFor={`ratio-${ratio}`}
-                                        >
-                                          {(ratio * 100).toFixed(0)}%
-                                        </label>
-                                      </div>
-                                    ))}
-                                  </div>
+                              <h6 className="text-primary">已選擇的策略</h6>
+                              <div className="alert alert-info">
+                                <strong>
+                                  {strategyInfo[selectedStrategy].name}
+                                </strong>
+                                <p className="mb-1">
+                                  {strategyInfo[selectedStrategy].description}
+                                </p>
+                                <div className="small text-muted">
+                                  評估指標：
+                                  {strategyInfo[selectedStrategy].metrics.join(
+                                    "、"
+                                  )}
                                 </div>
                               </div>
-                              <div className="mt-3">
-                                <div className="alert alert-info">
-                                  <small>
-                                    <strong>組合數量：</strong>
-                                    {selectedStrategies.length *
-                                      chunkSizes.length *
-                                      overlapRatios.length}{" "}
-                                    種組合
-                                    <br />
-                                    <strong>選中的策略：</strong>
-                                    {selectedStrategies
-                                      .map((s) => strategyInfo[s].name)
-                                      .join("、")}
-                                    <br />
-                                    <strong>分塊大小：</strong>
-                                    {chunkSizes.join("、")} 字符
-                                    <br />
-                                    <strong>重疊比例：</strong>
-                                    {overlapRatios
-                                      .map((r) => `${(r * 100).toFixed(0)}%`)
-                                      .join("、")}
-                                  </small>
+                            </div>
+
+                            {/* 策略參數配置 */}
+                            <div className="mb-4">
+                              <h6 className="text-primary">策略參數配置</h6>
+                              <div className="card">
+                                <div className="card-body">
+                                  {selectedStrategy === "fixed_size" && (
+                                    <div className="row">
+                                      <div className="col-md-6">
+                                        <label className="form-label">
+                                          分塊大小
+                                        </label>
+                                        <input
+                                          type="number"
+                                          className="form-control"
+                                          value={
+                                            chunkParams.fixed_size.chunk_size
+                                          }
+                                          onChange={(e) =>
+                                            setChunkParams({
+                                              ...chunkParams,
+                                              fixed_size: {
+                                                ...chunkParams.fixed_size,
+                                                chunk_size:
+                                                  parseInt(e.target.value) ||
+                                                  500,
+                                              },
+                                            })
+                                          }
+                                          min="100"
+                                          max="2000"
+                                        />
+                                      </div>
+                                      <div className="col-md-6">
+                                        <label className="form-label">
+                                          重疊大小
+                                        </label>
+                                        <input
+                                          type="number"
+                                          className="form-control"
+                                          value={chunkParams.fixed_size.overlap}
+                                          onChange={(e) =>
+                                            setChunkParams({
+                                              ...chunkParams,
+                                              fixed_size: {
+                                                ...chunkParams.fixed_size,
+                                                overlap:
+                                                  parseInt(e.target.value) ||
+                                                  50,
+                                              },
+                                            })
+                                          }
+                                          min="0"
+                                          max="200"
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {selectedStrategy ===
+                                    "structured_hierarchical" && (
+                                    <div>
+                                      {/* 多層級分割說明 */}
+                                      <div className="alert alert-info mb-3">
+                                        <h6 className="alert-heading">
+                                          🔍 多層級結構化分割
+                                        </h6>
+                                        <p className="mb-2">
+                                          此策略將
+                                          <strong>
+                                            一次性生成所有六個粒度級別
+                                          </strong>
+                                          的分塊：
+                                        </p>
+                                        <ul className="mb-2 small">
+                                          <li>
+                                            <strong>文件層級</strong>：整個法規
+                                          </li>
+                                          <li>
+                                            <strong>文件組成部分層級</strong>
+                                            ：章級別
+                                          </li>
+                                          <li>
+                                            <strong>
+                                              基本單位層次結構層級
+                                            </strong>
+                                            ：節級別
+                                          </li>
+                                          <li>
+                                            <strong>基本單位層級</strong>
+                                            ：條文級別
+                                          </li>
+                                          <li>
+                                            <strong>
+                                              基本單位組成部分層級
+                                            </strong>
+                                            ：項級別
+                                          </li>
+                                          <li>
+                                            <strong>列舉層級</strong>：款/目級別
+                                          </li>
+                                        </ul>
+                                        <p className="mb-0 small text-muted">
+                                          <strong>上下文一致性</strong>
+                                          ：低層次列舉元素（款/目）會自動包含上級元素的上下文，確保語義一致性。
+                                        </p>
+                                      </div>
+
+                                      <div className="alert alert-success">
+                                        <h6 className="alert-heading">
+                                          ✅ 自動化分割
+                                        </h6>
+                                        <p className="mb-0">
+                                          多層級結構化分割會根據法律文檔的天然結構自動進行分割，無需額外參數配置。
+                                          系統會智能識別法律文檔的層次結構，並為每個層次生成相應的分塊。
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -1317,13 +1247,8 @@ export function ChunkPage() {
                             <div className="d-grid">
                               <button
                                 className="btn btn-warning btn-lg"
-                                onClick={handleRunMultipleChunking}
-                                disabled={
-                                  isChunking ||
-                                  selectedStrategies.length === 0 ||
-                                  chunkSizes.length === 0 ||
-                                  overlapRatios.length === 0
-                                }
+                                onClick={handleRunChunking}
+                                disabled={isChunking}
                               >
                                 {isChunking ? (
                                   <>
@@ -1335,11 +1260,7 @@ export function ChunkPage() {
                                     分塊中... ({chunkingProgress.toFixed(1)}%)
                                   </>
                                 ) : (
-                                  `開始批量分塊 (${
-                                    selectedStrategies.length *
-                                    chunkSizes.length *
-                                    overlapRatios.length
-                                  } 種組合)`
+                                  `開始分塊 (${strategyInfo[selectedStrategy].name})`
                                 )}
                               </button>
                             </div>

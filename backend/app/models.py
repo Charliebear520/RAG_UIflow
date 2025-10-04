@@ -19,6 +19,7 @@ class DocRecord:
     json_data: Optional[Dict[str, Any]] = None
     structured_chunks: Optional[List[Dict[str, Any]]] = None
     generated_questions: Optional[List[str]] = None
+    chunking_strategy: Optional[str] = None
 
 
 @dataclass
@@ -81,6 +82,17 @@ class ChunkConfig(BaseModel):
     max_chunk_size_sw: int = 1000  # 滑動視窗專用
     preserve_sentences: bool = True  # 滑動視窗
     secondary_size: int = 400  # 混合分割
+
+
+class MultiLevelFusionRequest(BaseModel):
+    """多層次融合請求"""
+    query: str
+    k: int = 10
+    fusion_strategy: str = "weighted_sum"  # weighted_sum, reciprocal_rank, comb_sum, comb_anz, comb_mnz
+    level_weights: Dict[str, float] = None  # 層次權重
+    similarity_threshold: float = 0.0
+    max_results: int = 10
+    normalize_scores: bool = True
 
 
 class EvaluationRequest(BaseModel):
