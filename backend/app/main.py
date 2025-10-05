@@ -109,6 +109,7 @@ class DocRecord:
 
 
 
+from .store import InMemoryStore
 store = InMemoryStore()
 
 
@@ -5863,3 +5864,5 @@ def hierarchical_retrieve_original(query: str, k: int):
     """原始多層次檢索"""
     # 這裡調用原有的多層次檢索邏輯
     pass
+
+

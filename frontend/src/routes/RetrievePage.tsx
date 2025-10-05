@@ -57,7 +57,7 @@ export function RetrievePage() {
               HybridRAG (向量 + 法律規則)
             </label>
           </div>
-          <div className="form-check form-check-inline">
+          {/* <div className="form-check form-check-inline">
             <input
               className="form-check-input"
               type="radio"
@@ -70,7 +70,7 @@ export function RetrievePage() {
             <label className="form-check-label" htmlFor="multiLevelRag">
               多層次檢索 (Multi-Layered Retrieval) 📚
             </label>
-          </div>
+          </div> */}
           <div className="form-check form-check-inline">
             <input
               className="form-check-input"
@@ -397,7 +397,11 @@ export function RetrievePage() {
                             {Object.entries(r.original_scores)
                               .map(
                                 ([level, score]) =>
-                                  `${level}:${score?.toFixed(2)}`
+                                  `${level}:${
+                                    typeof score === "number"
+                                      ? score.toFixed(2)
+                                      : score
+                                  }`
                               )
                               .join(", ")}
                           </span>
