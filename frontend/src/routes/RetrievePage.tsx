@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRag } from "../lib/ragStore";
+import { api } from "../lib/api";
 
 export function RetrievePage() {
   const nav = useNavigate();
@@ -11,6 +12,7 @@ export function RetrievePage() {
     hierarchicalRetrieve,
     multiLevelRetrieve,
     multiLevelFusionRetrieve,
+    hopragEnhancedRetrieve,
     retrieval,
     generate,
     answer,
@@ -21,6 +23,101 @@ export function RetrievePage() {
   const [k, setK] = useState(5);
   const [busy, setBusy] = useState(false);
   const [retrievalMethod, setRetrievalMethod] = useState("vector");
+
+  // HopRAG管理狀態
+  const [hopragStatus, setHopragStatus] = useState<any>(null);
+  const [hopragConfig, setHopragConfig] = useState<any>(null);
+  const [showHopragManager, setShowHopragManager] = useState(false);
+  const [hopragLoading, setHopragLoading] = useState(false);
+  const [hopragMessage, setHopragMessage] = useState<string>("");
+
+  // HopRAG管理功能
+  const fetchHopragStatus = async () => {
+    try {
+      const response = await api.getHopragStatus();
+      setHopragStatus(response);
+      return response;
+    } catch (error) {
+      console.error("獲取HopRAG狀態失敗:", error);
+      setHopragMessage("獲取HopRAG狀態失敗");
+      return null;
+    }
+  };
+
+  const fetchHopragConfig = async () => {
+    try {
+      const response = await api.getHopragConfig();
+      setHopragConfig(response.config);
+      return response.config;
+    } catch (error) {
+      console.error("獲取HopRAG配置失敗:", error);
+      return null;
+    }
+  };
+
+  const buildHopragGraph = async () => {
+    setHopragLoading(true);
+    setHopragMessage("");
+    try {
+      const response = await api.buildHopragGraph();
+      setHopragMessage(
+        `HopRAG圖譜構建成功！節點數: ${response.statistics.total_nodes}, 邊數: ${response.statistics.total_edges}`
+      );
+      await fetchHopragStatus();
+    } catch (error: any) {
+      setHopragMessage(
+        `HopRAG圖譜構建失敗: ${error.response?.data?.error || error.message}`
+      );
+    } finally {
+      setHopragLoading(false);
+    }
+  };
+
+  const updateHopragConfig = async () => {
+    if (!hopragConfig) return;
+
+    setHopragLoading(true);
+    setHopragMessage("");
+    try {
+      await api.updateHopragConfig(hopragConfig);
+      setHopragMessage("HopRAG配置更新成功！");
+      await fetchHopragConfig();
+    } catch (error: any) {
+      setHopragMessage(
+        `配置更新失敗: ${error.response?.data?.error || error.message}`
+      );
+    } finally {
+      setHopragLoading(false);
+    }
+  };
+
+  const resetHopragSystem = async () => {
+    if (!confirm("確定要重置HopRAG系統嗎？這將清除所有圖數據。")) {
+      return;
+    }
+
+    setHopragLoading(true);
+    setHopragMessage("");
+    try {
+      await api.resetHopragSystem();
+      setHopragMessage("HopRAG系統重置成功！");
+      await fetchHopragStatus();
+      await fetchHopragConfig();
+    } catch (error: any) {
+      setHopragMessage(
+        `系統重置失敗: ${error.response?.data?.error || error.message}`
+      );
+    } finally {
+      setHopragLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (retrievalMethod === "hoprag") {
+      fetchHopragStatus();
+      fetchHopragConfig();
+    }
+  }, [retrievalMethod]);
 
   return (
     <div className="card">
@@ -55,6 +152,20 @@ export function RetrievePage() {
             />
             <label className="form-check-label" htmlFor="hybridRag">
               HybridRAG (向量 + 法律規則)
+            </label>
+          </div>
+          <div className="form-check form-check-inline">
+            <input
+              className="form-check-input"
+              type="radio"
+              name="retrievalMethod"
+              id="hopragRag"
+              value="hoprag"
+              checked={retrievalMethod === "hoprag"}
+              onChange={(e) => setRetrievalMethod(e.target.value)}
+            />
+            <label className="form-check-label" htmlFor="hopragRag">
+              HopRAG (多跳推理檢索) 🧠
             </label>
           </div>
           {/* <div className="form-check form-check-inline">
@@ -98,6 +209,10 @@ export function RetrievePage() {
               <strong>HybridRAG</strong>：結合向量檢索和法律規則的混合檢索
             </li>
             <li>
+              <strong>HopRAG</strong>
+              ：多跳推理檢索，通過邏輯連接發現間接相關的法律條文
+            </li>
+            <li>
               <strong>多層次檢索</strong>
               ：基於六個粒度級別（文件、章、節、條、項、款/目），智能選擇最合適的層次進行檢索
             </li>
@@ -107,6 +222,269 @@ export function RetrievePage() {
             </li>
           </ul>
         </div>
+
+        {/* HopRAG使用指導 */}
+        {retrievalMethod === "hoprag" && (
+          <div className="alert alert-warning mb-3">
+            <h6 className="mb-2">🧠 HopRAG 使用說明</h6>
+            <div className="row">
+              <div className="col-md-8">
+                <p className="mb-2">
+                  <strong>HopRAG需要先完成以下步驟：</strong>
+                </p>
+                <ol className="mb-2 small">
+                  <li>確保已上傳法律文檔並完成分塊處理</li>
+                  <li>執行多層次embedding生成</li>
+                  <li>構建HopRAG圖譜（見下方管理面板）</li>
+                  <li>等待圖譜構建完成後即可使用HopRAG檢索</li>
+                </ol>
+              </div>
+              <div className="col-md-4 text-end">
+                <button
+                  className="btn btn-sm btn-outline-primary"
+                  onClick={() => setShowHopragManager(!showHopragManager)}
+                >
+                  {showHopragManager ? "隱藏管理面板" : "顯示管理面板"}
+                </button>
+              </div>
+            </div>
+            <div className="mt-2">
+              <small className="text-muted">
+                💡 <strong>提示</strong>
+                ：HopRAG通過構建法律概念圖譜，能夠發現間接相關的法律條文，
+                提供更全面的檢索結果和更深入的法律推理。
+              </small>
+            </div>
+          </div>
+        )}
+
+        {/* HopRAG管理面板 */}
+        {retrievalMethod === "hoprag" && showHopragManager && (
+          <div className="card mb-4">
+            <div className="card-header">
+              <h5 className="mb-0">HopRAG 系統管理</h5>
+            </div>
+            <div className="card-body">
+              {hopragMessage && (
+                <div
+                  className={`alert ${
+                    hopragMessage.includes("成功")
+                      ? "alert-success"
+                      : "alert-danger"
+                  } alert-dismissible fade show mb-3`}
+                  role="alert"
+                >
+                  {hopragMessage}
+                  <button
+                    type="button"
+                    className="btn-close"
+                    data-bs-dismiss="alert"
+                    onClick={() => setHopragMessage("")}
+                  ></button>
+                </div>
+              )}
+
+              {/* 系統狀態 */}
+              <div className="mb-4">
+                <h6>系統狀態</h6>
+                {hopragStatus ? (
+                  <div className="row">
+                    <div className="col-md-6">
+                      <div className="card bg-light">
+                        <div className="card-body">
+                          <h6 className="card-title">圖譜狀態</h6>
+                          <p className="mb-1">
+                            <span
+                              className={`badge ${
+                                hopragStatus.graph_statistics?.graph_built
+                                  ? "bg-success"
+                                  : "bg-warning"
+                              }`}
+                            >
+                              圖譜狀態:{" "}
+                              {hopragStatus.graph_statistics?.graph_built
+                                ? "已構建"
+                                : "未構建"}
+                            </span>
+                          </p>
+                          <p className="mb-1">
+                            節點總數:{" "}
+                            {hopragStatus.graph_statistics?.total_nodes || 0}
+                          </p>
+                          <p className="mb-1">
+                            邊總數:{" "}
+                            {hopragStatus.graph_statistics?.total_edges || 0}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="col-md-6">
+                      <div className="card bg-light">
+                        <div className="card-body">
+                          <h6 className="card-title">系統狀態</h6>
+                          <p className="mb-1">
+                            <span
+                              className={`badge ${
+                                hopragStatus.system_ready
+                                  ? "bg-success"
+                                  : "bg-warning"
+                              }`}
+                            >
+                              {hopragStatus.system_ready
+                                ? "✅ 系統就緒"
+                                : "⚠️ 系統未就緒"}
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-muted">載入中...</div>
+                )}
+              </div>
+
+              {/* 操作按鈕 */}
+              <div className="mb-4">
+                <h6>系統操作</h6>
+                <div className="btn-group" role="group">
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={buildHopragGraph}
+                    disabled={hopragLoading}
+                  >
+                    {hopragLoading ? "構建中..." : "構建HopRAG圖譜"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-info"
+                    onClick={fetchHopragStatus}
+                    disabled={hopragLoading}
+                  >
+                    刷新狀態
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-warning"
+                    onClick={resetHopragSystem}
+                    disabled={hopragLoading}
+                  >
+                    重置系統
+                  </button>
+                </div>
+              </div>
+
+              {/* 配置設置 */}
+              <div>
+                <h6>HopRAG 配置</h6>
+                {hopragConfig ? (
+                  <div className="row">
+                    <div className="col-md-6">
+                      <div className="mb-3">
+                        <label className="form-label">相似度閾值</label>
+                        <input
+                          type="number"
+                          className="form-control"
+                          min="0"
+                          max="1"
+                          step="0.1"
+                          value={hopragConfig.similarity_threshold}
+                          onChange={(e) =>
+                            setHopragConfig({
+                              ...hopragConfig,
+                              similarity_threshold: parseFloat(e.target.value),
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="mb-3">
+                        <label className="form-label">最大跳躍數</label>
+                        <input
+                          type="number"
+                          className="form-control"
+                          min="1"
+                          max="10"
+                          value={hopragConfig.max_hops}
+                          onChange={(e) =>
+                            setHopragConfig({
+                              ...hopragConfig,
+                              max_hops: parseInt(e.target.value),
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div className="col-md-6">
+                      <div className="mb-3">
+                        <label className="form-label">每跳最大節點數</label>
+                        <input
+                          type="number"
+                          className="form-control"
+                          min="1"
+                          max="50"
+                          value={hopragConfig.top_k_per_hop}
+                          onChange={(e) =>
+                            setHopragConfig({
+                              ...hopragConfig,
+                              top_k_per_hop: parseInt(e.target.value),
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="mb-3">
+                        <label className="form-label">基礎檢索策略</label>
+                        <select
+                          className="form-select"
+                          value={hopragConfig.base_strategy}
+                          onChange={(e) =>
+                            setHopragConfig({
+                              ...hopragConfig,
+                              base_strategy: e.target.value,
+                            })
+                          }
+                        >
+                          <option value="multi_level">多層次檢索</option>
+                          <option value="single_level">單層次檢索</option>
+                          <option value="hybrid">混合檢索</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-muted">載入中...</div>
+                )}
+                <div className="mb-3">
+                  <div className="form-check">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="useHopRAG"
+                      checked={hopragConfig?.use_hoprag || false}
+                      onChange={(e) =>
+                        setHopragConfig({
+                          ...hopragConfig,
+                          use_hoprag: e.target.checked,
+                        })
+                      }
+                    />
+                    <label className="form-check-label" htmlFor="useHopRAG">
+                      啟用HopRAG增強
+                    </label>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-success"
+                  onClick={updateHopragConfig}
+                  disabled={hopragLoading}
+                >
+                  更新配置
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <form
           className="row gy-2 gx-2 align-items-end"
@@ -120,6 +498,8 @@ export function RetrievePage() {
               await multiLevelRetrieve(query, k);
             } else if (retrievalMethod === "multi_level_fusion") {
               await multiLevelFusionRetrieve(query, k);
+            } else if (retrievalMethod === "hoprag") {
+              await hopragEnhancedRetrieve(query, k);
             } else {
               await retrieve(query, k);
             }
@@ -182,6 +562,9 @@ export function RetrievePage() {
               Top results{" "}
               {retrievalMethod === "hybrid" && (
                 <span className="badge bg-primary">HybridRAG</span>
+              )}
+              {retrievalMethod === "hoprag" && (
+                <span className="badge bg-warning">HopRAG 🧠</span>
               )}
               {retrievalMethod === "multi_level" && (
                 <span className="badge bg-success">

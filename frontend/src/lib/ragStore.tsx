@@ -63,6 +63,7 @@ type RagContextType = {
     k: number,
     fusionStrategy?: string
   ) => Promise<void>;
+  hopragEnhancedRetrieve: (query: string, k: number) => Promise<void>;
   generate: (query: string, topK: number) => Promise<void>;
   reset: () => void;
 };
@@ -399,6 +400,22 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     setRetrieval(retrievalData);
   }
 
+  async function hopragEnhancedRetrieve(query: string, k: number) {
+    const res = await api.hopragEnhancedRetrieve({
+      query,
+      k,
+    });
+    const retrievalData = res.results.map((result: any) => ({
+      ...result,
+      strategy: res.strategy,
+      base_strategy: res.base_strategy,
+      hoprag_enabled: res.hoprag_enabled,
+      hop_level: result.hop_level || 0,
+      hop_source: result.hop_source || "base_retrieval",
+    }));
+    setRetrieval(retrievalData);
+  }
+
   async function generate(query: string, topK: number) {
     const res = await api.generate({ query, top_k: topK });
     setAnswer(res.answer);
@@ -455,6 +472,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     hierarchicalRetrieve,
     multiLevelRetrieve,
     multiLevelFusionRetrieve,
+    hopragEnhancedRetrieve,
     generate,
     reset,
   };

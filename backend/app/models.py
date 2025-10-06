@@ -129,7 +129,7 @@ class MetadataOptions(BaseModel):
     include_figures: bool = False
     preserve_formatting: bool = True
     extract_metadata: bool = True
-    # 新增必要的屬性
+    # 簡化版本 - 移除不必要的metadata
     include_id: bool = True
-    include_page_range: bool = True
-    include_spans: bool = True
+    include_page_range: bool = False  # 恢復為False
+    include_spans: bool = False  # 恢復為False

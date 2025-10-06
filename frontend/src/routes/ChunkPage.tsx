@@ -134,8 +134,14 @@ interface EvaluationTask {
 
 export function ChunkPage() {
   const nav = useNavigate();
-  const { canChunk, chunk, docId, chunkMeta, setChunkingResultsAndStrategy } =
-    useRag();
+  const {
+    canChunk,
+    chunk,
+    docId,
+    chunkMeta,
+    setChunkingResultsAndStrategy,
+    jsonData,
+  } = useRag();
 
   // 無映射模式：不需要 QA Set 上傳狀態（移除）
 
@@ -273,6 +279,37 @@ export function ChunkPage() {
     max: number;
   }>({ min: 0, max: 10000 });
 
+  // 取得層級中文標籤
+  const getLevelLabel = (md: any) => {
+    const level = md?.level_en || md?.level || "";
+    const map: Record<string, string> = {
+      Chapter: "章",
+      Section: "節",
+      Article: "條",
+      Paragraph: "項",
+      Subparagraph: "款",
+      Item: "目",
+      Law: "法規",
+    };
+    return map[level] || level || "";
+  };
+
+  // 組合層級與所屬法規/章節資訊
+  const getLevelPathText = (md: any) => {
+    if (!md) return "";
+    const levelZh = getLevelLabel(md);
+    const parts: string[] = [];
+    if (levelZh) parts.push(`層級: ${levelZh}`);
+    if (md.law_name) parts.push(`法規: ${md.law_name}`);
+    if (md.chapter) parts.push(`章: ${md.chapter}`);
+    if (md.section) parts.push(`節: ${md.section}`);
+    if (md.article) parts.push(`條: ${md.article}`);
+    if (md.paragraph) parts.push(`項: ${md.paragraph}`);
+    if (md.subparagraph) parts.push(`款: ${md.subparagraph}`);
+    if (md.item) parts.push(`目: ${md.item}`);
+    return parts.join(" | ");
+  };
+
   // 確保Bootstrap accordion正確初始化
   useEffect(() => {
     if (chunkingResults.length > 0 && typeof window !== "undefined") {
@@ -298,12 +335,27 @@ export function ChunkPage() {
   const handleRunChunking = async () => {
     if (!canChunk) return;
 
+    // 強制要求：必須先於上傳頁保存 JSON（upload-json 或 convert 後的 metadata 已寫入）
+    if (!jsonData) {
+      setChunkingError("請先於上傳頁保存法條 JSON，然後再執行分塊。");
+      return;
+    }
+
     setIsChunking(true);
     setChunkingError(null);
     setChunkingResults([]);
     setChunkingProgress(0);
 
     try {
+      // 再次顯式同步一次 JSON 到後端，避免不同步導致仍以舊內容分塊
+      if (docId && jsonData) {
+        try {
+          await api.updateJson(docId, jsonData);
+        } catch (e) {
+          console.warn("在分塊前同步 JSON 失敗：", e);
+        }
+      }
+
       // 根據策略準備參數
       let apiParams: any = {
         doc_id: docId!,
@@ -577,9 +629,10 @@ export function ChunkPage() {
                   <div className="col-12">
                     <div className="alert alert-info" role="alert">
                       <strong>提示：</strong>{" "}
-                      本頁專注於「批量分塊」。評測請到首頁 Evaluate(beta)
-                      區塊上傳 <code>qa_gold.json</code>，啟動分塊後一鍵計算 P@K
-                      / R@K。
+                      本頁專注於「批量分塊」。本頁的所有分割策略會
+                      <strong>統一使用上傳頁面的 JSON 結構</strong>進行分割。
+                      評測請到首頁 Evaluate(beta) 區塊上傳{" "}
+                      <code>qa_gold.json</code>，啟動分塊後一鍵計算 P@K / R@K。
                     </div>
                   </div>
 
@@ -681,8 +734,8 @@ export function ChunkPage() {
                                   <thead>
                                     <tr>
                                       <th>策略</th>
-                                      <th>分塊大小</th>
-                                      <th>重疊比例</th>
+                                      <th>分塊大小/層級</th>
+                                      <th>重疊比例/層級</th>
                                       <th>分塊數量</th>
                                       <th>平均長度</th>
                                     </tr>
@@ -695,12 +748,20 @@ export function ChunkPage() {
                                             result.strategy as ChunkStrategy
                                           ]?.name || result.strategy}
                                         </td>
-                                        <td>{result.config.chunk_size} 字符</td>
                                         <td>
-                                          {(
-                                            result.config.overlap_ratio * 100
-                                          ).toFixed(1)}
-                                          %
+                                          {result.strategy ===
+                                          "structured_hierarchical"
+                                            ? "多層級"
+                                            : `${result.config.chunk_size} 字符`}
+                                        </td>
+                                        <td>
+                                          {result.strategy ===
+                                          "structured_hierarchical"
+                                            ? "—"
+                                            : `${(
+                                                result.config.overlap_ratio *
+                                                100
+                                              ).toFixed(1)}%`}
                                         </td>
                                         <td>{result.chunk_count}</td>
                                         <td>
@@ -869,7 +930,8 @@ export function ChunkPage() {
                                                 )}
                                               </div>
                                               <span className="badge bg-secondary">
-                                                {chunk.length} 字符
+                                                {getLevelLabel(metadata) ||
+                                                  `${chunk.length} 字符`}
                                               </span>
                                             </div>
                                           </button>
@@ -887,13 +949,17 @@ export function ChunkPage() {
                                                   {strategyInfo[
                                                     strategy as ChunkStrategy
                                                   ]?.name || strategy}{" "}
-                                                  | 分塊 {chunkIndex + 1} |
-                                                  大小: {config.chunk_size} |
-                                                  重疊:{" "}
-                                                  {(
-                                                    config.overlap_ratio * 100
-                                                  ).toFixed(1)}
-                                                  %
+                                                  | 分塊 {chunkIndex + 1}
+                                                  {metadata
+                                                    ? ` | ${getLevelPathText(
+                                                        metadata
+                                                      )}`
+                                                    : ` | 大小: ${
+                                                        config.chunk_size
+                                                      } | 重疊: ${(
+                                                        config.overlap_ratio *
+                                                        100
+                                                      ).toFixed(1)}%`}
                                                 </small>
                                                 {chunkId && (
                                                   <small className="text-primary fw-bold">
@@ -1248,7 +1314,7 @@ export function ChunkPage() {
                               <button
                                 className="btn btn-warning btn-lg"
                                 onClick={handleRunChunking}
-                                disabled={isChunking}
+                                disabled={isChunking || !jsonData}
                               >
                                 {isChunking ? (
                                   <>
@@ -1263,6 +1329,15 @@ export function ChunkPage() {
                                   `開始分塊 (${strategyInfo[selectedStrategy].name})`
                                 )}
                               </button>
+                              {!jsonData && (
+                                <div
+                                  className="alert alert-warning mt-2"
+                                  role="alert"
+                                >
+                                  請先於上傳頁完成 PDF 轉換或 JSON
+                                  上傳，並確保後端已保存 JSON 後再進行分塊。
+                                </div>
+                              )}
                             </div>
 
                             {/* 分塊錯誤提示 */}

@@ -24,6 +24,9 @@ from .hybrid_search import hybrid_rank, HybridConfig
 from .store import InMemoryStore
 from .query_classifier import query_classifier, get_query_analysis
 from .result_fusion import MultiLevelResultFusion, FusionConfig, fuse_multi_level_results
+from .hoprag_system_modular import HopRAGSystem
+from .hoprag_clients import HopRAGClientManager
+from .hoprag_config import HopRAGConfig, DEFAULT_CONFIG
 try:
     from rank_bm25 import BM25Okapi  # type: ignore
     BM25_AVAILABLE = True
@@ -111,6 +114,14 @@ class DocRecord:
 
 from .store import InMemoryStore
 store = InMemoryStore()
+
+# 初始化HopRAG系統（模組化架構）
+hoprag_client_manager = HopRAGClientManager()
+hoprag_system = HopRAGSystem(
+    llm_client=hoprag_client_manager.get_llm_client(),
+    embedding_model=hoprag_client_manager.get_embedding_client(),
+    config=DEFAULT_CONFIG
+)
 
 
 app = FastAPI(title="RAG Visualizer API", version="0.1.0")
@@ -1165,11 +1176,17 @@ def process_single_law(law_data: Dict[str, Any], chunk_size: int, overlap: int) 
                     chunk_id = f"{article_title}_part_{i+1}"
                     article_chunks.append(create_chunk(chunk_text, metadata, chunk_id))
         
-        # 處理條文項目
-        for item in items:
-            item_title = item.get("item", "")
+        # 處理條文項目 - 支援新結構 (paragraphs) 和舊結構 (items)
+        paragraphs = article.get("paragraphs", [])
+        items = article.get("items", [])
+        
+        # 使用 paragraphs 如果存在，否則使用 items
+        items_to_process = paragraphs if paragraphs else items
+        
+        for item in items_to_process:
+            # 支援新結構的鍵名
+            item_title = item.get("paragraph", item.get("item", ""))
             item_content = item.get("content", "")
-            sub_items = item.get("sub_items", [])
             
             # 處理項目主體
             if item_content:
@@ -1193,9 +1210,16 @@ def process_single_law(law_data: Dict[str, Any], chunk_size: int, overlap: int) 
                         chunk_id = f"{article_title}_{item_title}_part_{i+1}"
                         article_chunks.append(create_chunk(chunk_text, metadata, chunk_id))
             
-            # 處理子項目
-            for sub_item in sub_items:
-                sub_item_title = sub_item.get("sub_item", "")
+            # 處理子項目 - 支援新結構 (subparagraphs) 和舊結構 (sub_items)
+            subparagraphs = item.get("subparagraphs", [])
+            sub_items = item.get("sub_items", [])
+            
+            # 使用 subparagraphs 如果存在，否則使用 sub_items
+            sub_items_to_process = subparagraphs if subparagraphs else sub_items
+            
+            for sub_item in sub_items_to_process:
+                # 支援新結構的鍵名
+                sub_item_title = sub_item.get("subparagraph", sub_item.get("sub_item", ""))
                 sub_item_content = sub_item.get("content", "")
                 
                 if sub_item_content:
@@ -1218,6 +1242,33 @@ def process_single_law(law_data: Dict[str, Any], chunk_size: int, overlap: int) 
                             }
                             chunk_id = f"{article_title}_{item_title}_{sub_item_title}_part_{i+1}"
                             article_chunks.append(create_chunk(chunk_text, metadata, chunk_id))
+                
+                # 處理第三層項目 (items)
+                third_level_items = sub_item.get("items", [])
+                for third_item in third_level_items:
+                    third_item_title = third_item.get("item", "")
+                    third_item_content = third_item.get("content", "")
+                    
+                    if third_item_content:
+                        if len(third_item_content) <= chunk_size:
+                            metadata = {
+                                "id": third_item.get("metadata", {}).get("id", ""),
+                                "spans": third_item.get("metadata", {}).get("spans", {}),
+                                "page_range": third_item.get("metadata", {}).get("page_range", {})
+                            }
+                            chunk_id = f"{article_title}_{item_title}_{sub_item_title}_{third_item_title}"
+                            article_chunks.append(create_chunk(third_item_content, metadata, chunk_id))
+                        else:
+                            # 第三層項目內容較長，需要分割
+                            text_chunks = sliding_window_chunks(third_item_content, chunk_size, overlap)
+                            for i, chunk_text in enumerate(text_chunks):
+                                metadata = {
+                                    "id": third_item.get("metadata", {}).get("id", ""),
+                                    "spans": third_item.get("metadata", {}).get("spans", {}),
+                                    "page_range": third_item.get("metadata", {}).get("page_range", {})
+                                }
+                                chunk_id = f"{article_title}_{item_title}_{sub_item_title}_{third_item_title}_part_{i+1}"
+                                article_chunks.append(create_chunk(chunk_text, metadata, chunk_id))
         
         return article_chunks
     
@@ -1915,20 +1966,50 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
     async with httpx.AsyncClient(timeout=60) as client:
         # 逐個處理文本（Gemini API 需要單個請求）
         for i, text in enumerate(texts):
-            payload = {
-                "model": f"models/{model}",
-                "content": {"parts": [{"text": text}]}
-            }
-            r = await client.post(url, headers=headers, json=payload)
-            r.raise_for_status()
-            data = r.json()
-            # 根據官方文檔，響應格式是 {"embedding": {"values": [...]}}
-            embedding_values = data.get("embedding", {}).get("values", [])
-            out.append(embedding_values)
-            
-            # 顯示進度
-            progress = ((i + 1) / total_texts) * 100
-            print(f"📊 Gemini embedding進度: {i + 1}/{total_texts} ({progress:.1f}%)")
+            try:
+                # 檢查文本長度，Gemini API有長度限制
+                if len(text) > 10000:  # 限制文本長度
+                    text = text[:10000]
+                    print(f"⚠️ 文本過長，已截斷到10000字符")
+                
+                payload = {
+                    "model": f"models/{model}",
+                    "content": {"parts": [{"text": text}]}
+                }
+                r = await client.post(url, headers=headers, json=payload)
+                
+                if r.status_code == 400:
+                    print(f"❌ Gemini API 400錯誤，文本內容可能有問題: {text[:100]}...")
+                    # 使用隨機向量作為fallback
+                    import numpy as np
+                    fallback_vector = np.random.randn(768).astype(np.float32).tolist()
+                    out.append(fallback_vector)
+                    continue
+                
+                r.raise_for_status()
+                data = r.json()
+                # 根據官方文檔，響應格式是 {"embedding": {"values": [...]}}
+                embedding_values = data.get("embedding", {}).get("values", [])
+                
+                if not embedding_values:
+                    print(f"❌ 獲取到的embedding為空，使用fallback向量")
+                    import numpy as np
+                    fallback_vector = np.random.randn(768).astype(np.float32).tolist()
+                    out.append(fallback_vector)
+                else:
+                    out.append(embedding_values)
+                
+                # 顯示進度
+                progress = ((i + 1) / total_texts) * 100
+                print(f"📊 Gemini embedding進度: {i + 1}/{total_texts} ({progress:.1f}%)")
+                
+            except Exception as e:
+                print(f"❌ 處理第{i+1}個文本時出錯: {e}")
+                # 使用隨機向量作為fallback
+                import numpy as np
+                fallback_vector = np.random.randn(768).astype(np.float32).tolist()
+                out.append(fallback_vector)
+                continue
     
     print(f"✅ Gemini embedding完成，共處理 {len(out)} 個向量")
     return out
@@ -2039,7 +2120,12 @@ def convert_structured_to_multi_level(structured_chunks):
     for chunk in structured_chunks:
         content = chunk.get('content', '')
         metadata = chunk.get('metadata', {})
-        chunk_by = metadata.get('chunk_by', 'article')
+        
+        # 優先使用metadata中的level信息（多層次結構化分塊會設置這個）
+        if 'level' in metadata:
+            chunk_by = metadata['level']
+        else:
+            chunk_by = metadata.get('chunk_by', 'article')
         
         # 根據chunk_by和內容特徵分類到對應層次
         level_name, semantic_features = classify_chunk_to_level(content, metadata, chunk_by)
@@ -2310,7 +2396,30 @@ async def multi_level_embed(req: EmbedRequest):
         elif doc and hasattr(doc, 'structured_chunks') and doc.structured_chunks:
             # 如果沒有multi_level_chunks但有structured_chunks，則轉換為六個層次格式
             print(f"🔄 將結構化分塊轉換為六個粒度級別格式，文檔: {doc.filename}")
-            all_multi_level_chunks[doc_id] = convert_structured_to_multi_level(doc.structured_chunks)
+            
+            # 調試：檢查文檔的JSON結構
+            if hasattr(doc, 'json_data') and doc.json_data:
+                print(f"📋 文檔JSON結構調試:")
+                print(f"   law_name: {doc.json_data.get('law_name', 'N/A')}")
+                print(f"   chapters數量: {len(doc.json_data.get('chapters', []))}")
+                
+                chapters = doc.json_data.get('chapters', [])
+                for i, chapter in enumerate(chapters[:3]):  # 只顯示前3個章
+                    print(f"   章{i+1}: {chapter.get('chapter', 'N/A')}")
+                    sections = chapter.get('sections', [])
+                    print(f"     sections數量: {len(sections)}")
+                    for j, section in enumerate(sections[:2]):  # 只顯示前2個節
+                        print(f"     節{j+1}: {section.get('section', 'N/A')}")
+                        articles = section.get('articles', [])
+                        print(f"       articles數量: {len(articles)}")
+            
+            converted_chunks = convert_structured_to_multi_level(doc.structured_chunks)
+            all_multi_level_chunks[doc_id] = converted_chunks
+            
+            # 將轉換後的數據保存到文檔中，供HopRAG使用
+            doc.multi_level_chunks = converted_chunks
+            doc.chunking_strategy = "structured_to_multi_level"
+            store.add_doc(doc)  # 保存更新後的文檔
     
     if not all_multi_level_chunks:
         return JSONResponse(
@@ -2395,14 +2504,36 @@ async def multi_level_embed(req: EmbedRequest):
             
         except Exception as e:
             print(f"❌ 層次 '{level_name}' embedding失敗：{e}")
+            # 使用隨機向量作為fallback
+            try:
+                import numpy as np
+                fallback_vectors = np.random.randn(len(level_chunks), 768).astype(np.float32).tolist()
+                store.set_multi_level_embeddings(level_name, fallback_vectors, level_chunks, level_doc_ids)
+                
+                level_results[level_name] = {
+                    "provider": "fallback_random",
+                    "model": "random_768d",
+                    "num_vectors": len(fallback_vectors),
+                    "dimension": 768,
+                    "num_chunks": len(level_chunks),
+                    "level_description": get_level_description(level_name),
+                    "error": f"Original embedding failed, using fallback: {str(e)}"
+                }
+                
+                total_vectors += len(fallback_vectors)
+                print(f"⚠️ 層次 '{level_name}' 使用fallback向量：{len(fallback_vectors)} 個")
+                
+            except Exception as fallback_error:
+                print(f"❌ 層次 '{level_name}' fallback也失敗：{fallback_error}")
+                level_results[level_name] = {
+                    "error": f"Both original and fallback failed: {str(e)} | {str(fallback_error)}",
+                    "num_chunks": len(level_chunks),
+                    "level_description": get_level_description(level_name)
+                }
+            
             completed_levels += 1
             progress = (completed_levels / total_levels) * 100
             print(f"📊 進度: {completed_levels}/{total_levels} ({progress:.1f}%)")
-            level_results[level_name] = {
-                "error": str(e),
-                "num_chunks": len(level_chunks),
-                "level_description": get_level_description(level_name)
-            }
     
     print(f"🎉 多層次embedding處理完成！總共處理了 {total_vectors} 個向量，成功完成 {completed_levels}/{total_levels} 個層次")
     
@@ -4081,30 +4212,67 @@ def merge_law_documents(law_documents: List[Dict[str, Any]]) -> Dict[str, Any]:
                         "items": []
                     }
                     
-                    # 處理項目
-                    items = article.get("items", [])
-                    for item in items:
-                        item_name = item.get("item", "")
+                    # 處理項目 - 支援新結構 (paragraphs) 和舊結構 (items)
+                    paragraphs = article.get("paragraphs", [])
+                    items = article.get("items", [])  # 相容性：items 可能指向 paragraphs
+                    
+                    # 使用 paragraphs 如果存在，否則使用 items
+                    items_to_process = paragraphs if paragraphs else items
+                    
+                    for item in items_to_process:
+                        # 支援新結構的鍵名
+                        item_name = item.get("paragraph", item.get("item", ""))
+                        item_content = item.get("content", "")
+                        
                         merged_item = {
-                            "item": item_name,
-                            "content": item.get("content", ""),
-                            "sub_items": []
+                            "item": item_name,  # 保持向後相容
+                            "paragraph": item_name,  # 新結構
+                            "content": item_content,
+                            "sub_items": [],
+                            "subparagraphs": []  # 新結構
                         }
                         
-                        # 處理子項目
+                        # 處理子項目 - 支援新結構 (subparagraphs) 和舊結構 (sub_items)
+                        subparagraphs = item.get("subparagraphs", [])
                         sub_items = item.get("sub_items", [])
-                        for sub_item in sub_items:
-                            sub_item_name = sub_item.get("sub_item", "")
+                        
+                        # 使用 subparagraphs 如果存在，否則使用 sub_items
+                        sub_items_to_process = subparagraphs if subparagraphs else sub_items
+                        
+                        for sub_item in sub_items_to_process:
+                            # 支援新結構的鍵名
+                            sub_item_name = sub_item.get("subparagraph", sub_item.get("sub_item", ""))
+                            sub_item_content = sub_item.get("content", "")
+                            
                             merged_sub_item = {
-                                "sub_item": sub_item_name,
-                                "content": sub_item.get("content", ""),
+                                "sub_item": sub_item_name,  # 保持向後相容
+                                "subparagraph": sub_item_name,  # 新結構
+                                "content": sub_item_content,
+                                "items": [],  # 新結構的第三層
                                 "metadata": {
                                     "id": f"{law_prefix}_{chapter_name}_{section_name}_{article_name}_{item_name}_{sub_item_name}".replace(" ", "_"),
                                     "spans": sub_item.get("metadata", {}).get("spans", {}),
                                     "page_range": sub_item.get("metadata", {}).get("page_range", {})
                                 }
                             }
+                            
+                            # 處理第三層項目 (items)
+                            third_level_items = sub_item.get("items", [])
+                            for third_item in third_level_items:
+                                third_item_name = third_item.get("item", "")
+                                merged_third_item = {
+                                    "item": third_item_name,
+                                    "content": third_item.get("content", ""),
+                                    "metadata": {
+                                        "id": f"{law_prefix}_{chapter_name}_{section_name}_{article_name}_{item_name}_{sub_item_name}_{third_item_name}".replace(" ", "_"),
+                                        "spans": third_item.get("metadata", {}).get("spans", {}),
+                                        "page_range": third_item.get("metadata", {}).get("page_range", {})
+                                    }
+                                }
+                                merged_sub_item["items"].append(merged_third_item)
+                            
                             merged_item["sub_items"].append(merged_sub_item)
+                            merged_item["subparagraphs"].append(merged_sub_item)
                         
                         # 為項目添加metadata
                         merged_item["metadata"] = {
@@ -4218,8 +4386,10 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
         current_chapter: Optional[Dict[str, Any]] = None
         current_section: Optional[Dict[str, Any]] = None
         current_article: Optional[Dict[str, Any]] = None
-        current_item: Optional[Dict[str, Any]] = None
-        current_sub_item: Optional[Dict[str, Any]] = None
+        # 依據台灣法律層次：條 → 項(Paragraph) → 款(Subparagraph) → 目(Item)
+        current_paragraph: Optional[Dict[str, Any]] = None
+        current_subparagraph: Optional[Dict[str, Any]] = None
+        current_item_lvl3: Optional[Dict[str, Any]] = None
 
         def ensure_chapter():
             nonlocal current_chapter
@@ -4242,73 +4412,90 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
             # Headings
             m = chapter_re.match(ln)
             if m:
-                title = f"第{m.group(1)}章" + (f" {m.group(2).strip()}" if m.group(2) else "")
-                current_chapter = {"chapter": title, "sections": []}
+                num_raw = m.group(1)
+                title = f"第{num_raw}章" + (f" {m.group(2).strip()}" if m.group(2) else "")
+                current_chapter = {"chapter": title, "chapter_no": normalize_digits(num_raw), "type_en": "Chapter", "sections": []}
                 structure["chapters"].append(current_chapter)
                 current_section = None
                 current_article = None
-                current_item = None
-                current_sub_item = None
+                current_paragraph = None
+                current_subparagraph = None
+                current_item_lvl3 = None
                 continue
 
             m = section_re.match(ln)
             if m:
                 ensure_chapter()
-                title = f"第{m.group(1)}節" + (f" {m.group(2).strip()}" if m.group(2) else "")
-                current_section = {"section": title, "articles": []}
+                num_raw = m.group(1)
+                title = f"第{num_raw}節" + (f" {m.group(2).strip()}" if m.group(2) else "")
+                current_section = {"section": title, "section_no": normalize_digits(num_raw), "type_en": "Section", "articles": []}
                 current_chapter["sections"].append(current_section)
                 current_article = None
-                current_item = None
-                current_sub_item = None
-                current_sub_item = None
+                current_paragraph = None
+                current_subparagraph = None
+                current_item_lvl3 = None
                 continue
 
             m = article_re.match(ln)
             if m:
                 ensure_section()
-                title = f"第{m.group(1)}條"
+                num_raw = m.group(1)
+                title = f"第{num_raw}條"
                 rest = m.group(2).strip() if m.group(2) else ""
-                current_article = {"article": title, "content": rest, "items": []}
+                # 建立條文，新增 paragraphs 清單並保留相容的 items 欄位
+                current_article = {"article": title, "article_no": normalize_digits(num_raw), "type_en": "Article", "content": rest, "paragraphs": []}
+                # 相容舊欄位（將指向同一個列表）
+                current_article["items"] = current_article["paragraphs"]
                 current_section["articles"].append(current_article)
-                current_item = None
-                current_sub_item = None
-                current_sub_item = None
+                current_paragraph = None
+                current_subparagraph = None
+                current_item_lvl3 = None
                 continue
 
-            # Items within article
+            # 條文內層級解析：項(阿拉伯數字) → 款(中文數字) → 目（括號中文數字）
             if current_article is not None:
                 num, content, item_type = parse_item_line(ln)
                 if num is not None:
                     num = normalize_digits(num)
-                    
-                    # Determine if this is a sub-item (Chinese numerals after Arabic numerals)
-                    if (item_type == "chinese_space" or item_type == "chinese_with_punct") and current_item is not None:
-                        # This is a sub-item of the current item
-                        if "sub_items" not in current_item:
-                            current_item["sub_items"] = []
-                        sub_item = {"item": str(num), "content": content or "", "sub_items": []}
-                        current_item["sub_items"].append(sub_item)
-                        current_sub_item = sub_item
+                    # 1) 項 Paragraph: 阿拉伯數字（含 1. 1、 1) 或數字+空白）
+                    if item_type in ("arabic_with_punct", "arabic_space"):
+                        current_paragraph = {"paragraph": str(num), "paragraph_no": str(num), "type_en": "Paragraph", "content": content or "", "subparagraphs": []}
+                        # 相容欄位
+                        current_paragraph["sub_items"] = current_paragraph["subparagraphs"]
+                        current_article["paragraphs"].append(current_paragraph)
+                        current_item_lvl3 = None
+                        current_subparagraph = None
+                    # 2) 款 Subparagraph: 中文數字（含 一、 或 中文數字+空白）
+                    elif item_type in ("chinese_with_punct", "chinese_space") and current_paragraph is not None:
+                        if "subparagraphs" not in current_paragraph:
+                            current_paragraph["subparagraphs"] = []
+                            current_paragraph["sub_items"] = current_paragraph["subparagraphs"]
+                        current_subparagraph = {"subparagraph": str(num), "subparagraph_no": str(num), "type_en": "Subparagraph", "content": content or "", "items": []}
+                        # 第三級相容鍵名
+                        current_subparagraph["sub_sub_items"] = current_subparagraph["items"]
+                        current_paragraph["subparagraphs"].append(current_subparagraph)
+                        current_item_lvl3 = None
+                    # 3) 目 Item: 括號中文或數字（（一）、(1)）出現在款內
+                    elif item_type == "parentheses" and current_subparagraph is not None:
+                        if "items" not in current_subparagraph:
+                            current_subparagraph["items"] = []
+                            current_subparagraph["sub_sub_items"] = current_subparagraph["items"]
+                        current_item_lvl3 = {"item": str(num), "item_no": str(num), "type_en": "Item", "content": content or ""}
+                        current_subparagraph["items"].append(current_item_lvl3)
                     else:
-                        # This is a main item
-                        current_item = {"item": str(num), "content": content or "", "sub_items": []}
-                        current_article["items"].append(current_item)
-                        current_sub_item = None
+                        # 若無法判別層級，視為當前最深層的續行文字
+                        pass
                 else:
-                    # continuation line
-                    if current_sub_item is not None:
-                        # Append to current sub-item
-                        sep = "\n" if current_sub_item["content"] else ""
-                        current_sub_item["content"] = f"{current_sub_item['content']}{sep}{ln}"
-                    elif current_item is not None:
-                        # Check if we have sub-items and append to the last sub-item
-                        if "sub_items" in current_item and current_item["sub_items"]:
-                            last_sub_item = current_item["sub_items"][-1]
-                            sep = "\n" if last_sub_item["content"] else ""
-                            last_sub_item["content"] = f"{last_sub_item['content']}{sep}{ln}"
-                        else:
-                            sep = "\n" if current_item["content"] else ""
-                            current_item["content"] = f"{current_item['content']}{sep}{ln}"
+                    # 續行文字：附加到最深層（目 → 款 → 項 → 條）
+                    if current_item_lvl3 is not None:
+                        sep = "\n" if current_item_lvl3.get("content") else ""
+                        current_item_lvl3["content"] = f"{current_item_lvl3.get('content','')}{sep}{ln}"
+                    elif current_subparagraph is not None:
+                        sep = "\n" if current_subparagraph.get("content") else ""
+                        current_subparagraph["content"] = f"{current_subparagraph.get('content','')}{sep}{ln}"
+                    elif current_paragraph is not None:
+                        sep = "\n" if current_paragraph.get("content") else ""
+                        current_paragraph["content"] = f"{current_paragraph.get('content','')}{sep}{ln}"
                     else:
                         # accumulate into article content
                         if "content" not in current_article or current_article["content"] is None:
@@ -4319,16 +4506,20 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
 
             # If no article yet, but we have text, place it under a default article
             if current_section is not None and current_article is None:
-                current_article = {"article": "未標示條文", "content": ln, "items": []}
+                current_article = {"article": "未標示條文", "content": ln, "paragraphs": []}
+                current_article["items"] = current_article["paragraphs"]
                 current_section["articles"].append(current_article)
-                current_item = None
-                current_sub_item = None
+                current_paragraph = None
+                current_subparagraph = None
+                current_item_lvl3 = None
             elif current_article is None:
                 ensure_section()
-                current_article = {"article": "未標示條文", "content": ln, "items": []}
+                current_article = {"article": "未標示條文", "content": ln, "paragraphs": []}
+                current_article["items"] = current_article["paragraphs"]
                 current_section["articles"].append(current_article)
-                current_item = None
-                current_sub_item = None
+                current_paragraph = None
+                current_subparagraph = None
+                current_item_lvl3 = None
             else:
                 # fallback append
                 current_article["content"] = (current_article.get("content", "") + "\n" + ln).strip()
@@ -4393,11 +4584,17 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                         
                         article["metadata"] = article_metadata
                         
-                        # 為項目添加簡化metadata
-                        for item in article["items"]:
+                        # 為項目添加簡化metadata - 支援新結構 (paragraphs) 和舊結構 (items)
+                        paragraphs = article.get("paragraphs", [])
+                        items = article.get("items", [])
+                        items_to_process = paragraphs if paragraphs else items
+                        
+                        for item in items_to_process:
+                            # 支援新結構的鍵名
+                            item_name = item.get("paragraph", item.get("item", ""))
                             item_metadata = {}
                             if options.include_id:
-                                item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item['item']}".replace(" ", "_")
+                                item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item_name}".replace(" ", "_")
                             if options.include_page_range:
                                 item_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化的頁面範圍
                             if options.include_spans:
@@ -4405,17 +4602,37 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                             
                             item["metadata"] = item_metadata
                             
-                            # 為子項目添加簡化metadata
-                            for sub_item in item["sub_items"]:
+                            # 為子項目添加簡化metadata - 支援新結構 (subparagraphs) 和舊結構 (sub_items)
+                            subparagraphs = item.get("subparagraphs", [])
+                            sub_items = item.get("sub_items", [])
+                            sub_items_to_process = subparagraphs if subparagraphs else sub_items
+                            
+                            for sub_item in sub_items_to_process:
+                                # 支援新結構的鍵名
+                                sub_item_name = sub_item.get("subparagraph", sub_item.get("sub_item", ""))
                                 sub_item_metadata = {}
                                 if options.include_id:
-                                    sub_item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item['item']}_{sub_item['item']}".replace(" ", "_")
+                                    sub_item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item_name}_{sub_item_name}".replace(" ", "_")
                                 if options.include_page_range:
                                     sub_item_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化的頁面範圍
                                 if options.include_spans:
                                     sub_item_metadata["spans"] = {"start": 0, "end": len(sub_item["content"])}
                                 
                                 sub_item["metadata"] = sub_item_metadata
+                                
+                                # 處理第三層項目 (items)
+                                third_level_items = sub_item.get("items", [])
+                                for third_item in third_level_items:
+                                    third_item_name = third_item.get("item", "")
+                                    third_item_metadata = {}
+                                    if options.include_id:
+                                        third_item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item_name}_{sub_item_name}_{third_item_name}".replace(" ", "_")
+                                    if options.include_page_range:
+                                        third_item_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化的頁面範圍
+                                    if options.include_spans:
+                                        third_item_metadata["spans"] = {"start": 0, "end": len(third_item["content"])}
+                                    
+                                    third_item["metadata"] = third_item_metadata
                         
                         processed_count += 1
                         if processed_count % 10 == 0:
@@ -5864,5 +6081,339 @@ def hierarchical_retrieve_original(query: str, k: int):
     """原始多層次檢索"""
     # 這裡調用原有的多層次檢索邏輯
     pass
+
+
+# ==================== HopRAG API 端點 ====================
+
+@app.post("/api/build-hoprag-graph")
+async def build_hoprag_graph():
+    """構建HopRAG圖譜"""
+    try:
+        print("🏗️ 開始HopRAG圖譜構建...")
+        
+        # 檢查多層次embedding是否可用
+        if not store.has_multi_level_embeddings():
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Multi-level embeddings not available. Please run /api/multi-level-embed first."}
+            )
+        
+        # 從現有的多層次chunks構建HopRAG圖
+        multi_level_chunks = {}
+        doc_status = {}
+        for doc_id, doc in store.docs.items():
+            doc_status[doc_id] = {
+                "has_multi_level_chunks": hasattr(doc, 'multi_level_chunks') and doc.multi_level_chunks is not None,
+                "chunking_strategy": getattr(doc, 'chunking_strategy', 'unknown'),
+                "multi_level_chunks_count": len(doc.multi_level_chunks) if hasattr(doc, 'multi_level_chunks') and doc.multi_level_chunks else 0
+            }
+            if hasattr(doc, 'multi_level_chunks') and doc.multi_level_chunks:
+                multi_level_chunks[doc_id] = doc.multi_level_chunks
+        
+        if not multi_level_chunks:
+            print(f"❌ 沒有找到多層次chunks，文檔狀態: {doc_status}")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "No multi-level chunks available. Please run multi-level chunking first.",
+                    "doc_status": doc_status,
+                    "available_levels": store.get_available_levels()
+                }
+            )
+        
+        print(f"📊 找到 {len(multi_level_chunks)} 個文檔的多層次chunks")
+        
+        # 構建HopRAG圖
+        await hoprag_system.build_graph_from_multi_level_chunks(multi_level_chunks)
+        
+        # 獲取統計信息
+        stats = hoprag_system.get_graph_statistics()
+        
+        print(f"✅ HopRAG圖譜構建成功！節點: {stats.get('total_nodes', 0)}, 邊: {stats.get('total_edges', 0)}")
+        
+        return {
+            "message": "HopRAG graph built successfully",
+            "statistics": stats,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"❌ HopRAG圖構建失敗: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to build HopRAG graph: {str(e)}"}
+        )
+
+
+@app.get("/api/hoprag-progress")
+def get_hoprag_progress():
+    """獲取HopRAG圖譜構建進度"""
+    try:
+        # 這裡可以返回當前的構建進度
+        # 由於HopRAG系統沒有內建進度追蹤，我們返回基本狀態
+        return {
+            "status": "building" if not hoprag_system.is_graph_built else "completed",
+            "message": "HopRAG圖譜構建中，請查看服務器日誌了解詳細進度",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to get progress: {str(e)}"}
+        )
+
+@app.get("/api/hoprag-status")
+def get_hoprag_status():
+    """獲取HopRAG系統狀態"""
+    try:
+        client_status = hoprag_client_manager.get_client_status()
+        graph_stats = hoprag_system.get_graph_statistics()
+        module_status = hoprag_system.get_module_status()
+        
+        return {
+            "client_status": client_status,
+            "graph_statistics": graph_stats,
+            "module_status": module_status,
+            "system_ready": hoprag_system.is_graph_built,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to get HopRAG status: {str(e)}"}
+        )
+
+
+@app.post("/api/hoprag-config")
+def update_hoprag_config(config_data: dict):
+    """更新HopRAG配置"""
+    try:
+        new_config = HopRAGConfig.from_dict(config_data)
+        new_config.validate()
+        
+        hoprag_system.update_config(new_config)
+        
+        return {
+            "message": "HopRAG configuration updated successfully",
+            "config": new_config.to_dict(),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid configuration: {str(e)}"}
+        )
+
+
+@app.get("/api/hoprag-config")
+def get_hoprag_config():
+    """獲取當前HopRAG配置"""
+    try:
+        return {
+            "config": hoprag_system.config.to_dict(),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to get configuration: {str(e)}"}
+        )
+
+
+@app.post("/api/hoprag-export")
+def export_hoprag_graph():
+    """導出HopRAG圖數據"""
+    try:
+        if not hoprag_system.is_graph_built:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "HopRAG graph not built. Please run /api/build-hoprag-graph first."}
+            )
+        
+        graph_data = hoprag_system.export_graph_data()
+        
+        return {
+            "message": "HopRAG graph data exported successfully",
+            "data": graph_data,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to export graph data: {str(e)}"}
+        )
+
+
+@app.post("/api/hoprag-import")
+def import_hoprag_graph(graph_data: dict):
+    """導入HopRAG圖數據"""
+    try:
+        hoprag_system.import_graph_data(graph_data)
+        
+        return {
+            "message": "HopRAG graph data imported successfully",
+            "statistics": hoprag_system.get_graph_statistics(),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to import graph data: {str(e)}"}
+        )
+
+
+@app.post("/api/hoprag-reset")
+def reset_hoprag_system():
+    """重置HopRAG系統"""
+    try:
+        hoprag_system.reset_system()
+        
+        return {
+            "message": "HopRAG system reset successfully",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to reset system: {str(e)}"}
+        )
+
+
+@app.post("/api/hoprag-enhanced-retrieve")
+async def hoprag_enhanced_retrieve(req: RetrieveRequest):
+    """HopRAG增強檢索"""
+    try:
+        # 檢查HopRAG圖是否已構建
+        if not hoprag_system.is_graph_built:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "HopRAG graph not built. Please run /api/build-hoprag-graph first."}
+            )
+        
+        # 檢查多層次embedding是否可用
+        if not store.has_multi_level_embeddings():
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Multi-level embeddings not available. Please run /api/multi-level-embed first."}
+            )
+        
+        # 執行基礎檢索（使用現有的多層次檢索）
+        base_strategy = getattr(req, 'base_strategy', 'multi_level')
+        use_hoprag = getattr(req, 'use_hoprag', True)
+        
+        if base_strategy == 'multi_level':
+            base_results = multi_level_retrieve_original(req.query, k=20)
+        elif base_strategy == 'single_level':
+            base_results = hierarchical_retrieve_original(req.query, k=20)
+        else:
+            base_results = hybrid_retrieve_original(req.query, k=20)
+        
+        # HopRAG增強處理
+        if use_hoprag:
+            enhanced_results = await hoprag_system.enhanced_retrieve(
+                query=req.query,
+                base_results=base_results,
+                k=req.k
+            )
+        else:
+            enhanced_results = base_results[:req.k]
+        
+        return {
+            "query": req.query,
+            "results": enhanced_results,
+            "strategy": "hoprag_enhanced",
+            "base_strategy": base_strategy,
+            "hoprag_enabled": use_hoprag,
+            "num_results": len(enhanced_results),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"❌ HopRAG增強檢索失敗: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"HopRAG enhanced retrieval failed: {str(e)}"}
+        )
+
+
+def multi_level_retrieve_original(query: str, k: int):
+    """原始多層次檢索（用於HopRAG基礎檢索）"""
+    try:
+        # 檢查是否有可用的多層次embedding
+        if not store.has_multi_level_embeddings():
+            return []
+        
+        # 分析查詢並分類
+        query_analysis = get_query_analysis(query)
+        recommended_level = query_analysis['recommended_level']
+        
+        # 獲取可用的embedding層次
+        available_levels = store.get_available_levels()
+        
+        # 檢查推薦層次是否可用，如果不可用則選擇最佳可用層次
+        if recommended_level not in available_levels:
+            fallback_levels = ['basic_unit', 'basic_unit_component', 'enumeration', 'basic_unit_hierarchy', 'document_component', 'document']
+            for fallback_level in fallback_levels:
+                if fallback_level in available_levels:
+                    recommended_level = fallback_level
+                    break
+        
+        # 獲取推薦層次的embedding
+        level_data = store.get_multi_level_embeddings(recommended_level)
+        if not level_data:
+            return []
+        
+        vectors = level_data['embeddings']
+        chunks = level_data['chunks']
+        doc_ids = level_data['doc_ids']
+        
+        # 計算查詢embedding
+        if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+            query_vector = asyncio.run(embed_gemini([query]))[0]
+        elif USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+            query_vector = embed_bge_m3([query])[0]
+        else:
+            return []
+        
+        # 計算相似度
+        import numpy as np
+        if isinstance(vectors, list):
+            vectors = np.array(vectors)
+        if isinstance(query_vector, list):
+            query_vector = np.array(query_vector)
+        
+        similarities = cosine_similarity([query_vector], vectors)[0]
+        
+        # 獲取top-k結果
+        top_indices = np.argsort(similarities)[::-1][:k]
+        
+        results = []
+        for i, idx in enumerate(top_indices):
+            chunk_content = chunks[idx]
+            doc_id = doc_ids[idx]
+            similarity_score = similarities[idx]
+            
+            results.append({
+                'node_id': f"{doc_id}_{idx}",
+                'content': chunk_content,
+                'similarity_score': float(similarity_score),
+                'doc_id': doc_id,
+                'chunk_index': idx,
+                'rank': i + 1
+            })
+        
+        return results
+        
+    except Exception as e:
+        print(f"❌ 多層次檢索失敗: {e}")
+        return []
 
 

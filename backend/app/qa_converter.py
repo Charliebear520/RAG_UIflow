@@ -46,12 +46,21 @@ class QASetConverter:
                                                 "file_path": "copyright&tradmark.json"
                                             })
                                 
-                                # 處理items和sub_items
-                                for item in article.get("items", []):
-                                    item_name = item.get("item", "")
+                                # 處理items和sub_items - 支援新結構 (paragraphs) 和舊結構 (items)
+                                paragraphs = article.get("paragraphs", [])
+                                items = article.get("items", [])
+                                items_to_process = paragraphs if paragraphs else items
+                                
+                                for item in items_to_process:
+                                    # 支援新結構的鍵名
+                                    item_name = item.get("paragraph", item.get("item", ""))
                                     
-                                    # 處理item的sub_items
-                                    for sub_item in item.get("sub_items", []):
+                                    # 處理item的sub_items - 支援新結構 (subparagraphs) 和舊結構 (sub_items)
+                                    subparagraphs = item.get("subparagraphs", [])
+                                    sub_items = item.get("sub_items", [])
+                                    sub_items_to_process = subparagraphs if subparagraphs else sub_items
+                                    
+                                    for sub_item in sub_items_to_process:
                                         sub_item_content = sub_item.get("content", "")
                                         sub_item_metadata = sub_item.get("metadata", {})
                                         

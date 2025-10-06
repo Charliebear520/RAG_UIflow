@@ -48,6 +48,74 @@ class EvaluationMetrics(BaseModel):
     chunk_count: int
     avg_chunk_length: float
     length_variance: float
+# === Helper: 構建文字來源自 JSON（確保以當前 JSON 為準） ===
+def build_text_from_json(json_data: Dict[str, Any]) -> str:
+    """將法條 JSON 結構序列化為線性文字，供非結構化策略（如 fixed_size）使用。
+
+    注意：此處僅串接可見內容欄位，確保使用者在上傳頁面刪除的內容不再出現在分塊中。
+    """
+    if not json_data or not isinstance(json_data, dict):
+        return ""
+
+    parts: list[str] = []
+    for law in (json_data.get("laws") or []):
+        law_name = law.get("law_name") or ""
+        if law_name:
+            parts.append(str(law_name))
+        for chapter in (law.get("chapters") or []):
+            chapter_title = chapter.get("chapter") or ""
+            if chapter_title:
+                parts.append(str(chapter_title))
+            for section in (chapter.get("sections") or []):
+                section_title = section.get("section") or ""
+                if section_title:
+                    parts.append(str(section_title))
+                for article in (section.get("articles") or []):
+                    # 條文標題與內容
+                    article_title = article.get("article") or ""
+                    if article_title:
+                        parts.append(str(article_title))
+                    article_content = article.get("content") or ""
+                    if article_content:
+                        parts.append(str(article_content))
+
+                    # 新鍵 paragraphs 或舊鍵 items
+                    paragraphs = article.get("paragraphs") or []
+                    items = article.get("items") or []
+                    items_to_process = paragraphs if paragraphs else items
+                    for item in items_to_process:
+                        item_title = item.get("paragraph") or item.get("item") or ""
+                        if item_title:
+                            parts.append(str(item_title))
+                        item_content = item.get("content") or ""
+                        if item_content:
+                            parts.append(str(item_content))
+
+                        # 新鍵 subparagraphs 或舊鍵 sub_items
+                        subparagraphs = item.get("subparagraphs") or []
+                        old_sub_items = item.get("sub_items") or []
+                        sub_items_to_process = subparagraphs if subparagraphs else old_sub_items
+                        for sub in sub_items_to_process:
+                            sub_title = sub.get("subparagraph") or sub.get("sub_item") or ""
+                            if sub_title:
+                                parts.append(str(sub_title))
+                            sub_content = sub.get("content") or ""
+                            if sub_content:
+                                parts.append(str(sub_content))
+
+                            # 第三層 items（目）
+                            third_items = sub.get("items") or []
+                            for t in third_items:
+                                third_title = t.get("item") or ""
+                                if third_title:
+                                    parts.append(str(third_title))
+                                third_content = t.get("content") or ""
+                                if third_content:
+                                    parts.append(str(third_content))
+
+    # 使用換行連接，利於之後的固定大小/滑動窗口等策略邊界感知
+    return "\n\n".join([p for p in parts if isinstance(p, str) and p.strip()])
+
 
 # === Normalization helpers (add minimal keys for evaluation/alignment) ===
 def _nfkc(s: str) -> str:
@@ -1113,23 +1181,44 @@ def generate_text_from_merged_doc(merged_doc: Dict[str, Any]) -> str:
                             text_parts.append(f" {article_content}")
                         text_parts.append("\n")
                     
-                    # 處理項目
+                    # 處理項目 - 支援新結構 (paragraphs) 和舊結構 (items)
+                    paragraphs = article.get("paragraphs", [])
                     items = article.get("items", [])
-                    for item in items:
-                        item_name = item.get("item", "")
+                    
+                    # 使用 paragraphs 如果存在，否則使用 items
+                    items_to_process = paragraphs if paragraphs else items
+                    
+                    for item in items_to_process:
+                        # 支援新結構的鍵名
+                        item_name = item.get("paragraph", item.get("item", ""))
                         item_content = item.get("content", "")
                         
                         if item_name and item_content:
                             text_parts.append(f"{item_name} {item_content}\n")
                         
-                        # 處理子項目
+                        # 處理子項目 - 支援新結構 (subparagraphs) 和舊結構 (sub_items)
+                        subparagraphs = item.get("subparagraphs", [])
                         sub_items = item.get("sub_items", [])
-                        for sub_item in sub_items:
-                            sub_item_name = sub_item.get("sub_item", "")
+                        
+                        # 使用 subparagraphs 如果存在，否則使用 sub_items
+                        sub_items_to_process = subparagraphs if subparagraphs else sub_items
+                        
+                        for sub_item in sub_items_to_process:
+                            # 支援新結構的鍵名
+                            sub_item_name = sub_item.get("subparagraph", sub_item.get("sub_item", ""))
                             sub_item_content = sub_item.get("content", "")
                             
                             if sub_item_name and sub_item_content:
                                 text_parts.append(f"{sub_item_name} {sub_item_content}\n")
+                            
+                            # 處理第三層項目 (items)
+                            third_level_items = sub_item.get("items", [])
+                            for third_item in third_level_items:
+                                third_item_name = third_item.get("item", "")
+                                third_item_content = third_item.get("content", "")
+                                
+                                if third_item_name and third_item_content:
+                                    text_parts.append(f"{third_item_name} {third_item_content}\n")
         
         text_parts.append("\n" + "="*50 + "\n")
     
@@ -1412,15 +1501,37 @@ async def chunk_document(request: ChunkConfig):
             "overlap_ratio": request.overlap_ratio
         }
         
-        # 如果是結構化層次分割，添加額外參數
+        # 如果是結構化層次分割，添加額外參數並驗證 JSON 結構
         if request.strategy == "structured_hierarchical":
             chunk_kwargs["chunk_by"] = request.chunk_by
+            # 強化驗證：json_data 必須存在且為合法結構（包含 laws 或 chapters）
+            if not doc.json_data or not isinstance(doc.json_data, dict) or not (
+                (doc.json_data.get("laws") or []) or (doc.json_data.get("chapters") or [])
+            ):
+                return JSONResponse(status_code=400, content={
+                    "error": "多層級結構化分割需要合法的 JSON（需包含 laws 陣列或 chapters 陣列）。請於上傳頁保存正確的 JSON 後再試。"
+                })
         
+        # 若為結構化層次分割但未提供已保存的 JSON，明確拒絕，避免回退到純文字導致層級遺失
+        if request.strategy == "structured_hierarchical" and not doc.json_data:
+            return JSONResponse(status_code=400, content={
+                "error": "請先於上傳頁保存結構化JSON（update-json），再執行多層級結構化分割。當前文檔未檢測到 json_data。"
+            })
+
         # 生成分塊 - 使用chunk_with_span來獲取結構化信息
         from .chunking import chunk_text_with_span
+
+        # 當存在 json_data 時，對非 structured_hierarchical 策略也改用由 JSON 構建的文字來源
+        effective_text = doc.text
+        if doc.json_data and request.strategy != "structured_hierarchical":
+            try:
+                effective_text = build_text_from_json(doc.json_data)
+            except Exception:
+                # 保底：若構建失敗，仍回退到 doc.text
+                effective_text = doc.text
         
         chunks_with_span = chunk_text_with_span(
-            doc.text,
+            effective_text,
             strategy=request.strategy,
             json_data=doc.json_data,
             **chunk_kwargs
@@ -2851,10 +2962,23 @@ async def process_multiple_chunking(
                             chunk_kwargs["min_chunk_size_sw"] = 100
                             chunk_kwargs["max_chunk_size_sw"] = chunk_size * 2
                         
+                        # 若為結構化層次分割但未提供已保存的 JSON，明確跳過，避免回退到純文字
+                        if strategy == "structured_hierarchical":
+                            if not doc.json_data or not isinstance(doc.json_data, dict) or not (
+                                (doc.json_data.get("laws") or []) or (doc.json_data.get("chapters") or [])
+                            ):
+                                raise Exception("structured_hierarchical 需要合法的 JSON（包含 laws 或 chapters）。")
+
                         # 生成分塊（帶span信息）
                         from .chunking import chunk_text_with_span
+                        effective_text = doc.text
+                        if doc.json_data and strategy != "structured_hierarchical":
+                            try:
+                                effective_text = build_text_from_json(doc.json_data)
+                            except Exception:
+                                effective_text = doc.text
                         chunks_with_span = chunk_text_with_span(
-                            doc.text,
+                            effective_text,
                             strategy=strategy,
                             json_data=doc.json_data,
                             **chunk_kwargs

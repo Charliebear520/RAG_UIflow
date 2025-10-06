@@ -2,6 +2,7 @@ import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRag } from "../lib/ragStore";
 import Editor from "@monaco-editor/react";
+import { api } from "../lib/api";
 
 interface MetadataOptions {
   include_id: boolean;
@@ -490,7 +491,26 @@ export function UploadPage() {
                   </a>
                   <button
                     className="btn btn-success btn-sm"
-                    onClick={() => nav("/chunk")}
+                    onClick={async () => {
+                      try {
+                        // 將目前預覽中的 JSON（若在編輯則取 editedJson，否則取現有 jsonData）同步到後端
+                        let jsonToSave: any = jsonData;
+                        if (isEditing) {
+                          const parsed = JSON.parse(editedJson || "{}");
+                          jsonToSave = parsed;
+                          // 更新到全域 store
+                          updateJsonData(parsed);
+                        }
+                        // 若有 docId，顯式同步到後端，確保 chunk page 使用最新 JSON
+                        if (docId && jsonToSave) {
+                          await api.updateJson(docId, jsonToSave);
+                        }
+                        nav("/chunk");
+                      } catch (e) {
+                        const msg = e instanceof Error ? e.message : String(e);
+                        alert(`JSON 無法保存：${msg}`);
+                      }
+                    }}
                   >
                     Continue to Chunk
                   </button>
