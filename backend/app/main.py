@@ -62,6 +62,11 @@ except ImportError:  # pragma: no cover - optional dependency
     SentenceTransformer = None  # type: ignore
     SENTENCE_TRANSFORMERS_AVAILABLE = False
 
+# Embedding 維度配置
+# Gemini: 支援 128-3072，建議 768/1536/3072
+# BGE-M3: 固定 1024 或 3072（取決於配置）
+EMBEDDING_DIMENSION = 3072  # 🎯 統一配置：改這裡就能改全部
+
 load_dotenv()
 
 
@@ -1952,6 +1957,7 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
         raise RuntimeError("httpx not available")
     if not GOOGLE_API_KEY:
         raise RuntimeError("GOOGLE_API_KEY not set")
+    # Gemini embedding model: gemini-embedding-001 (維度可配置: 128-3072)
     model = "gemini-embedding-001"
     # 使用正確的 API 端點格式
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
@@ -1968,13 +1974,17 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
         for i, text in enumerate(texts):
             try:
                 # 檢查文本長度，Gemini API有長度限制
-                if len(text) > 10000:  # 限制文本長度
-                    text = text[:10000]
-                    print(f"⚠️ 文本過長，已截斷到10000字符")
+                # Gemini embedding API 支持最多 2048 tokens，約 10000-20000 字符（中文）
+                MAX_CHARS = 20000
+                original_length = len(text)
+                if original_length > MAX_CHARS:
+                    text = text[:MAX_CHARS]
+                    print(f"⚠️ 文本過長({original_length}字符)，已截斷到{MAX_CHARS}字符")
                 
                 payload = {
                     "model": f"models/{model}",
-                    "content": {"parts": [{"text": text}]}
+                    "content": {"parts": [{"text": text}]},
+                    "output_dimensionality": EMBEDDING_DIMENSION  # 使用全局配置的維度
                 }
                 r = await client.post(url, headers=headers, json=payload)
                 
@@ -1982,21 +1992,36 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
                     print(f"❌ Gemini API 400錯誤，文本內容可能有問題: {text[:100]}...")
                     # 使用隨機向量作為fallback
                     import numpy as np
-                    fallback_vector = np.random.randn(768).astype(np.float32).tolist()
+                    fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
                     out.append(fallback_vector)
                     continue
                 
                 r.raise_for_status()
                 data = r.json()
+                
+                # 調試：打印完整的API響應結構
+                if i == 0:  # 只在第一次打印
+                    print(f"📋 Gemini API響應結構: {list(data.keys())}")
+                    if "embedding" in data:
+                        print(f"📋 Embedding結構: {list(data['embedding'].keys())}")
+                
                 # 根據官方文檔，響應格式是 {"embedding": {"values": [...]}}
                 embedding_values = data.get("embedding", {}).get("values", [])
                 
                 if not embedding_values:
                     print(f"❌ 獲取到的embedding為空，使用fallback向量")
+                    print(f"❌ 完整響應: {data}")
                     import numpy as np
-                    fallback_vector = np.random.randn(768).astype(np.float32).tolist()
+                    fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
                     out.append(fallback_vector)
                 else:
+                    # 調試：打印實際返回的維度
+                    actual_dimension = len(embedding_values)
+                    if i == 0:  # 只在第一次打印
+                        print(f"✅ Gemini返回的向量維度: {actual_dimension}")
+                    if actual_dimension != EMBEDDING_DIMENSION:
+                        print(f"⚠️ 警告：Gemini返回的向量維度為 {actual_dimension}，與配置的{EMBEDDING_DIMENSION}不同")
+                        print(f"⚠️ 這可能會導致與之前存儲的embedding維度不匹配")
                     out.append(embedding_values)
                 
                 # 顯示進度
@@ -2007,7 +2032,7 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
                 print(f"❌ 處理第{i+1}個文本時出錯: {e}")
                 # 使用隨機向量作為fallback
                 import numpy as np
-                fallback_vector = np.random.randn(768).astype(np.float32).tolist()
+                fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
                 out.append(fallback_vector)
                 continue
     
@@ -2127,6 +2152,9 @@ def convert_structured_to_multi_level(structured_chunks):
         else:
             chunk_by = metadata.get('chunk_by', 'article')
         
+        # 將大寫的level名稱轉換為小寫（兼容MultiLevelStructuredChunking生成的格式）
+        chunk_by = chunk_by.lower()
+        
         # 根據chunk_by和內容特徵分類到對應層次
         level_name, semantic_features = classify_chunk_to_level(content, metadata, chunk_by)
         
@@ -2165,23 +2193,19 @@ def classify_chunk_to_level(content: str, metadata: dict, chunk_by: str) -> tupl
     
     # 根據論文定義的六個粒度級別映射
     level_mapping = {
-        # 1. 文件層級 (Document Level) - 整個法規
+        # 1) law_name → document
         'law': 'document',
-        
-        # 2. 文件組成部分層級 (Document Component Level) - 章
+        # 2) chapter → document_component
         'chapter': 'document_component',
-        
-        # 3. 基本單位層次結構層級 (Basic Unit Hierarchy Level) - 節
-        'section': 'basic_unit_hierarchy', 
-        
-        # 4. 基本單位層級 (Basic Unit Level) - 條
+        # 3) section → basic_unit_hierarchy
+        'section': 'basic_unit_hierarchy',
+        # 4) article → basic_unit
         'article': 'basic_unit',
-        
-        # 5. 基本單位組成部分層級 (Basic Unit Component Level) - 項
-        'item': 'basic_unit_component',
-        
-        # 6. 列舉層級 (Enumeration Level) - 款/目
-        'sub_item': 'enumeration'
+        # 5) paragraph/項 → basic_unit_component
+        'paragraph': 'basic_unit_component',
+        # 6) subparagraph/款 → enumeration；item/目 → enumeration
+        'subparagraph': 'enumeration',
+        'item': 'enumeration'
     }
     
     # 首先根據chunk_by確定基本層次
@@ -2191,31 +2215,21 @@ def classify_chunk_to_level(content: str, metadata: dict, chunk_by: str) -> tupl
     semantic_features = analyze_chunk_semantics(content)
     
     # 根據語義特徵和內容長度進行精細調整
+    # 以你指定的固定映射為主；只保留少量合理化（例如 article 的定義性長文可歸到 basic_unit_component）
     if chunk_by == 'article':
-        # 條文級別：根據內容特徵判斷
-        if semantic_features['is_definition'] and len(content) > 200:
-            # 定義性條文，可能是基本單位組成部分
-            level = 'basic_unit_component'
-        else:
-            # 一般條文，保持為基本單位
-            level = 'basic_unit'
-    elif chunk_by == 'item':
-        # 項級別：根據內容特徵和長度判斷
-        if semantic_features['is_enumeration'] or len(content) < 50:
-            # 短內容或列舉性內容，可能是列舉層級
-            level = 'enumeration'
-        else:
-            # 長內容的項，可能是基本單位組成部分
-            level = 'basic_unit_component'
-    elif chunk_by == 'sub_item':
-        # 款/目級別：通常是列舉層級
+        level = 'basic_unit' if not (semantic_features['is_definition'] and len(content) > 200) else 'basic_unit_component'
+    elif chunk_by in ('paragraph',):
+        # 項（paragraph）固定為 basic_unit_component
+        level = 'basic_unit_component'
+    elif chunk_by in ('subparagraph', 'item'):
+        # 款/目固定為 enumeration（注意：此處的 item 代表「目」）
         level = 'enumeration'
     elif chunk_by == 'chapter':
-        # 章級別：直接映射到文件組成部分層級
         level = 'document_component'
     elif chunk_by == 'section':
-        # 節級別：基本單位層次結構
         level = 'basic_unit_hierarchy'
+    elif chunk_by == 'law':
+        level = 'document'
     else:
         level = base_level
     
@@ -2393,33 +2407,25 @@ async def multi_level_embed(req: EmbedRequest):
         doc = store.docs.get(doc_id)
         if doc and hasattr(doc, 'multi_level_chunks') and doc.multi_level_chunks:
             all_multi_level_chunks[doc_id] = doc.multi_level_chunks
-        elif doc and hasattr(doc, 'structured_chunks') and doc.structured_chunks:
-            # 如果沒有multi_level_chunks但有structured_chunks，則轉換為六個層次格式
-            print(f"🔄 將結構化分塊轉換為六個粒度級別格式，文檔: {doc.filename}")
-            
-            # 調試：檢查文檔的JSON結構
-            if hasattr(doc, 'json_data') and doc.json_data:
-                print(f"📋 文檔JSON結構調試:")
-                print(f"   law_name: {doc.json_data.get('law_name', 'N/A')}")
-                print(f"   chapters數量: {len(doc.json_data.get('chapters', []))}")
-                
-                chapters = doc.json_data.get('chapters', [])
-                for i, chapter in enumerate(chapters[:3]):  # 只顯示前3個章
-                    print(f"   章{i+1}: {chapter.get('chapter', 'N/A')}")
-                    sections = chapter.get('sections', [])
-                    print(f"     sections數量: {len(sections)}")
-                    for j, section in enumerate(sections[:2]):  # 只顯示前2個節
-                        print(f"     節{j+1}: {section.get('section', 'N/A')}")
-                        articles = section.get('articles', [])
-                        print(f"       articles數量: {len(articles)}")
-            
-            converted_chunks = convert_structured_to_multi_level(doc.structured_chunks)
+        elif doc and ((hasattr(doc, 'structured_chunks') and doc.structured_chunks) or (hasattr(doc, 'json_data') and doc.json_data)):
+            # 若已有結構化chunks或有json結構，優先基於JSON生成完整六層，避免只剩條級
+            print(f"🔄 基於JSON生成六個粒度級別格式，文檔: {doc.filename}")
+            try:
+                from .chunking import MultiLevelStructuredChunking
+                ml_chunker = MultiLevelStructuredChunking()
+                # 直接從 JSON 產生多層級帶 span 的列表
+                raw_multi_level_list = ml_chunker.chunk_with_span(doc.text, json_data=getattr(doc, 'json_data', None))
+                # 統一轉為六層字典結構
+                converted_chunks = convert_structured_to_multi_level(raw_multi_level_list)
+            except Exception as e:
+                print(f"⚠️ 基於JSON生成多層級失敗，回退用structured_chunks轉換: {e}")
+                converted_chunks = convert_structured_to_multi_level(doc.structured_chunks or [])
+
             all_multi_level_chunks[doc_id] = converted_chunks
-            
-            # 將轉換後的數據保存到文檔中，供HopRAG使用
+            # 保存到文檔
             doc.multi_level_chunks = converted_chunks
             doc.chunking_strategy = "structured_to_multi_level"
-            store.add_doc(doc)  # 保存更新後的文檔
+            store.add_doc(doc)
     
     if not all_multi_level_chunks:
         return JSONResponse(
@@ -2484,8 +2490,13 @@ async def multi_level_embed(req: EmbedRequest):
                 print(f"📊 進度: {completed_levels}/{total_levels} ({progress:.1f}%)")
                 continue
             
-            # 存儲該層次的embedding
-            store.set_multi_level_embeddings(level_name, vectors, level_chunks, level_doc_ids)
+            # 存儲該層次的embedding和元數據
+            metadata = {
+                "provider": provider,
+                "model": model,
+                "dimension": len(vectors[0]) if vectors else 0
+            }
+            store.set_multi_level_embeddings(level_name, vectors, level_chunks, level_doc_ids, metadata)
             
             level_results[level_name] = {
                 "provider": provider,
@@ -2507,14 +2518,19 @@ async def multi_level_embed(req: EmbedRequest):
             # 使用隨機向量作為fallback
             try:
                 import numpy as np
-                fallback_vectors = np.random.randn(len(level_chunks), 768).astype(np.float32).tolist()
-                store.set_multi_level_embeddings(level_name, fallback_vectors, level_chunks, level_doc_ids)
+                fallback_vectors = np.random.randn(len(level_chunks), EMBEDDING_DIMENSION).astype(np.float32).tolist()
+                metadata = {
+                    "provider": "fallback_random",
+                    "model": f"random_{EMBEDDING_DIMENSION}d",
+                    "dimension": EMBEDDING_DIMENSION
+                }
+                store.set_multi_level_embeddings(level_name, fallback_vectors, level_chunks, level_doc_ids, metadata)
                 
                 level_results[level_name] = {
                     "provider": "fallback_random",
-                    "model": "random_768d",
+                    "model": f"random_{EMBEDDING_DIMENSION}d",
                     "num_vectors": len(fallback_vectors),
-                    "dimension": 768,
+                    "dimension": EMBEDDING_DIMENSION,
                     "num_chunks": len(level_chunks),
                     "level_description": get_level_description(level_name),
                     "error": f"Original embedding failed, using fallback: {str(e)}"
@@ -3529,6 +3545,7 @@ def multi_level_retrieve(req: RetrieveRequest):
     vectors = level_data['embeddings']
     chunks = level_data['chunks']
     doc_ids = level_data['doc_ids']
+    metadata = level_data.get('metadata', {})
     
     print(f"📊 使用層次 '{recommended_level}' 進行檢索，共 {len(chunks)} 個chunks")
     
@@ -3536,15 +3553,33 @@ def multi_level_retrieve(req: RetrieveRequest):
     try:
         import numpy as np
         
-        # 獲取查詢的embedding
-        if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+        # 檢測存儲的embedding模型信息
+        embedding_provider = metadata.get('provider')
+        embedding_dimension = metadata.get('dimension')
+        
+        if embedding_provider:
+            print(f"🔍 檢測到存儲的embedding提供者: {embedding_provider}, 維度: {embedding_dimension}")
+        
+        # 根據存儲的embedding模型選擇查詢向量化方法
+        query_vector = None
+        if embedding_provider == 'gemini' or (not embedding_provider and USE_GEMINI_EMBEDDING and GOOGLE_API_KEY):
             query_vector = asyncio.run(embed_gemini([req.query]))[0]
-        elif USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+            print(f"✅ 使用Gemini生成查詢向量，維度: {len(query_vector)}")
+        elif embedding_provider == 'bge-m3' or (not embedding_provider and USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE):
             query_vector = embed_bge_m3([req.query])[0]
+            print(f"✅ 使用BGE-M3生成查詢向量，維度: {len(query_vector)}")
         else:
             return JSONResponse(
                 status_code=500,
                 content={"error": "No embedding method available for query"}
+            )
+        
+        # 驗證維度匹配
+        if embedding_dimension and len(query_vector) != embedding_dimension:
+            print(f"⚠️ 警告：查詢向量維度({len(query_vector)})與存儲向量維度({embedding_dimension})不匹配")
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"Dimension mismatch: query vector has {len(query_vector)} dimensions but stored embeddings have {embedding_dimension} dimensions. Please re-run /api/multi-level-embed with the current embedding provider."}
             )
         
         # 計算相似度
@@ -3659,15 +3694,38 @@ def multi_level_fusion_retrieve(req: MultiLevelFusionRequest):
     try:
         import numpy as np
         
-        # 獲取查詢的embedding
-        if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+        # 檢測第一個可用層次的模型信息，確保使用相同的模型
+        first_level = available_levels[0] if available_levels else None
+        embedding_provider = None
+        embedding_dimension = None
+        
+        if first_level:
+            first_level_data = store.get_multi_level_embeddings(first_level)
+            if first_level_data and 'metadata' in first_level_data:
+                embedding_provider = first_level_data['metadata'].get('provider')
+                embedding_dimension = first_level_data['metadata'].get('dimension')
+                print(f"🔍 檢測到存儲的embedding提供者: {embedding_provider}, 維度: {embedding_dimension}")
+        
+        # 根據存儲的embedding模型選擇查詢向量化方法
+        query_vector = None
+        if embedding_provider == 'gemini' or (not embedding_provider and USE_GEMINI_EMBEDDING and GOOGLE_API_KEY):
             query_vector = asyncio.run(embed_gemini([req.query]))[0]
-        elif USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+            print(f"✅ 使用Gemini生成查詢向量，維度: {len(query_vector)}")
+        elif embedding_provider == 'bge-m3' or (not embedding_provider and USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE):
             query_vector = embed_bge_m3([req.query])[0]
+            print(f"✅ 使用BGE-M3生成查詢向量，維度: {len(query_vector)}")
         else:
             return JSONResponse(
                 status_code=500,
                 content={"error": "No embedding method available for query"}
+            )
+        
+        # 驗證維度匹配
+        if embedding_dimension and len(query_vector) != embedding_dimension:
+            print(f"⚠️ 警告：查詢向量維度({len(query_vector)})與存儲向量維度({embedding_dimension})不匹配")
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"Dimension mismatch: query vector has {len(query_vector)} dimensions but stored embeddings have {embedding_dimension} dimensions. Please re-run /api/multi-level-embed with the current embedding provider."}
             )
         
         # 對每個層次進行檢索

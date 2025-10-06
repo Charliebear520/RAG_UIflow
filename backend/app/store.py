@@ -20,6 +20,7 @@ class InMemoryStore:
         self.multi_level_embeddings: Dict[str, Dict[str, Any]] = {}
         self.multi_level_chunk_doc_ids: Dict[str, List[str]] = {}
         self.multi_level_chunks_flat: Dict[str, List[str]] = {}
+        self.multi_level_metadata: Dict[str, Dict[str, Any]] = {}  # 存儲模型信息等元數據
 
     def reset_embeddings(self):
         """清除向量/索引狀態，以便重新計算嵌入"""
@@ -31,6 +32,7 @@ class InMemoryStore:
         self.multi_level_embeddings = {}
         self.multi_level_chunk_doc_ids = {}
         self.multi_level_chunks_flat = {}
+        self.multi_level_metadata = {}
 
     def add_doc(self, doc_record: DocRecord):
         """添加文檔記錄"""
@@ -73,11 +75,13 @@ class InMemoryStore:
         """列出所有評估任務"""
         return list(self.evaluation_tasks.values())
     
-    def set_multi_level_embeddings(self, level_name: str, embeddings: Any, chunks: List[str], doc_ids: List[str]):
+    def set_multi_level_embeddings(self, level_name: str, embeddings: Any, chunks: List[str], doc_ids: List[str], metadata: Dict[str, Any] = None):
         """設置多層次embedding"""
         self.multi_level_embeddings[level_name] = embeddings
         self.multi_level_chunks_flat[level_name] = chunks
         self.multi_level_chunk_doc_ids[level_name] = doc_ids
+        if metadata:
+            self.multi_level_metadata[level_name] = metadata
     
     def get_multi_level_embeddings(self, level_name: str) -> Optional[Dict[str, Any]]:
         """獲取指定層次的embedding"""
@@ -85,7 +89,8 @@ class InMemoryStore:
             return {
                 'embeddings': self.multi_level_embeddings[level_name],
                 'chunks': self.multi_level_chunks_flat.get(level_name, []),
-                'doc_ids': self.multi_level_chunk_doc_ids.get(level_name, [])
+                'doc_ids': self.multi_level_chunk_doc_ids.get(level_name, []),
+                'metadata': self.multi_level_metadata.get(level_name, {})
             }
         return None
     
