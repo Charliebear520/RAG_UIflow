@@ -401,19 +401,30 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function hopragEnhancedRetrieve(query: string, k: number) {
-    const res = await api.hopragEnhancedRetrieve({
-      query,
-      k,
-    });
-    const retrievalData = res.results.map((result: any) => ({
-      ...result,
-      strategy: res.strategy,
-      base_strategy: res.base_strategy,
-      hoprag_enabled: res.hoprag_enabled,
-      hop_level: result.hop_level || 0,
-      hop_source: result.hop_source || "base_retrieval",
-    }));
-    setRetrieval(retrievalData);
+    try {
+      console.log("🔍 開始HopRAG檢索:", { query, k });
+      const res = await api.hopragEnhancedRetrieve({
+        query,
+        k,
+      });
+      console.log("✅ HopRAG檢索響應:", res);
+
+      const retrievalData = res.results.map((result: any) => ({
+        ...result,
+        strategy: res.strategy,
+        base_strategy: res.base_strategy,
+        hoprag_enabled: res.hoprag_enabled,
+        hop_level: result.hop_level || 0,
+        hop_source: result.hop_source || "base_retrieval",
+      }));
+
+      console.log("📊 處理後的檢索數據:", retrievalData);
+      setRetrieval(retrievalData);
+      console.log("✅ 檢索數據已設置到狀態");
+    } catch (error) {
+      console.error("❌ HopRAG檢索失敗:", error);
+      throw error;
+    }
   }
 
   async function generate(query: string, topK: number) {

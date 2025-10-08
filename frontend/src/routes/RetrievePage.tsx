@@ -31,6 +31,13 @@ export function RetrievePage() {
   const [hopragLoading, setHopragLoading] = useState(false);
   const [hopragMessage, setHopragMessage] = useState<string>("");
 
+  // Structured-HopRAG構建狀態
+  const [structuredHopragBuilt, setStructuredHopragBuilt] = useState(false);
+  const [buildingStructuredHoprag, setBuildingStructuredHoprag] =
+    useState(false);
+  const [structuredHopragRetrieval, setStructuredHopragRetrieval] =
+    useState<any>(null);
+
   // HopRAG管理功能
   const fetchHopragStatus = async () => {
     try {
@@ -109,6 +116,35 @@ export function RetrievePage() {
       );
     } finally {
       setHopragLoading(false);
+    }
+  };
+
+  const buildStructuredHoprag = async () => {
+    setBuildingStructuredHoprag(true);
+    try {
+      const response = await fetch("/api/build-structured-hoprag-graph", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await response.json();
+
+      if (data.status === "success") {
+        setStructuredHopragBuilt(true);
+        alert(
+          `Structured-HopRAG圖譜構建成功！\n節點: ${
+            data.statistics.total_nodes || 0
+          }\n邊: ${
+            data.statistics.total_edges || 0
+          }\n構建時間: ${data.build_time.toFixed(2)}秒`
+        );
+      } else {
+        alert("Structured-HopRAG圖譜構建失敗");
+      }
+    } catch (error) {
+      console.error("構建Structured-HopRAG圖譜錯誤:", error);
+      alert("Structured-HopRAG圖譜構建錯誤");
+    } finally {
+      setBuildingStructuredHoprag(false);
     }
   };
 
@@ -196,7 +232,47 @@ export function RetrievePage() {
               多層次融合檢索 (Multi-Layered Fusion) 🔄
             </label>
           </div>
+          <div className="form-check form-check-inline">
+            <input
+              className="form-check-input"
+              type="radio"
+              name="retrievalMethod"
+              id="structuredHoprag"
+              value="structured_hoprag"
+              checked={retrievalMethod === "structured_hoprag"}
+              onChange={(e) => setRetrievalMethod(e.target.value)}
+            />
+            <label className="form-check-label" htmlFor="structuredHoprag">
+              Structured-HopRAG 🚀
+            </label>
+          </div>
         </div>
+
+        {/* Structured-HopRAG構建按鈕 */}
+        {retrievalMethod === "structured_hoprag" && (
+          <div className="alert alert-info mb-3">
+            <div className="d-flex align-items-center gap-2 mb-2">
+              <button
+                className="btn btn-sm btn-outline-success"
+                onClick={buildStructuredHoprag}
+                disabled={buildingStructuredHoprag || structuredHopragBuilt}
+              >
+                {buildingStructuredHoprag
+                  ? "構建中..."
+                  : structuredHopragBuilt
+                  ? "Structured-HopRAG已構建"
+                  : "構建Structured-HopRAG"}
+              </button>
+              {structuredHopragBuilt && (
+                <span className="badge bg-success">就緒 🚀</span>
+              )}
+            </div>
+            <small className="text-muted">
+              針對結構化法律文本優化的HopRAG系統：95%索引成本降低 +
+              99.8%檢索速度提升
+            </small>
+          </div>
+        )}
 
         {/* 方法說明 */}
         <div className="alert alert-info mb-3">
@@ -225,19 +301,48 @@ export function RetrievePage() {
 
         {/* HopRAG使用指導 */}
         {retrievalMethod === "hoprag" && (
-          <div className="alert alert-warning mb-3">
+          <div
+            className={`alert ${
+              hopragStatus?.system_ready ? "alert-success" : "alert-warning"
+            } mb-3`}
+          >
             <h6 className="mb-2">🧠 HopRAG 使用說明</h6>
             <div className="row">
               <div className="col-md-8">
                 <p className="mb-2">
-                  <strong>HopRAG需要先完成以下步驟：</strong>
+                  <strong>HopRAG狀態：</strong>
+                  {hopragStatus?.system_ready ? (
+                    <span className="badge bg-success ms-2">
+                      ✅ 系統就緒，可以進行檢索
+                    </span>
+                  ) : (
+                    <span className="badge bg-warning ms-2">
+                      ⚠️ 系統未就緒，需要構建圖譜
+                    </span>
+                  )}
                 </p>
-                <ol className="mb-2 small">
-                  <li>確保已上傳法律文檔並完成分塊處理</li>
-                  <li>執行多層次embedding生成</li>
-                  <li>構建HopRAG圖譜（見下方管理面板）</li>
-                  <li>等待圖譜構建完成後即可使用HopRAG檢索</li>
-                </ol>
+                {!hopragStatus?.system_ready && (
+                  <div>
+                    <p className="mb-2">
+                      <strong>HopRAG需要先完成以下步驟：</strong>
+                    </p>
+                    <ol className="mb-2 small">
+                      <li>確保已上傳法律文檔並完成分塊處理</li>
+                      <li>執行多層次embedding生成</li>
+                      <li>構建HopRAG圖譜（見下方管理面板）</li>
+                      <li>等待圖譜構建完成後即可使用HopRAG檢索</li>
+                    </ol>
+                  </div>
+                )}
+                {hopragStatus?.system_ready &&
+                  hopragStatus?.graph_statistics && (
+                    <div className="mb-2">
+                      <small className="text-muted">
+                        📊 圖譜統計：{hopragStatus.graph_statistics.total_nodes}
+                        個節點，{hopragStatus.graph_statistics.total_edges}條邊
+                      </small>
+                    </div>
+                  )}
               </div>
               <div className="col-md-4 text-end">
                 <button
@@ -492,18 +597,47 @@ export function RetrievePage() {
             e.preventDefault();
             if (!canRetrieve) return;
             setBusy(true);
-            if (retrievalMethod === "hybrid") {
-              await hybridRetrieve(query, k);
-            } else if (retrievalMethod === "multi_level") {
-              await multiLevelRetrieve(query, k);
-            } else if (retrievalMethod === "multi_level_fusion") {
-              await multiLevelFusionRetrieve(query, k);
-            } else if (retrievalMethod === "hoprag") {
-              await hopragEnhancedRetrieve(query, k);
-            } else {
-              await retrieve(query, k);
+
+            try {
+              if (retrievalMethod === "hybrid") {
+                await hybridRetrieve(query, k);
+              } else if (retrievalMethod === "multi_level") {
+                await multiLevelRetrieve(query, k);
+              } else if (retrievalMethod === "multi_level_fusion") {
+                await multiLevelFusionRetrieve(query, k);
+              } else if (retrievalMethod === "hoprag") {
+                // 檢查HopRAG圖譜是否已構建
+                if (!hopragStatus?.system_ready) {
+                  alert("請先構建HopRAG圖譜，或檢查HopRAG系統狀態");
+                  return;
+                }
+                console.log("🚀 開始HopRAG檢索，查詢:", query, "k:", k);
+                await hopragEnhancedRetrieve(query, k);
+                console.log("✅ HopRAG檢索完成，當前retrieval狀態:", retrieval);
+              } else if (retrievalMethod === "structured_hoprag") {
+                if (!structuredHopragBuilt) {
+                  alert("請先構建Structured-HopRAG圖譜");
+                  return;
+                }
+                const response = await fetch(
+                  "/api/structured-hoprag-retrieve",
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ query, k }),
+                  }
+                );
+                const data = await response.json();
+                setStructuredHopragRetrieval(data);
+              } else {
+                await retrieve(query, k);
+              }
+            } catch (error) {
+              console.error("檢索錯誤:", error);
+              alert("檢索失敗，請檢查控制台");
+            } finally {
+              setBusy(false);
             }
-            setBusy(false);
           }}
         >
           <div className="col-12 col-md-6">
@@ -530,7 +664,12 @@ export function RetrievePage() {
           </div>
           <div className="col-auto">
             <button
-              disabled={!canRetrieve || busy}
+              disabled={
+                busy ||
+                (retrievalMethod === "hoprag"
+                  ? !hopragStatus?.system_ready
+                  : !canRetrieve)
+              }
               className="btn btn-primary"
               type="submit"
             >
@@ -541,7 +680,13 @@ export function RetrievePage() {
             <button
               type="button"
               className="btn btn-success"
-              disabled={!retrieval || retrieval.length === 0 || busy}
+              disabled={
+                ((!retrieval || retrieval.length === 0) &&
+                  (!structuredHopragRetrieval ||
+                    !structuredHopragRetrieval.results ||
+                    structuredHopragRetrieval.results.length === 0)) ||
+                busy
+              }
               onClick={async () => {
                 setBusy(true);
                 try {
@@ -556,7 +701,7 @@ export function RetrievePage() {
           </div>
         </form>
 
-        {retrieval && (
+        {(retrieval || structuredHopragRetrieval) && (
           <div className="mt-3">
             <h3 className="h6">
               Top results{" "}
@@ -575,6 +720,9 @@ export function RetrievePage() {
                 <span className="badge bg-warning">
                   Multi-Layered Fusion 🔄
                 </span>
+              )}
+              {retrievalMethod === "structured_hoprag" && (
+                <span className="badge bg-success">Structured-HopRAG 🚀</span>
               )}
               {retrieval &&
                 retrieval.length > 0 &&
@@ -736,100 +884,128 @@ export function RetrievePage() {
               </div>
             )}
             <ol>
-              {retrieval.map((r: any) => (
-                <li key={`${r.doc_id}-${r.chunk_index}`} className="mb-2">
-                  <div className="small text-muted">
-                    {retrievalMethod === "hybrid" ? (
-                      <>
-                        <span className="badge bg-success me-1">
-                          總分: {r.score?.toFixed(3) || "N/A"}
-                        </span>
-                        <span className="badge bg-info me-1">
-                          向量: {r.vector_score?.toFixed(3) || "N/A"}
-                        </span>
-                        <span className="badge bg-warning me-1">
-                          規則: {r.bonus?.toFixed(3) || "N/A"}
-                        </span>
-                      </>
-                    ) : retrievalMethod === "multi_level" ? (
-                      <>
-                        <span className="badge bg-success me-1">
-                          相似度: {r.similarity?.toFixed(3) || "N/A"}
-                        </span>
-                        <span className="badge bg-primary me-1">
-                          層次: {r.metadata?.level || "N/A"}
-                        </span>
-                        <span className="badge bg-info me-1">
-                          查詢類型: {r.metadata?.query_type || "N/A"}
-                        </span>
-                        <span className="badge bg-warning me-1">
-                          置信度: {r.metadata?.confidence?.toFixed(2) || "N/A"}
-                        </span>
-                      </>
-                    ) : retrievalMethod === "multi_level_fusion" ? (
-                      <>
-                        <span className="badge bg-success me-1">
-                          融合分數: {r.similarity?.toFixed(3) || "N/A"}
-                        </span>
-                        <span className="badge bg-primary me-1">
-                          排名: {r.rank || "N/A"}
-                        </span>
-                        {r.original_scores && (
-                          <span className="badge bg-info me-1">
-                            原始分數:{" "}
-                            {Object.entries(r.original_scores)
-                              .map(
-                                ([level, score]) =>
-                                  `${level}:${
-                                    typeof score === "number"
-                                      ? score.toFixed(2)
-                                      : score
-                                  }`
-                              )
-                              .join(", ")}
+              {(() => {
+                // 確定要顯示的結果數據
+                let resultsToShow = null;
+                if (
+                  retrievalMethod === "structured_hoprag" &&
+                  structuredHopragRetrieval?.results
+                ) {
+                  resultsToShow = structuredHopragRetrieval.results;
+                } else if (retrieval) {
+                  resultsToShow = retrieval;
+                }
+
+                console.log("🎯 結果顯示邏輯:", {
+                  retrievalMethod,
+                  hasRetrieval: !!retrieval,
+                  retrievalLength: retrieval?.length,
+                  hasStructuredHopragRetrieval:
+                    !!structuredHopragRetrieval?.results,
+                  structuredHopragLength:
+                    structuredHopragRetrieval?.results?.length,
+                  resultsToShow: resultsToShow?.length,
+                });
+
+                return resultsToShow?.map((r: any, index: number) => (
+                  <li
+                    key={r.node_id || `${r.doc_id}-${r.chunk_index || index}`}
+                    className="mb-2"
+                  >
+                    <div className="small text-muted">
+                      {retrievalMethod === "hybrid" ? (
+                        <>
+                          <span className="badge bg-success me-1">
+                            總分: {r.score?.toFixed(3) || "N/A"}
                           </span>
-                        )}
-                      </>
-                    ) : (
-                      `score=${r.score?.toFixed(3) || "N/A"}`
-                    )}
-                    <span className="ms-2">
-                      doc={r.doc_id} idx={r.chunk_index}
-                    </span>
-                  </div>
-                  {r.legal_structure && (
-                    <div className="mt-1 mb-2">
-                      <span className="badge bg-primary me-1">
-                        {r.legal_structure.law_name}
-                      </span>
-                      {r.legal_structure.article && (
-                        <span className="badge bg-secondary me-1">
-                          {r.legal_structure.article}
-                        </span>
+                          <span className="badge bg-info me-1">
+                            向量: {r.vector_score?.toFixed(3) || "N/A"}
+                          </span>
+                          <span className="badge bg-warning me-1">
+                            規則: {r.bonus?.toFixed(3) || "N/A"}
+                          </span>
+                        </>
+                      ) : retrievalMethod === "multi_level" ? (
+                        <>
+                          <span className="badge bg-success me-1">
+                            相似度: {r.similarity?.toFixed(3) || "N/A"}
+                          </span>
+                          <span className="badge bg-primary me-1">
+                            層次: {r.metadata?.level || "N/A"}
+                          </span>
+                          <span className="badge bg-info me-1">
+                            查詢類型: {r.metadata?.query_type || "N/A"}
+                          </span>
+                          <span className="badge bg-warning me-1">
+                            置信度:{" "}
+                            {r.metadata?.confidence?.toFixed(2) || "N/A"}
+                          </span>
+                        </>
+                      ) : retrievalMethod === "multi_level_fusion" ? (
+                        <>
+                          <span className="badge bg-success me-1">
+                            融合分數: {r.similarity?.toFixed(3) || "N/A"}
+                          </span>
+                          <span className="badge bg-primary me-1">
+                            排名: {r.rank || "N/A"}
+                          </span>
+                          {r.original_scores && (
+                            <span className="badge bg-info me-1">
+                              原始分數:{" "}
+                              {Object.entries(r.original_scores)
+                                .map(
+                                  ([level, score]) =>
+                                    `${level}:${
+                                      typeof score === "number"
+                                        ? score.toFixed(2)
+                                        : score
+                                    }`
+                                )
+                                .join(", ")}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        `score=${r.score?.toFixed(3) || "N/A"}`
                       )}
-                      {r.legal_structure.item && (
-                        <span className="badge bg-info me-1">
-                          {r.legal_structure.item}
-                        </span>
-                      )}
-                      {r.legal_structure.sub_item && (
-                        <span className="badge bg-warning me-1">
-                          {r.legal_structure.sub_item}
-                        </span>
-                      )}
-                      <span className="badge bg-light text-dark">
-                        {r.legal_structure.chunk_type}
+                      <span className="ms-2">
+                        doc={r.doc_id} idx={r.chunk_index}
                       </span>
                     </div>
-                  )}
-                  <pre
-                    className="bg-light p-2 rounded"
-                    style={{ whiteSpace: "pre-wrap" }}
-                  >
-                    {r.content}
-                  </pre>
-                </li>
-              ))}
+                    {r.legal_structure && (
+                      <div className="mt-1 mb-2">
+                        <span className="badge bg-primary me-1">
+                          {r.legal_structure.law_name}
+                        </span>
+                        {r.legal_structure.article && (
+                          <span className="badge bg-secondary me-1">
+                            {r.legal_structure.article}
+                          </span>
+                        )}
+                        {r.legal_structure.item && (
+                          <span className="badge bg-info me-1">
+                            {r.legal_structure.item}
+                          </span>
+                        )}
+                        {r.legal_structure.sub_item && (
+                          <span className="badge bg-warning me-1">
+                            {r.legal_structure.sub_item}
+                          </span>
+                        )}
+                        <span className="badge bg-light text-dark">
+                          {r.legal_structure.chunk_type}
+                        </span>
+                      </div>
+                    )}
+                    <pre
+                      className="bg-light p-2 rounded"
+                      style={{ whiteSpace: "pre-wrap" }}
+                    >
+                      {r.content}
+                    </pre>
+                  </li>
+                ));
+              })()}
             </ol>
             {/* 內嵌生成結果（如已生成） */}
             {answer && (

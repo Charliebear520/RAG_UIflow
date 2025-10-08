@@ -170,42 +170,120 @@ class GraphTraverser:
         
     async def traverse_graph(self, query: str, initial_nodes: List[str], 
                            graph: nx.DiGraph, nodes: Dict[str, LegalNode]) -> Dict[int, List[str]]:
-        """基於推理的圖遍歷"""
+        """基於BFS的圖遍歷（參考原始HopRAG論文）"""
         print(f"🔍 開始HopRAG圖遍歷，查詢: '{query}'")
         
         hop_results = {0: initial_nodes}
-        current_nodes = initial_nodes
+        visited_nodes = set(initial_nodes)
+        current_level = initial_nodes
         
         for hop in range(1, self.config.max_hops + 1):
             print(f"  第 {hop} 跳檢索...")
-            next_nodes = []
+            next_level = []
             
-            for node_id in current_nodes:
-                # 獲取鄰居節點
-                neighbors = self._get_neighbors_with_edges(node_id, graph, nodes)
+            # BFS遍歷：從當前層的所有節點出發
+            for node_id in current_level:
+                if node_id not in graph:
+                    continue
+                    
+                # 獲取鄰居節點（出邊和入邊）
+                neighbors = self._get_all_neighbors(node_id, graph)
                 
-                # 使用LLM推理判斷相關性
-                if self.llm_reasoner and neighbors:
-                    relevant_neighbors = await self._filter_by_llm_reasoning(
-                        query, node_id, neighbors
+                # 過濾已訪問的節點
+                unvisited_neighbors = [n for n in neighbors if n not in visited_nodes]
+                
+                if unvisited_neighbors:
+                    # 使用相似度排序選擇最相關的鄰居
+                    relevant_neighbors = await self._rank_neighbors_by_relevance(
+                        query, node_id, unvisited_neighbors, nodes
                     )
-                    next_nodes.extend(relevant_neighbors)
+                    
+                    # 限制每跳的節點數量
+                    top_neighbors = relevant_neighbors[:self.config.top_k_per_hop]
+                    next_level.extend(top_neighbors)
+                    visited_nodes.update(top_neighbors)
             
-            # 去重和限制數量
-            next_nodes = list(set(next_nodes))[:self.config.top_k_per_hop]
-            hop_results[hop] = next_nodes
-            current_nodes = next_nodes
+            # 去重
+            next_level = list(set(next_level))
+            hop_results[hop] = next_level
+            current_level = next_level
             
-            if not current_nodes:
+            if not current_level:
                 print(f"  第 {hop} 跳後無更多相關節點，停止遍歷")
                 break
         
         # 統計信息
         total_nodes_found = sum(len(nodes) for nodes in hop_results.values())
+        hop_distribution = {f"hop_{hop}": len(nodes) for hop, nodes in hop_results.items()}
+        
         print(f"✅ 圖遍歷完成，共找到 {total_nodes_found} 個相關節點")
         
         return hop_results
     
+    def _get_all_neighbors(self, node_id: str, graph: nx.DiGraph) -> List[str]:
+        """獲取節點的所有鄰居（出邊和入邊）"""
+        if node_id not in graph:
+            return []
+        
+        # 獲取出邊鄰居
+        out_neighbors = list(graph.successors(node_id))
+        # 獲取入邊鄰居
+        in_neighbors = list(graph.predecessors(node_id))
+        
+        # 合併並去重
+        all_neighbors = list(set(out_neighbors + in_neighbors))
+        return all_neighbors
+    
+    async def _rank_neighbors_by_relevance(self, query: str, source_node_id: str, 
+                                         neighbors: List[str], nodes: Dict[str, LegalNode]) -> List[str]:
+        """根據查詢相關性對鄰居節點進行排序"""
+        if not neighbors:
+            return []
+        
+        # 計算每個鄰居與查詢的相似度
+        neighbor_scores = []
+        
+        for neighbor_id in neighbors:
+            if neighbor_id not in nodes:
+                continue
+                
+            neighbor_node = nodes[neighbor_id]
+            
+            # 使用節點內容計算相似度
+            similarity_score = self._calculate_content_similarity(query, neighbor_node.content)
+            
+            # 考慮邊的權重（如果有）
+            edge_weight = self._get_edge_weight(source_node_id, neighbor_id)
+            
+            # 綜合評分
+            final_score = similarity_score * (1 + edge_weight * 0.1)  # 邊權重影響較小
+            neighbor_scores.append((neighbor_id, final_score))
+        
+        # 按分數排序
+        neighbor_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        return [node_id for node_id, score in neighbor_scores]
+    
+    def _calculate_content_similarity(self, query: str, content: str) -> float:
+        """計算查詢與內容的相似度（簡化版本）"""
+        # 使用簡單的詞彙重疊度
+        query_words = set(query.lower().split())
+        content_words = set(content.lower().split())
+        
+        if not query_words or not content_words:
+            return 0.0
+        
+        intersection = query_words & content_words
+        union = query_words | content_words
+        
+        return len(intersection) / len(union) if union else 0.0
+    
+    def _get_edge_weight(self, source_id: str, target_id: str) -> float:
+        """獲取邊的權重"""
+        # 這裡可以根據邊的類型返回不同的權重
+        # 暫時返回固定權重
+        return 1.0
+
     def _get_neighbors_with_edges(self, node_id: str, graph: nx.DiGraph, 
                                 nodes: Dict[str, LegalNode]) -> List[Dict[str, Any]]:
         """獲取節點的鄰居及其邊信息"""

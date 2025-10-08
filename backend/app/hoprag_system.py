@@ -26,7 +26,7 @@ class PseudoQuery:
 class LegalNode:
     """法律節點數據結構"""
     node_id: str
-    node_type: str  # "article" 或 "item"
+    node_type: str  # "basic_unit" 或 "basic_unit_component" (原 "article" 或 "item")
     content: str
     contextualized_text: str
     law_name: str
@@ -412,18 +412,18 @@ class HopRAGGraphDatabase:
         return float(similarity)
     
     def _determine_edge_type(self, from_node: str, to_node: str) -> str:
-        """確定邊的類型"""
+        """確定邊的類型 - 使用新的層級命名"""
         from_type = self.nodes[from_node].node_type
         to_type = self.nodes[to_node].node_type
         
-        if from_type == 'article' and to_type == 'article':
-            return 'article_to_article'
-        elif from_type == 'article' and to_type == 'item':
-            return 'article_to_item'
-        elif from_type == 'item' and to_type == 'article':
-            return 'item_to_article'
+        if from_type == 'basic_unit' and to_type == 'basic_unit':
+            return 'basic_unit_to_basic_unit'
+        elif from_type == 'basic_unit' and to_type == 'basic_unit_component':
+            return 'basic_unit_to_component'
+        elif from_type == 'basic_unit_component' and to_type == 'basic_unit':
+            return 'component_to_basic_unit'
         else:
-            return 'item_to_item'
+            return 'component_to_component'
     
     def _validate_graph_structure(self):
         """驗證圖結構"""
@@ -432,10 +432,10 @@ class HopRAGGraphDatabase:
         print(f"  邊總數: {self.graph.number_of_edges()}")
         
         # 統計節點類型
-        article_count = sum(1 for node in self.nodes.values() if node.node_type == 'article')
-        item_count = sum(1 for node in self.nodes.values() if node.node_type == 'item')
-        print(f"  條級節點: {article_count}")
-        print(f"  項級節點: {item_count}")
+        basic_unit_count = sum(1 for node in self.nodes.values() if node.node_type == 'basic_unit')
+        component_count = sum(1 for node in self.nodes.values() if node.node_type == 'basic_unit_component')
+        print(f"  基本單元節點 (basic_unit): {basic_unit_count}")
+        print(f"  基本單元組件節點 (basic_unit_component): {component_count}")
         
         # 統計邊類型
         edge_types = {}
@@ -643,16 +643,16 @@ class HopRAGSystem:
                         # 生成node_id，如果metadata中沒有id欄位
                         node_id = chunk['metadata'].get('id', f"{doc_id}_basic_unit_{chunk_idx}")
                     
-                        article_node = LegalNode(
+                        basic_unit_node = LegalNode(
                             node_id=node_id,
-                            node_type='article',
+                            node_type='basic_unit',
                             content=chunk['content'],
                             contextualized_text=chunk['content'],  # 使用content作為contextualized_text
                             law_name=chunk['metadata'].get('law_name', ''),
                             article_number=chunk['metadata'].get('article_label', ''),
                             metadata=chunk['metadata']
                         )
-                        self.graph_db.add_node(article_node)
+                        self.graph_db.add_node(basic_unit_node)
                         
                     except Exception as e:
                         print(f"❌ 創建basic_unit節點失敗 (chunk {chunk_idx}): {e}")
@@ -680,9 +680,9 @@ class HopRAGSystem:
                         # 生成node_id，如果metadata中沒有id欄位
                         node_id = chunk['metadata'].get('id', f"{doc_id}_basic_unit_component_{chunk_idx}")
                         
-                        item_node = LegalNode(
+                        component_node = LegalNode(
                             node_id=node_id,
-                            node_type='item',
+                            node_type='basic_unit_component',
                             content=chunk['content'],
                             contextualized_text=chunk['content'],
                             law_name=chunk['metadata'].get('law_name', ''),
@@ -691,7 +691,7 @@ class HopRAGSystem:
                             parent_article_id=chunk['metadata'].get('parent_article_id'),
                             metadata=chunk['metadata']
                         )
-                        self.graph_db.add_node(item_node)
+                        self.graph_db.add_node(component_node)
                         
                     except Exception as e:
                         print(f"❌ 創建basic_unit_component節點失敗 (chunk {chunk_idx}): {e}")
@@ -803,8 +803,8 @@ class HopRAGSystem:
         return {
             "total_nodes": self.graph_db.get_node_count(),
             "total_edges": self.graph_db.get_edge_count(),
-            "article_nodes": sum(1 for node in self.graph_db.nodes.values() if node.node_type == 'article'),
-            "item_nodes": sum(1 for node in self.graph_db.nodes.values() if node.node_type == 'item'),
+            "basic_unit_nodes": sum(1 for node in self.graph_db.nodes.values() if node.node_type == 'basic_unit'),
+            "basic_unit_component_nodes": sum(1 for node in self.graph_db.nodes.values() if node.node_type == 'basic_unit_component'),
             "graph_built": self.is_graph_built,
             "similarity_threshold": self.graph_db.similarity_threshold,
             "max_edges_per_node": self.graph_db.max_edges_per_node

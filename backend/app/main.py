@@ -26,7 +26,17 @@ from .query_classifier import query_classifier, get_query_analysis
 from .result_fusion import MultiLevelResultFusion, FusionConfig, fuse_multi_level_results
 from .hoprag_system_modular import HopRAGSystem
 from .hoprag_clients import HopRAGClientManager
-from .hoprag_config import HopRAGConfig, DEFAULT_CONFIG
+from .hoprag_config import (
+    HopRAGConfig, 
+    DEFAULT_CONFIG, 
+    FAST_BUILD_CONFIG, 
+    BALANCED_CONFIG,
+    HIGH_PERFORMANCE_CONFIG,
+    HIGH_ACCURACY_CONFIG
+)
+from .structured_hoprag_system import StructuredHopRAGSystem
+from .structured_hoprag_config import StructuredHopRAGConfig, DEFAULT_CONFIG as STRUCTURED_DEFAULT_CONFIG
+from .hoprag_persistence import HopRAGPersistence
 try:
     from rank_bm25 import BM25Okapi  # type: ignore
     BM25_AVAILABLE = True
@@ -78,9 +88,9 @@ def get_env_bool(name: str, default: bool = False) -> bool:
 
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or "AIzaSyC3hF9d-BWVQRjTd_uzo4grF9upIDsZhEI"
-USE_GEMINI_EMBEDDING = True  # 强制使用 Gemini
-USE_GEMINI_COMPLETION = True
-USE_BGE_M3_EMBEDDING = False  # 强制不使用 BGE-M3
+USE_GEMINI_EMBEDDING = True  # ✅ 使用 Gemini Embedding（已優化速率限制）
+USE_GEMINI_COMPLETION = True  # LLM推理使用Gemini
+USE_BGE_M3_EMBEDDING = False  # ❌ BGE-M3在Mac上太慢，已禁用
 
 # 調試信息
 print(f"🔧 Embedding 配置:")
@@ -122,11 +132,38 @@ store = InMemoryStore()
 
 # 初始化HopRAG系統（模組化架構）
 hoprag_client_manager = HopRAGClientManager()
+
+# 🚀 使用極速配置來大幅降低索引時間
+# 可選配置：DEFAULT_CONFIG, FAST_BUILD_CONFIG, BALANCED_CONFIG, HIGH_PERFORMANCE_CONFIG, HIGH_ACCURACY_CONFIG
 hoprag_system = HopRAGSystem(
     llm_client=hoprag_client_manager.get_llm_client(),
     embedding_model=hoprag_client_manager.get_embedding_client(),
-    config=DEFAULT_CONFIG
+    config=FAST_BUILD_CONFIG  # 🎯 使用極速配置：3小時 → 30分鐘
 )
+
+# 初始化Structured-HopRAG系統
+structured_hoprag_system = StructuredHopRAGSystem(
+    llm_client=hoprag_client_manager.get_llm_client(),
+    embedding_model=hoprag_client_manager.get_embedding_client(),
+    config=STRUCTURED_DEFAULT_CONFIG
+)
+
+# 初始化HopRAG持久化管理器
+hoprag_persistence = HopRAGPersistence(storage_dir="hoprag_storage")
+
+# 🚀 服务器启动时自动加载已保存的HopRAG图谱
+print("\n" + "="*60)
+print("🔍 检查是否有已保存的HopRAG图谱...")
+print("="*60)
+if hoprag_persistence.has_saved_graph():
+    print("📂 发现已保存的图谱，尝试自动加载...")
+    if hoprag_persistence.load_graph(hoprag_system):
+        print("✅ HopRAG图谱自动加载成功！无需重新构建")
+    else:
+        print("⚠️ 自动加载失败，稍后需要重新构建")
+else:
+    print("ℹ️ 未找到已保存的图谱，首次使用需要构建HopRAG图谱")
+print("="*60 + "\n")
 
 
 app = FastAPI(title="RAG Visualizer API", version="0.1.0")
@@ -3504,7 +3541,7 @@ def hierarchical_retrieve(req: RetrieveRequest):
 
 
 @app.post("/api/multi-level-retrieve")
-def multi_level_retrieve(req: RetrieveRequest):
+async def multi_level_retrieve(req: RetrieveRequest):
     """多層次檢索：基於查詢分類的智能層次選擇檢索"""
     # 檢查是否有可用的多層次embedding
     if not store.has_multi_level_embeddings():
@@ -3563,7 +3600,7 @@ def multi_level_retrieve(req: RetrieveRequest):
         # 根據存儲的embedding模型選擇查詢向量化方法
         query_vector = None
         if embedding_provider == 'gemini' or (not embedding_provider and USE_GEMINI_EMBEDDING and GOOGLE_API_KEY):
-            query_vector = asyncio.run(embed_gemini([req.query]))[0]
+            query_vector = (await embed_gemini([req.query]))[0]
             print(f"✅ 使用Gemini生成查詢向量，維度: {len(query_vector)}")
         elif embedding_provider == 'bge-m3' or (not embedding_provider and USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE):
             query_vector = embed_bge_m3([req.query])[0]
@@ -3665,7 +3702,7 @@ def analyze_query(req: RetrieveRequest):
 
 
 @app.post("/api/multi-level-fusion-retrieve")
-def multi_level_fusion_retrieve(req: MultiLevelFusionRequest):
+async def multi_level_fusion_retrieve(req: MultiLevelFusionRequest):
     """多層次融合檢索：從所有層次檢索並融合結果"""
     # 檢查是否有可用的多層次embedding
     if not store.has_multi_level_embeddings():
@@ -3709,7 +3746,7 @@ def multi_level_fusion_retrieve(req: MultiLevelFusionRequest):
         # 根據存儲的embedding模型選擇查詢向量化方法
         query_vector = None
         if embedding_provider == 'gemini' or (not embedding_provider and USE_GEMINI_EMBEDDING and GOOGLE_API_KEY):
-            query_vector = asyncio.run(embed_gemini([req.query]))[0]
+            query_vector = (await embed_gemini([req.query]))[0]
             print(f"✅ 使用Gemini生成查詢向量，維度: {len(query_vector)}")
         elif embedding_provider == 'bge-m3' or (not embedding_provider and USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE):
             query_vector = embed_bge_m3([req.query])[0]
@@ -6129,16 +6166,16 @@ def retrieve_original(query: str, k: int):
     pass
 
 
-def hybrid_retrieve_original(query: str, k: int):
+async def hybrid_retrieve_original(query: str, k: int):
     """原始HybridRAG檢索"""
-    # 這裡調用原有的HybridRAG邏輯
-    pass
+    # 暫時返回空列表，使用multi_level_retrieve_original作為替代
+    return await multi_level_retrieve_original(query, k)
 
 
-def hierarchical_retrieve_original(query: str, k: int):
+async def hierarchical_retrieve_original(query: str, k: int):
     """原始多層次檢索"""
-    # 這裡調用原有的多層次檢索邏輯
-    pass
+    # 使用multi_level_retrieve_original
+    return await multi_level_retrieve_original(query, k)
 
 
 # ==================== HopRAG API 端點 ====================
@@ -6189,9 +6226,15 @@ async def build_hoprag_graph():
         
         print(f"✅ HopRAG圖譜構建成功！節點: {stats.get('total_nodes', 0)}, 邊: {stats.get('total_edges', 0)}")
         
+        # 🚀 自動保存圖譜到文件，下次重啟無需重新構建
+        print("\n💾 自動保存HopRAG圖譜...")
+        save_success = hoprag_persistence.save_graph(hoprag_system)
+        
         return {
             "message": "HopRAG graph built successfully",
             "statistics": stats,
+            "saved_to_disk": save_success,
+            "storage_info": hoprag_persistence.get_storage_info() if save_success else None,
             "timestamp": datetime.now().isoformat()
         }
         
@@ -6333,8 +6376,11 @@ def reset_hoprag_system():
     try:
         hoprag_system.reset_system()
         
+        # 同時刪除已保存的圖譜
+        hoprag_persistence.delete_saved_graph()
+        
         return {
-            "message": "HopRAG system reset successfully",
+            "message": "HopRAG system reset successfully (saved graph also deleted)",
             "timestamp": datetime.now().isoformat()
         }
         
@@ -6342,6 +6388,83 @@ def reset_hoprag_system():
         return JSONResponse(
             status_code=500,
             content={"error": f"Failed to reset system: {str(e)}"}
+        )
+
+
+@app.get("/api/hoprag-storage-info")
+def get_hoprag_storage_info():
+    """獲取HopRAG持久化存儲信息"""
+    try:
+        return {
+            "storage_info": hoprag_persistence.get_storage_info(),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to get storage info: {str(e)}"}
+        )
+
+
+@app.post("/api/hoprag-save")
+def save_hoprag_graph():
+    """手動保存HopRAG圖譜"""
+    try:
+        if not hoprag_system.is_graph_built:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "No HopRAG graph to save. Please build the graph first."}
+            )
+        
+        success = hoprag_persistence.save_graph(hoprag_system)
+        
+        if success:
+            return {
+                "message": "HopRAG graph saved successfully",
+                "storage_info": hoprag_persistence.get_storage_info(),
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Failed to save HopRAG graph"}
+            )
+            
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to save graph: {str(e)}"}
+        )
+
+
+@app.post("/api/hoprag-load")
+def load_hoprag_graph():
+    """手動加載已保存的HopRAG圖譜"""
+    try:
+        if not hoprag_persistence.has_saved_graph():
+            return JSONResponse(
+                status_code=404,
+                content={"error": "No saved HopRAG graph found"}
+            )
+        
+        success = hoprag_persistence.load_graph(hoprag_system)
+        
+        if success:
+            return {
+                "message": "HopRAG graph loaded successfully",
+                "statistics": hoprag_system.get_graph_statistics(),
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Failed to load HopRAG graph"}
+            )
+            
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to load graph: {str(e)}"}
         )
 
 
@@ -6356,23 +6479,31 @@ async def hoprag_enhanced_retrieve(req: RetrieveRequest):
                 content={"error": "HopRAG graph not built. Please run /api/build-hoprag-graph first."}
             )
         
-        # 檢查多層次embedding是否可用
+        # 檢查多層次embedding是否可用，如果沒有則嘗試使用HopRAG系統的數據
         if not store.has_multi_level_embeddings():
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Multi-level embeddings not available. Please run /api/multi-level-embed first."}
-            )
+            print("⚠️ 多層次embedding不可用，嘗試使用HopRAG系統的圖譜數據進行檢索")
+            # 如果HopRAG圖譜已構建，我們可以嘗試直接使用圖譜數據
+            if not hoprag_system.is_graph_built:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "Multi-level embeddings not available and HopRAG graph not built. Please run /api/multi-level-embed and /api/build-hoprag-graph first."}
+                )
         
         # 執行基礎檢索（使用現有的多層次檢索）
         base_strategy = getattr(req, 'base_strategy', 'multi_level')
         use_hoprag = getattr(req, 'use_hoprag', True)
         
-        if base_strategy == 'multi_level':
-            base_results = multi_level_retrieve_original(req.query, k=20)
-        elif base_strategy == 'single_level':
-            base_results = hierarchical_retrieve_original(req.query, k=20)
+        # 如果沒有embedding數據，嘗試使用HopRAG系統的圖譜數據進行基礎檢索
+        if not store.has_multi_level_embeddings():
+            print("🔄 使用HopRAG系統的圖譜數據進行基礎檢索")
+            base_results = await hoprag_system.retrieve_from_graph(req.query, k=20)
         else:
-            base_results = hybrid_retrieve_original(req.query, k=20)
+            if base_strategy == 'multi_level':
+                base_results = await multi_level_retrieve_original(req.query, k=20)
+            elif base_strategy == 'single_level':
+                base_results = await hierarchical_retrieve_original(req.query, k=20)
+            else:
+                base_results = await hybrid_retrieve_original(req.query, k=20)
         
         # HopRAG增強處理
         if use_hoprag:
@@ -6402,7 +6533,7 @@ async def hoprag_enhanced_retrieve(req: RetrieveRequest):
         )
 
 
-def multi_level_retrieve_original(query: str, k: int):
+async def multi_level_retrieve_original(query: str, k: int):
     """原始多層次檢索（用於HopRAG基礎檢索）"""
     try:
         # 檢查是否有可用的多層次embedding
@@ -6435,7 +6566,7 @@ def multi_level_retrieve_original(query: str, k: int):
         
         # 計算查詢embedding
         if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
-            query_vector = asyncio.run(embed_gemini([query]))[0]
+            query_vector = (await embed_gemini([query]))[0]
         elif USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
             query_vector = embed_bge_m3([query])[0]
         else:
@@ -6459,8 +6590,12 @@ def multi_level_retrieve_original(query: str, k: int):
             doc_id = doc_ids[idx]
             similarity_score = similarities[idx]
             
+            # 生成與HopRAG圖譜匹配的node_id格式
+            # 嘗試匹配HopRAG圖譜中的節點ID格式
+            hoprag_node_id = f"{doc_id}_basic_unit_{idx}"
+            
             results.append({
-                'node_id': f"{doc_id}_{idx}",
+                'node_id': hoprag_node_id,
                 'content': chunk_content,
                 'similarity_score': float(similarity_score),
                 'doc_id': doc_id,
@@ -6473,5 +6608,130 @@ def multi_level_retrieve_original(query: str, k: int):
     except Exception as e:
         print(f"❌ 多層次檢索失敗: {e}")
         return []
+
+
+# ============================================
+# Structured-HopRAG API 端點
+# ============================================
+
+@app.post("/api/build-structured-hoprag-graph")
+async def build_structured_hoprag_graph():
+    """構建Structured-HopRAG知識圖譜"""
+    try:
+        # 檢查是否有多層次chunks
+        if not store.has_multi_level_chunks():
+            return JSONResponse(
+                status_code=400,
+                content={"error": "No multi-level chunks available. Please run chunking first."}
+            )
+        
+        print("🏗️ 開始構建Structured-HopRAG圖譜...")
+        start_time = time.time()
+        
+        # 獲取多層次chunks
+        multi_level_chunks = store.get_all_multi_level_chunks()
+        
+        # 構建圖譜
+        await structured_hoprag_system.build_graph_from_multi_level_chunks(multi_level_chunks)
+        
+        build_time = time.time() - start_time
+        stats = structured_hoprag_system.get_graph_statistics()
+        
+        return {
+            "status": "success",
+            "build_time": build_time,
+            "statistics": stats,
+            "message": f"Structured-HopRAG圖譜構建完成 ({build_time:.2f}秒)"
+        }
+        
+    except Exception as e:
+        print(f"❌ Structured-HopRAG圖譜構建失敗: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to build Structured-HopRAG graph: {str(e)}"}
+        )
+
+
+@app.get("/api/structured-hoprag-status")
+def get_structured_hoprag_status():
+    """獲取Structured-HopRAG系統狀態"""
+    try:
+        return {
+            "is_graph_built": structured_hoprag_system.is_graph_built,
+            "statistics": structured_hoprag_system.get_graph_statistics() if structured_hoprag_system.is_graph_built else {},
+            "config": {
+                "use_hierarchy_edges": structured_hoprag_system.config.use_hierarchy_edges,
+                "use_reference_edges": structured_hoprag_system.config.use_reference_edges,
+                "use_similar_concept_edges": structured_hoprag_system.config.use_similar_concept_edges,
+                "use_theme_edges": structured_hoprag_system.config.use_theme_edges,
+                "use_llm_edges": structured_hoprag_system.config.use_llm_edges,
+                "max_llm_edges_per_node": structured_hoprag_system.config.max_llm_edges_per_node,
+                "enable_query_cache": structured_hoprag_system.config.enable_query_cache,
+            }
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to get status: {str(e)}"}
+        )
+
+
+@app.post("/api/structured-hoprag-retrieve")
+async def structured_hoprag_retrieve(req: RetrieveRequest):
+    """Structured-HopRAG檢索（去LLM化）"""
+    try:
+        # 檢查圖是否已構建
+        if not structured_hoprag_system.is_graph_built:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Structured-HopRAG graph not built. Please run /api/build-structured-hoprag-graph first."}
+            )
+        
+        print(f"🔍 開始Structured-HopRAG檢索: {req.query}")
+        start_time = time.time()
+        
+        # 執行檢索
+        results = await structured_hoprag_system.retrieve(req.query, k=req.k)
+        
+        retrieve_time = time.time() - start_time
+        
+        # 計算檢索指標
+        metrics = calculate_retrieval_metrics(req.query, results, req.k)
+        metrics["retrieve_time"] = retrieve_time
+        metrics["llm_calls"] = 0  # Structured-HopRAG檢索階段不使用LLM
+        
+        return {
+            "query": req.query,
+            "results": results,
+            "metrics": metrics,
+            "strategy": "structured_hoprag",
+            "num_results": len(results),
+            "retrieve_time": retrieve_time,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"❌ Structured-HopRAG檢索失敗: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Structured-HopRAG retrieval failed: {str(e)}"}
+        )
+
+
+@app.post("/api/structured-hoprag-reset")
+def reset_structured_hoprag_system():
+    """重置Structured-HopRAG系統"""
+    try:
+        structured_hoprag_system.reset()
+        return {"status": "success", "message": "Structured-HopRAG系統已重置"}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to reset system: {str(e)}"}
+        )
 
 

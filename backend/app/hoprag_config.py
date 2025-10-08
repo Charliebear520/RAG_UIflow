@@ -7,16 +7,26 @@ from typing import Dict, Any, Optional
 from enum import Enum
 
 class NodeType(Enum):
-    """節點類型枚舉"""
-    ARTICLE = "article"
-    ITEM = "item"
+    """節點類型枚舉 - 對應新的層級命名"""
+    BASIC_UNIT = "basic_unit"  # 原 article
+    BASIC_UNIT_COMPONENT = "basic_unit_component"  # 原 item
+    
+    # 保留舊名稱作為別名，確保向後兼容
+    @classmethod
+    def from_legacy_name(cls, legacy_name: str):
+        """從舊名稱轉換為新的NodeType"""
+        mapping = {
+            "article": cls.BASIC_UNIT,
+            "item": cls.BASIC_UNIT_COMPONENT,
+        }
+        return mapping.get(legacy_name, cls.BASIC_UNIT)
 
 class EdgeType(Enum):
-    """邊類型枚舉"""
-    ARTICLE_TO_ARTICLE = "article_to_article"
-    ARTICLE_TO_ITEM = "article_to_item"
-    ITEM_TO_ARTICLE = "item_to_article"
-    ITEM_TO_ITEM = "item_to_item"
+    """邊類型枚舉 - 對應新的層級命名"""
+    BASIC_UNIT_TO_BASIC_UNIT = "basic_unit_to_basic_unit"  # 原 article_to_article
+    BASIC_UNIT_TO_COMPONENT = "basic_unit_to_component"  # 原 article_to_item
+    COMPONENT_TO_BASIC_UNIT = "component_to_basic_unit"  # 原 item_to_article
+    COMPONENT_TO_COMPONENT = "component_to_component"  # 原 item_to_item
 
 class QueryType(Enum):
     """查詢類型枚舉"""
@@ -37,10 +47,10 @@ class HopRAGConfig:
     
     # 動態問題生成配置
     use_dynamic_question_count: bool = True  # 是否使用動態問題數量
-    min_incoming_questions: int = 2  # 最少內向問題數量
-    min_outgoing_questions: int = 4  # 最少外向問題數量
-    max_incoming_questions: int = 8  # 最多內向問題數量
-    max_outgoing_questions: int = 12  # 最多外向問題數量
+    min_incoming_questions: int = 1  # 最少內向問題數量（快速測試：1個）
+    min_outgoing_questions: int = 2  # 最少外向問題數量（快速測試：2個）
+    max_incoming_questions: int = 1  # 最多內向問題數量（快速測試：1個）
+    max_outgoing_questions: int = 2  # 最多外向問題數量（快速測試：2個）
     
     # 向後兼容的固定數量配置（當use_dynamic_question_count=False時使用）
     max_pseudo_queries_per_node: int = 5
@@ -100,8 +110,8 @@ class HopRAGConfig:
     use_hybrid_retrieval: bool = True  # 是否使用混合檢索
     jaccard_weight: float = 0.5  # Jaccard相似度權重
     cosine_weight: float = 0.5  # 餘弦相似度權重
-    lexical_threshold: float = 0.3  # 詞彙相似度閾值
-    semantic_threshold: float = 0.5  # 語義相似度閾值
+    lexical_threshold: float = 0.1  # 詞彙相似度閾值（降低以增加邊）
+    semantic_threshold: float = 0.2  # 語義相似度閾值（降低以增加邊）
     
     def to_dict(self) -> Dict[str, Any]:
         """轉換為字典格式"""
@@ -192,4 +202,57 @@ HIGH_ACCURACY_CONFIG = HopRAGConfig(
     max_hops=5,
     top_k_per_hop=25,
     llm_temperature=0.5
+)
+
+# 極速配置 - 大幅降低索引時間（針對307節點場景優化）
+FAST_BUILD_CONFIG = HopRAGConfig(
+    # 伪查询精简配置（固定数量：1个内向+2个外向）
+    use_dynamic_question_count=False,  # ✅ 关闭动态模式，使用固定数量
+    max_pseudo_queries_per_node=3,  # 固定3个伪查询（1内向+2外向）
+    min_incoming_questions=1,  # 最少1个内向（固定模式不使用）
+    max_incoming_questions=1,  # 最多1个内向（固定模式不使用）
+    min_outgoing_questions=2,  # 最少2个外向（固定模式不使用）
+    max_outgoing_questions=2,  # 最多2个外向（固定模式不使用）
+    
+    # 边数限制配置
+    use_dynamic_edge_limit=True,
+    max_edges_per_node=8,  # 减少边数
+    similarity_threshold=0.3,  # 降低阈值，增加边数（快速测试）
+    
+    # LLM优化配置
+    question_generation_temperature=0.0,  # 0温度，最快生成
+    question_generation_max_tokens=512,  # 减少token（降低75%）
+    llm_max_retries=1,  # 减少重试次数
+    
+    # 检索优化配置
+    max_hops=3,  # 减少跳数
+    top_k_per_hop=15,  # 减少每跳节点数
+    initial_retrieve_k=15,
+    
+    # 其他优化
+    embedding_batch_size=64,  # 增加批处理
+    enable_nhop_analysis=False  # 关闭分析节省时间
+)
+
+# 平衡配置 - 速度与质量的折衷
+BALANCED_CONFIG = HopRAGConfig(
+    # 适度精简伪查询
+    use_dynamic_question_count=False,
+    max_pseudo_queries_per_node=5,  # 每节点5个伪查询
+    min_incoming_questions=1,
+    max_incoming_questions=2,  # 2个内向
+    min_outgoing_questions=3,
+    max_outgoing_questions=3,  # 3个外向
+    
+    # 边数配置
+    max_edges_per_node=10,
+    similarity_threshold=0.7,
+    
+    # LLM配置
+    question_generation_temperature=0.1,
+    question_generation_max_tokens=1024,
+    
+    # 检索配置
+    max_hops=4,
+    top_k_per_hop=20
 )

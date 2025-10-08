@@ -7,8 +7,9 @@ import networkx as nx
 from typing import Dict, List, Any, Optional, Tuple
 import asyncio
 from datetime import datetime
+import numpy as np
 
-from .hoprag_config import HopRAGConfig, DEFAULT_CONFIG
+from .hoprag_config import HopRAGConfig, DEFAULT_CONFIG, EdgeType
 from .hoprag_graph_builder import (
     PassageGraphBuilder, PseudoQueryGenerator, EdgeConnector, LegalNode
 )
@@ -113,18 +114,74 @@ class HopRAGSystem:
         # 添加邊
         for from_node, edge_list in self.edges.items():
             for edge_data in edge_list:
-                to_node = edge_data['to_node']
+                # 支持兩種邊格式：'to_node' 和 'target'
+                to_node = edge_data.get('to_node') or edge_data.get('target')
+                if not to_node:
+                    print(f"⚠️ 邊數據缺少目標節點: {edge_data}")
+                    continue
+                
                 edge_attrs = {
                     'pseudo_query': edge_data.get('pseudo_query', ''),
-                    'similarity_score': edge_data.get('similarity_score', 0.0),
+                    'similarity_score': edge_data.get('similarity_score', edge_data.get('similarity', 0.0)),
                     'edge_type': edge_data.get('edge_type', ''),
                     'outgoing_query_id': edge_data.get('outgoing_query_id', ''),
-                    'incoming_query_id': edge_data.get('incoming_query_id', '')
+                    'incoming_query_id': edge_data.get('incoming_query_id', ''),
+                    'edge_reason': edge_data.get('edge_reason', ''),
+                    'metadata': edge_data.get('metadata', {})
                 }
                 self.graph.add_edge(from_node, to_node, **edge_attrs)
         
         print(f"✅ NetworkX圖構建完成：{self.graph.number_of_nodes()}個節點，{self.graph.number_of_edges()}條邊")
     
+    async def retrieve_from_graph(self, query: str, k: int = 20) -> List[Dict[str, Any]]:
+        """直接從HopRAG圖譜中檢索（當沒有embedding數據時使用）"""
+        if not self.is_graph_built:
+            print("⚠️ HopRAG圖譜未構建，無法檢索")
+            return []
+        
+        print(f"🔍 從HopRAG圖譜直接檢索，查詢: '{query}'")
+        
+        try:
+            # 使用embedding模型計算查詢向量
+            query_embedding = await self.embedding_model.embed_query(query)
+            
+            # 計算與所有節點的相似度
+            similarities = []
+            for node_id, node in self.nodes.items():
+                if hasattr(node, 'embedding') and node.embedding is not None:
+                    # 計算餘弦相似度
+                    similarity = np.dot(query_embedding, node.embedding) / (
+                        np.linalg.norm(query_embedding) * np.linalg.norm(node.embedding)
+                    )
+                    similarities.append({
+                        'node_id': node_id,
+                        'similarity_score': similarity,
+                        'content': node.content,
+                        'doc_id': node.metadata.get('doc_id', 'unknown') if node.metadata else 'unknown',
+                        'chunk_index': node.metadata.get('chunk_index', 0) if node.metadata else 0
+                    })
+            
+            # 按相似度排序並返回前k個結果
+            similarities.sort(key=lambda x: x['similarity_score'], reverse=True)
+            results = similarities[:k]
+            
+            print(f"✅ 從圖譜檢索完成，返回 {len(results)} 個結果")
+            return results
+            
+        except Exception as e:
+            print(f"❌ 從圖譜檢索失敗: {e}")
+            # 如果embedding失敗，返回所有節點（作為fallback）
+            fallback_results = []
+            for node_id, node in list(self.nodes.items())[:k]:
+                fallback_results.append({
+                    'node_id': node_id,
+                    'similarity_score': 0.5,  # 默認分數
+                    'content': node.content,
+                    'doc_id': node.metadata.get('doc_id', 'unknown') if node.metadata else 'unknown',
+                    'chunk_index': node.metadata.get('chunk_index', 0) if node.metadata else 0
+                })
+            return fallback_results
+
     async def enhanced_retrieve(self, query: str, base_results: List[Dict], k: int = 5) -> List[Dict[str, Any]]:
         """HopRAG增強檢索"""
         if not self.is_graph_built:
@@ -212,14 +269,17 @@ class HopRAGSystem:
             return {"error": "圖譜未構建"}
         
         # 統計節點類型
-        article_count = sum(1 for node in self.nodes.values() if node.node_type.value == 'article')
-        item_count = sum(1 for node in self.nodes.values() if node.node_type.value == 'item')
+        basic_unit_count = sum(1 for node in self.nodes.values() if node.node_type.value == 'basic_unit')
+        component_count = sum(1 for node in self.nodes.values() if node.node_type.value == 'basic_unit_component')
         
         # 統計邊類型
         edge_types = {}
         for edge_list in self.edges.values():
             for edge_data in edge_list:
                 edge_type = edge_data.get('edge_type', 'unknown')
+                # 如果是EdgeType枚舉，轉換為字符串
+                if isinstance(edge_type, EdgeType):
+                    edge_type = edge_type.value
                 edge_types[edge_type] = edge_types.get(edge_type, 0) + 1
         
         # 統計偽查詢
@@ -230,8 +290,8 @@ class HopRAGSystem:
         return {
             "total_nodes": len(self.nodes),
             "total_edges": len(self.edges),
-            "article_nodes": article_count,
-            "item_nodes": item_count,
+            "basic_unit_nodes": basic_unit_count,
+            "basic_unit_component_nodes": component_count,
             "edge_type_distribution": edge_types,
             "total_pseudo_queries": total_pseudo_queries,
             "graph_built": self.is_graph_built,

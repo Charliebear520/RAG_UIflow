@@ -125,7 +125,7 @@ class PseudoQueryGenerator:
         if self.config.use_dynamic_question_count:
             return await self._generate_dynamic_incoming_questions(node)
         else:
-            return await self._generate_fixed_incoming_questions(node)
+            return await self._generate_fixed_incoming_questions(node, target_count=1)  # 固定1个内向问题
     
     async def _generate_dynamic_incoming_questions(self, node: LegalNode) -> List[str]:
         """動態生成內向問題 - 讓LLM決定適當數量"""
@@ -186,13 +186,13 @@ class PseudoQueryGenerator:
                 result = json.loads(response.strip())
                 questions = result.get('Question List', [])
                 
-                # 驗證問題數量
-                questions = self._validate_question_count(
-                    questions, 
-                    self.config.min_incoming_questions, 
-                    self.config.max_incoming_questions,
-                    "incoming"
-                )
+                # 暫時移除問題數量驗證
+                # questions = self._validate_question_count(
+                #     questions, 
+                #     self.config.min_incoming_questions, 
+                #     self.config.max_incoming_questions,
+                #     "incoming"
+                # )
                 
                 # 驗證問題質量
                 validated_questions = self._validate_questions(questions, "incoming")
@@ -200,12 +200,13 @@ class PseudoQueryGenerator:
             else:
                 # 如果響應不是JSON格式，嘗試提取問題
                 questions = self._extract_questions_from_text(response)
-                questions = self._validate_question_count(
-                    questions, 
-                    self.config.min_incoming_questions, 
-                    self.config.max_incoming_questions,
-                    "incoming"
-                )
+                # 暫時移除問題數量驗證
+                # questions = self._validate_question_count(
+                #     questions, 
+                #     self.config.min_incoming_questions, 
+                #     self.config.max_incoming_questions,
+                #     "incoming"
+                # )
                 return questions
                 
         except Exception as e:
@@ -213,8 +214,10 @@ class PseudoQueryGenerator:
             # 返回默認問題
             return self._generate_default_incoming_questions(node)
     
-    async def _generate_fixed_incoming_questions(self, node: LegalNode) -> List[str]:
+    async def _generate_fixed_incoming_questions(self, node: LegalNode, target_count: int = None) -> List[str]:
         """固定數量生成內向問題 - 向後兼容"""
+        if target_count is None:
+            target_count = self.config.max_pseudo_queries_per_node
         
         prompt = f"""
 您是一位法律專家，擅長提出問題並精通中文。您需要根據法律條文中的幾句連續句子生成問題。
@@ -238,24 +241,16 @@ class PseudoQueryGenerator:
 答案範例：
 {{
     "Question List": [
-        "第八條規定了著作權人的哪些權利？",
-        "著作權人的重製權是什麼？",
-        "著作權人的公開播送權是什麼？",
-        "著作權人的公開傳輸權是什麼？",
-        "第八條總共規定了幾項著作權？"
+        "第八條規定了著作權人的哪些權利？"
     ]
 }}
 
-請生成{self.config.max_pseudo_queries_per_node}個問題，嚴格遵循JSON格式，避免不必要的轉義、換行或空格。您還應該特別注意確保，除了JSON和列表格式本身使用雙引號(")外，其他所有雙引號的實例都應替換為單引號。例如，使用'著作權法'而不是"著作權法"。
+請生成{target_count}個問題，嚴格遵循JSON格式，避免不必要的轉義、換行或空格。您還應該特別注意確保，除了JSON和列表格式本身使用雙引號(")外，其他所有雙引號的實例都應替換為單引號。例如，使用'著作權法'而不是"著作權法"。
 
 請以JSON格式返回，格式如下：
 {{
     "Question List": [
-        "問題1",
-        "問題2",
-        "問題3",
-        "問題4",
-        "問題5"
+        "問題1"
     ]
 }}
 
@@ -301,7 +296,7 @@ class PseudoQueryGenerator:
         if self.config.use_dynamic_question_count:
             return await self._generate_dynamic_outgoing_questions(node)
         else:
-            return await self._generate_fixed_outgoing_questions(node)
+            return await self._generate_fixed_outgoing_questions(node, target_count=2)  # 固定2个外向问题
     
     async def _generate_dynamic_outgoing_questions(self, node: LegalNode) -> List[str]:
         """動態生成外向問題 - 讓LLM決定適當數量"""
@@ -361,13 +356,13 @@ class PseudoQueryGenerator:
                 result = json.loads(response.strip())
                 questions = result.get('Question List', [])
                 
-                # 驗證問題數量
-                questions = self._validate_question_count(
-                    questions, 
-                    self.config.min_outgoing_questions, 
-                    self.config.max_outgoing_questions,
-                    "outgoing"
-                )
+                # 暫時移除問題數量驗證
+                # questions = self._validate_question_count(
+                #     questions, 
+                #     self.config.min_outgoing_questions, 
+                #     self.config.max_outgoing_questions,
+                #     "outgoing"
+                # )
                 
                 # 驗證問題質量
                 validated_questions = self._validate_questions(questions, "outgoing")
@@ -375,12 +370,13 @@ class PseudoQueryGenerator:
             else:
                 # 如果響應不是JSON格式，嘗試提取問題
                 questions = self._extract_questions_from_text(response)
-                questions = self._validate_question_count(
-                    questions, 
-                    self.config.min_outgoing_questions, 
-                    self.config.max_outgoing_questions,
-                    "outgoing"
-                )
+                # 暫時移除問題數量驗證
+                # questions = self._validate_question_count(
+                #     questions, 
+                #     self.config.min_outgoing_questions, 
+                #     self.config.max_outgoing_questions,
+                #     "outgoing"
+                # )
                 return questions
                 
         except Exception as e:
@@ -388,8 +384,10 @@ class PseudoQueryGenerator:
             # 返回默認問題
             return self._generate_default_outgoing_questions(node)
     
-    async def _generate_fixed_outgoing_questions(self, node: LegalNode) -> List[str]:
+    async def _generate_fixed_outgoing_questions(self, node: LegalNode, target_count: int = None) -> List[str]:
         """固定數量生成外向問題 - 向後兼容"""
+        if target_count is None:
+            target_count = self.config.max_pseudo_queries_per_node
         
         prompt = f"""
 您是一位法律專家，擅長提出深刻問題並精通中文。您需要根據法律條文中的幾句連續句子生成後續問題。
@@ -413,23 +411,17 @@ class PseudoQueryGenerator:
 {{
     "Question List": [
         "著作權人如何行使重製權？",
-        "重製權的保護期限是多久？",
-        "違反重製權會有什麼法律後果？",
-        "公開播送權與公開傳輸權有什麼區別？",
-        "著作權人如何證明其權利受到侵害？"
+        "違反重製權會有什麼法律後果？"
     ]
 }}
 
-請生成{self.config.max_pseudo_queries_per_node}個問題，嚴格遵循JSON格式，避免不必要的轉義、換行或空格。您還應該特別注意確保，除了JSON和列表格式本身使用雙引號(")外，其他所有雙引號的實例都應替換為單引號。例如，使用'著作權法'而不是"著作權法"。
+請生成{target_count}個問題，嚴格遵循JSON格式，避免不必要的轉義、換行或空格。您還應該特別注意確保，除了JSON和列表格式本身使用雙引號(")外，其他所有雙引號的實例都應替換為單引號。例如，使用'著作權法'而不是"著作權法"。
 
 請以JSON格式返回，格式如下：
 {{
     "Question List": [
         "問題1",
-        "問題2",
-        "問題3",
-        "問題4",
-        "問題5"
+        "問題2"
     ]
 }}
 
@@ -596,7 +588,7 @@ class EdgeConnector:
         self.config = config
     
     async def connect_edges(self, nodes: Dict[str, LegalNode], embedding_model) -> Dict[str, List[Dict[str, Any]]]:
-        """連接節點邊 - 支持動態邊數限制"""
+        """連接節點邊 - 支持動態邊數限制和邏輯關係邊"""
         print("🔗 開始邊匹配和連接...")
         
         # 計算動態邊數限制（基於論文O(n log n)要求）
@@ -611,15 +603,29 @@ class EdgeConnector:
         # Step 1: 為所有偽查詢生成embedding
         await self._generate_pseudo_query_embeddings(nodes, embedding_model)
         
-        # Step 2: 執行邊匹配算法
-        edges = await self._perform_edge_matching(nodes)
+        # Step 2: 構建邏輯關係邊
+        print("🏗️ 構建邏輯關係邊...")
+        logical_edges = self._build_logical_edges(nodes)
         
-        # Step 3: 應用邊數限制
+        # Step 3: 執行語義相似度邊匹配算法
+        print("🔍 執行語義相似度邊匹配...")
+        semantic_edges = await self._perform_edge_matching(nodes)
+        
+        # Step 4: 合併邏輯邊和語義邊
+        print("🔄 合併邏輯關係邊和語義邊...")
+        edges = self._merge_edge_types(logical_edges, semantic_edges)
+        
+        # Step 5: 應用邊數限制
         edges = self._apply_edge_limit(edges, dynamic_limit)
         
         # 統計混合檢索信息
         total_edges = sum(len(edge_list) for edge_list in edges.values())
+        logical_count = sum(len(edge_list) for edge_list in logical_edges.values())
+        semantic_count = sum(len(edge_list) for edge_list in semantic_edges.values())
+        
         print(f"✅ 邊連接完成，共建立 {total_edges} 條邊")
+        print(f"   - 邏輯關係邊: {logical_count} 條")
+        print(f"   - 語義相似度邊: {semantic_count} 條")
         
         if self.config.use_hybrid_retrieval:
             print(f"🔗 混合檢索統計:")
@@ -744,13 +750,14 @@ class EdgeConnector:
                             jaccard_sim = self._calculate_jaccard_similarity(out_query.keywords, in_query.keywords)
                             cosine_sim = self._calculate_cosine_similarity(out_query.embedding, in_query.embedding)
                             
-                            # 混合檢索過濾：檢查詞彙和語義閾值
+                            # 計算綜合相似度
+                            similarity = self._calculate_similarity(out_query, in_query)
+                            
+                            # 混合檢索過濾：檢查詞彙和語義閾值（在計算相似度後）
                             if self.config.use_hybrid_retrieval:
                                 if (jaccard_sim < self.config.lexical_threshold or 
                                     cosine_sim < self.config.semantic_threshold):
                                     continue  # 跳過不滿足閾值的組合
-                            
-                            similarity = self._calculate_similarity(out_query, in_query)
                             
                             if similarity > best_similarity:
                                 best_similarity = similarity
@@ -774,7 +781,7 @@ class EdgeConnector:
                         'edge_embedding': edge_feature.embedding.tolist() if edge_feature.embedding is not None else None,
                         'outgoing_query_id': best_outgoing_query.query_id,
                         'incoming_query_id': best_incoming_query.query_id,
-                        'edge_type': self._determine_edge_type(node_a, node_b)
+                        'edge_type': self._determine_edge_type(node_a, node_b).value  # 轉換為字符串
                     }
                     
                     edges[node_a].append(edge_attr)
@@ -859,17 +866,243 @@ class EdgeConnector:
         )
     
     def _determine_edge_type(self, from_node: str, to_node: str) -> EdgeType:
-        """確定邊的類型"""
+        """確定邊的類型 - 使用新的層級命名"""
         # 這裡需要根據實際的節點類型來判斷
-        # 暫時使用字符串類型
-        if from_node.startswith('article_') and to_node.startswith('article_'):
-            return EdgeType.ARTICLE_TO_ARTICLE
-        elif from_node.startswith('article_') and to_node.startswith('item_'):
-            return EdgeType.ARTICLE_TO_ITEM
-        elif from_node.startswith('item_') and to_node.startswith('article_'):
-            return EdgeType.ITEM_TO_ARTICLE
+        # 檢查節點ID中的層級標識
+        if 'basic_unit_component' in from_node and 'basic_unit_component' in to_node:
+            return EdgeType.COMPONENT_TO_COMPONENT
+        elif 'basic_unit' in from_node and 'basic_unit' in to_node and 'component' not in from_node and 'component' not in to_node:
+            return EdgeType.BASIC_UNIT_TO_BASIC_UNIT
+        elif 'basic_unit' in from_node and 'component' not in from_node and 'basic_unit_component' in to_node:
+            return EdgeType.BASIC_UNIT_TO_COMPONENT
+        elif 'basic_unit_component' in from_node and 'basic_unit' in to_node and 'component' not in to_node:
+            return EdgeType.COMPONENT_TO_BASIC_UNIT
         else:
-            return EdgeType.ITEM_TO_ITEM
+            # 默認為basic_unit之間的邊
+            return EdgeType.BASIC_UNIT_TO_BASIC_UNIT
+    
+    def _build_logical_edges(self, nodes: Dict[str, LegalNode]) -> Dict[str, List[Dict[str, Any]]]:
+        """構建基於邏輯關係的邊"""
+        logical_edges = {node_id: [] for node_id in nodes.keys()}
+        
+        # 1. 構建層次結構關係邊
+        hierarchical_edges = self._build_hierarchical_edges(nodes)
+        self._merge_edges(logical_edges, hierarchical_edges)
+        
+        # 2. 構建引用關係邊
+        reference_edges = self._build_reference_edges(nodes)
+        self._merge_edges(logical_edges, reference_edges)
+        
+        # 3. 構建主題相似性邊（基於法律概念）
+        topical_edges = self._build_topical_edges(nodes)
+        self._merge_edges(logical_edges, topical_edges)
+        
+        return logical_edges
+    
+    def _build_hierarchical_edges(self, nodes: Dict[str, LegalNode]) -> Dict[str, List[Dict[str, Any]]]:
+        """構建層次結構關係邊"""
+        hierarchical_edges = {node_id: [] for node_id in nodes.keys()}
+        
+        # 按法律名稱分組
+        law_groups = {}
+        for node_id, node in nodes.items():
+            if node.law_name not in law_groups:
+                law_groups[node.law_name] = []
+            law_groups[node.law_name].append((node_id, node))
+        
+        for law_name, law_nodes in law_groups.items():
+            # 按條文號排序
+            law_nodes.sort(key=lambda x: self._extract_article_number(x[1].article_number))
+            
+            # 連接相鄰條文
+            for i in range(len(law_nodes) - 1):
+                current_id, current_node = law_nodes[i]
+                next_id, next_node = law_nodes[i + 1]
+                
+                # 創建雙向邊
+                edge = {
+                    "target": next_id,
+                    "edge_type": EdgeType.BASIC_UNIT_TO_BASIC_UNIT.value,
+                    "similarity": 0.8,  # 高相似度，因為是同一法律的相鄰條文
+                    "edge_reason": "hierarchical_adjacent_articles",
+                    "metadata": {
+                        "law_name": law_name,
+                        "current_article": current_node.article_number,
+                        "next_article": next_node.article_number,
+                        "relationship": "adjacent_articles"
+                    }
+                }
+                hierarchical_edges[current_id].append(edge)
+                
+                # 反向邊
+                reverse_edge = {
+                    "target": current_id,
+                    "edge_type": EdgeType.BASIC_UNIT_TO_BASIC_UNIT.value,
+                    "similarity": 0.8,
+                    "edge_reason": "hierarchical_adjacent_articles",
+                    "metadata": {
+                        "law_name": law_name,
+                        "current_article": next_node.article_number,
+                        "previous_article": current_node.article_number,
+                        "relationship": "adjacent_articles"
+                    }
+                }
+                hierarchical_edges[next_id].append(reverse_edge)
+        
+        return hierarchical_edges
+    
+    def _build_reference_edges(self, nodes: Dict[str, LegalNode]) -> Dict[str, List[Dict[str, Any]]]:
+        """構建引用關係邊（基於條文內容中的引用）"""
+        reference_edges = {node_id: [] for node_id in nodes.keys()}
+        
+        # 提取引用模式的正則表達式
+        reference_patterns = [
+            r'第\s*(\d+)\s*條',  # 第X條
+            r'第\s*(\d+)\s*項',  # 第X項
+            r'前項',  # 前項
+            r'前條',  # 前條
+            r'本條',  # 本條
+            r'本項',  # 本項
+            r'依\s*第\s*(\d+)\s*條',  # 依第X條
+        ]
+        
+        for source_id, source_node in nodes.items():
+            content = source_node.content
+            
+            for pattern in reference_patterns:
+                matches = re.finditer(pattern, content)
+                for match in matches:
+                    referenced_number = match.group(1) if match.groups() else None
+                    
+                    # 查找被引用的節點
+                    for target_id, target_node in nodes.items():
+                        if (target_id != source_id and 
+                            target_node.law_name == source_node.law_name):
+                            
+                            # 檢查是否引用該條文
+                            if referenced_number and referenced_number == target_node.article_number:
+                                edge = {
+                                    "target": target_id,
+                                    "edge_type": EdgeType.BASIC_UNIT_TO_BASIC_UNIT.value,
+                                    "similarity": 0.9,  # 高相似度，因為是明確引用
+                                    "edge_reason": "reference_relationship",
+                                    "metadata": {
+                                        "law_name": source_node.law_name,
+                                        "source_article": source_node.article_number,
+                                        "referenced_article": target_node.article_number,
+                                        "reference_pattern": pattern,
+                                        "match_text": match.group()
+                                    }
+                                }
+                                reference_edges[source_id].append(edge)
+        
+        return reference_edges
+    
+    def _build_topical_edges(self, nodes: Dict[str, LegalNode]) -> Dict[str, List[Dict[str, Any]]]:
+        """構建主題相似性邊（基於法律概念和關鍵詞）"""
+        topical_edges = {node_id: [] for node_id in nodes.keys()}
+        
+        # 法律概念關鍵詞
+        legal_concepts = {
+            '著作權': ['著作權', '版權', '創作', '作品', '作者', '著作人'],
+            '商標': ['商標', '標章', '註冊', '品牌', '識別'],
+            '專利': ['專利', '發明', '技術', '創新', '專利權'],
+            '侵權': ['侵權', '侵害', '違反', '不法', '損害'],
+            '授權': ['授權', '許可', '同意', '允許', '授與'],
+            '賠償': ['賠償', '損害', '補償', '罰金', '罰款'],
+            '程序': ['程序', '流程', '手續', '申請', '審查']
+        }
+        
+        # 為每個節點提取概念標籤
+        node_concepts = {}
+        for node_id, node in nodes.items():
+            concepts = []
+            content_lower = node.content.lower()
+            
+            for concept, keywords in legal_concepts.items():
+                if any(keyword in content_lower for keyword in keywords):
+                    concepts.append(concept)
+            
+            node_concepts[node_id] = concepts
+        
+        # 基於概念相似性構建邊
+        for source_id, source_concepts in node_concepts.items():
+            for target_id, target_concepts in node_concepts.items():
+                if source_id != target_id:
+                    # 計算概念重疊度
+                    common_concepts = set(source_concepts) & set(target_concepts)
+                    if common_concepts:
+                        similarity = len(common_concepts) / max(len(source_concepts), len(target_concepts))
+                        
+                        if similarity >= 0.3:  # 至少30%的概念重疊
+                            edge = {
+                                "target": target_id,
+                                "edge_type": EdgeType.BASIC_UNIT_TO_BASIC_UNIT.value,
+                                "similarity": similarity,
+                                "edge_reason": "topical_similarity",
+                                "metadata": {
+                                    "common_concepts": list(common_concepts),
+                                    "source_concepts": source_concepts,
+                                    "target_concepts": target_concepts,
+                                    "similarity_score": similarity
+                                }
+                            }
+                            topical_edges[source_id].append(edge)
+        
+        return topical_edges
+    
+    def _merge_edges(self, target_edges: Dict[str, List[Dict[str, Any]]], 
+                    source_edges: Dict[str, List[Dict[str, Any]]]):
+        """合併邊到目標字典"""
+        for node_id, edges in source_edges.items():
+            target_edges[node_id].extend(edges)
+    
+    def _merge_edge_types(self, logical_edges: Dict[str, List[Dict[str, Any]]], 
+                         semantic_edges: Dict[str, List[Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
+        """合併邏輯邊和語義邊，避免重複"""
+        merged_edges = {node_id: [] for node_id in logical_edges.keys()}
+        
+        # 添加邏輯邊
+        for node_id, edges in logical_edges.items():
+            merged_edges[node_id].extend(edges)
+        
+        # 添加語義邊，但避免重複
+        for node_id, semantic_edge_list in semantic_edges.items():
+            # 獲取現有目標節點（邏輯邊使用"target"，語義邊使用"to_node"）
+            existing_targets = set()
+            for edge in merged_edges[node_id]:
+                if "target" in edge:
+                    existing_targets.add(edge["target"])
+                elif "to_node" in edge:
+                    existing_targets.add(edge["to_node"])
+            
+            for edge in semantic_edge_list:
+                # 獲取語義邊的目標節點
+                semantic_target = edge.get("to_node") or edge.get("target")
+                if semantic_target and semantic_target not in existing_targets:
+                    # 統一邊格式，將"to_node"轉換為"target"
+                    normalized_edge = edge.copy()
+                    if "to_node" in normalized_edge and "target" not in normalized_edge:
+                        normalized_edge["target"] = normalized_edge.pop("to_node")
+                    
+                    # 確保有相似度分數
+                    if "similarity_score" in normalized_edge:
+                        normalized_edge["similarity"] = normalized_edge["similarity_score"]
+                    
+                    merged_edges[node_id].append(normalized_edge)
+        
+        return merged_edges
+    
+    def _extract_article_number(self, article_str: str) -> int:
+        """提取條文號碼用於排序"""
+        if not article_str:
+            return 0
+        
+        # 提取數字
+        numbers = re.findall(r'\d+', article_str)
+        if numbers:
+            return int(numbers[0])
+        return 0
 
 class PassageGraphBuilder:
     """段落圖構建器"""
@@ -931,16 +1164,16 @@ class PassageGraphBuilder:
                         # 生成node_id，如果metadata中沒有id欄位
                         node_id = chunk['metadata'].get('id', f"{doc_id}_basic_unit_{chunk_idx}")
                         
-                        article_node = LegalNode(
+                        basic_unit_node = LegalNode(
                             node_id=node_id,
-                            node_type=NodeType.ARTICLE,
+                            node_type=NodeType.BASIC_UNIT,
                             content=chunk['content'],
                             contextualized_text=chunk['content'],
                             law_name=chunk['metadata'].get('law_name', ''),
                             article_number=chunk['metadata'].get('article_label', ''),
                             metadata=chunk['metadata']
                         )
-                        nodes[article_node.node_id] = article_node
+                        nodes[basic_unit_node.node_id] = basic_unit_node
                         
                     except Exception as e:
                         print(f"❌ 創建basic_unit節點失敗 (chunk {chunk_idx}): {e}")
@@ -967,9 +1200,9 @@ class PassageGraphBuilder:
                         # 生成node_id，如果metadata中沒有id欄位
                         node_id = chunk['metadata'].get('id', f"{doc_id}_basic_unit_component_{chunk_idx}")
                         
-                        item_node = LegalNode(
+                        component_node = LegalNode(
                             node_id=node_id,
-                            node_type=NodeType.ITEM,
+                            node_type=NodeType.BASIC_UNIT_COMPONENT,
                             content=chunk['content'],
                             contextualized_text=chunk['content'],
                             law_name=chunk['metadata'].get('law_name', ''),
@@ -978,7 +1211,7 @@ class PassageGraphBuilder:
                             parent_article_id=chunk['metadata'].get('parent_article_id'),
                             metadata=chunk['metadata']
                         )
-                        nodes[item_node.node_id] = item_node
+                        nodes[component_node.node_id] = component_node
                         
                     except Exception as e:
                         print(f"❌ 創建basic_unit_component節點失敗 (chunk {chunk_idx}): {e}")
@@ -988,49 +1221,120 @@ class PassageGraphBuilder:
         return nodes
     
     async def _generate_pseudo_queries(self, nodes: Dict[str, LegalNode]):
-        """為所有節點生成偽查詢"""
+        """為所有節點生成偽查詢（支持並行批量處理）"""
         print("🤖 開始生成偽查詢...")
         
         node_list = list(nodes.values())
         total_nodes = len(node_list)
         start_time = time.time()
         
+        # 🚀 並行批量處理配置
+        batch_size = 10  # 每批處理10個節點
+        use_parallel = True  # ✅ 啟用並行處理（LLM文本生成，速率限制較寬松）
+        # 注意：這裡是LLM生成文本（偽查詢），不是Embedding
+        # Gemini LLM速率限制：15 RPM ≈ 0.25 req/秒，並行10個不會超限
+        
         print(f"📊 總共需要處理 {total_nodes} 個節點")
-        print(f"⏱️ 預計每個節點需要 2-3 秒（包含LLM調用）")
-        print(f"🕐 預計總時間: {total_nodes * 2.5 / 60:.1f} 分鐘")
+        if use_parallel:
+            print(f"⚡ 使用並行處理模式，批次大小: {batch_size}")
+            print(f"🚀 預計加速比: {batch_size}x")
+            print(f"⏱️ 預計總時間: {total_nodes * 2.5 / 60 / batch_size:.1f} 分鐘（串行需 {total_nodes * 2.5 / 60:.1f} 分鐘）")
+        else:
+            print(f"⏳ 使用串行處理模式")
+            print(f"⏱️ 預計每個節點需要 2-3 秒（包含LLM調用）")
+            print(f"🕐 預計總時間: {total_nodes * 2.5 / 60:.1f} 分鐘")
         print("=" * 60)
         
-        for i, node in enumerate(node_list):
-            try:
-                node_start_time = time.time()
-                await self.pseudo_query_generator.generate_pseudo_queries_for_node(node)
-                node_time = time.time() - node_start_time
+        if use_parallel:
+            # 🚀 並行批量處理
+            for batch_idx in range(0, total_nodes, batch_size):
+                batch_start = batch_idx
+                batch_end = min(batch_idx + batch_size, total_nodes)
+                batch_nodes = node_list[batch_start:batch_end]
                 
-                # 計算進度和剩餘時間
-                progress = (i + 1) / total_nodes * 100
-                elapsed_time = time.time() - start_time
-                avg_time_per_node = elapsed_time / (i + 1)
-                remaining_nodes = total_nodes - (i + 1)
-                estimated_remaining_time = remaining_nodes * avg_time_per_node
+                batch_start_time = time.time()
                 
-                # 每5個節點顯示一次進度
-                if (i + 1) % 5 == 0 or i == 0:
-                    print(f"📈 進度: {i+1}/{total_nodes} ({progress:.1f}%) | "
-                          f"節點: {node.node_id[:20]}... | "
-                          f"耗時: {node_time:.1f}s | "
-                          f"剩餘: {estimated_remaining_time/60:.1f}分鐘")
+                # 並行處理當前批次
+                tasks = [
+                    self.pseudo_query_generator.generate_pseudo_queries_for_node(node)
+                    for node in batch_nodes
+                ]
                 
-                # 每20個節點顯示詳細統計
-                if (i + 1) % 20 == 0:
-                    print(f"📊 統計: 平均 {avg_time_per_node:.1f}s/節點 | "
-                          f"已用時: {elapsed_time/60:.1f}分鐘 | "
-                          f"預計完成: {estimated_remaining_time/60:.1f}分鐘")
+                try:
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
                     
-            except Exception as e:
-                print(f"❌ 節點 {node.node_id} 偽查詢生成失敗: {e}")
-                continue
+                    # 檢查錯誤
+                    for idx, result in enumerate(results):
+                        if isinstance(result, Exception):
+                            print(f"❌ 節點 {batch_nodes[idx].node_id} 失敗: {result}")
+                    
+                    batch_time = time.time() - batch_start_time
+                    
+                    # 計算進度
+                    progress = batch_end / total_nodes * 100
+                    elapsed_time = time.time() - start_time
+                    avg_time_per_batch = elapsed_time / ((batch_idx // batch_size) + 1)
+                    remaining_batches = (total_nodes - batch_end) / batch_size
+                    estimated_remaining_time = remaining_batches * avg_time_per_batch
+                    
+                    print(f"📈 批次 {batch_idx//batch_size + 1}: {batch_end}/{total_nodes} ({progress:.1f}%) | "
+                          f"批次耗時: {batch_time:.1f}s | "
+                          f"平均: {batch_time/len(batch_nodes):.1f}s/節點 | "
+                          f"剩餘: {estimated_remaining_time/60:.1f}分鐘")
+                    
+                except Exception as e:
+                    print(f"❌ 批次處理失敗: {e}")
+                    continue
+        else:
+            # ⏳ 串行處理（原方式）
+            for i, node in enumerate(node_list):
+                try:
+                    node_start_time = time.time()
+                    await self.pseudo_query_generator.generate_pseudo_queries_for_node(node)
+                    node_time = time.time() - node_start_time
+                    
+                    # 計算進度和剩餘時間
+                    progress = (i + 1) / total_nodes * 100
+                    elapsed_time = time.time() - start_time
+                    avg_time_per_node = elapsed_time / (i + 1)
+                    remaining_nodes = total_nodes - (i + 1)
+                    estimated_remaining_time = remaining_nodes * avg_time_per_node
+                    
+                    # 每5個節點顯示一次進度
+                    if (i + 1) % 5 == 0 or i == 0:
+                        print(f"📈 進度: {i+1}/{total_nodes} ({progress:.1f}%) | "
+                              f"節點: {node.node_id[:20]}... | "
+                              f"耗時: {node_time:.1f}s | "
+                              f"剩餘: {estimated_remaining_time/60:.1f}分鐘")
+                    
+                    # 每20個節點顯示詳細統計
+                    if (i + 1) % 20 == 0:
+                        print(f"📊 統計: 平均 {avg_time_per_node:.1f}s/節點 | "
+                              f"已用時: {elapsed_time/60:.1f}分鐘 | "
+                              f"預計完成: {estimated_remaining_time/60:.1f}分鐘")
+                        
+                except Exception as e:
+                    print(f"❌ 節點 {node.node_id} 偽查詢生成失敗: {e}")
+                    continue
         
         total_time = time.time() - start_time
         print("=" * 60)
         print(f"✅ 偽查詢生成完成！總耗時: {total_time/60:.1f} 分鐘")
         print(f"📊 平均每個節點: {total_time/total_nodes:.1f} 秒")
+        if use_parallel:
+            serial_time = total_nodes * 2.5 / 60
+            speedup = serial_time / (total_time / 60) if total_time > 0 else 1
+            print(f"⚡ 實際加速比: {speedup:.1f}x（並行 vs 串行）")
+    
+    
+    
+    def _extract_article_number(self, article_str: str) -> int:
+        """提取條文號碼用於排序"""
+        if not article_str:
+            return 0
+        
+        # 提取數字
+        numbers = re.findall(r'\d+', article_str)
+        if numbers:
+            return int(numbers[0])
+        return 0
