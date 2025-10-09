@@ -891,7 +891,7 @@ async def upload(file: UploadFile = File(...)):
             content={"error": "No text content found in the file"}
         )
     
-    store.docs[doc_id] = DocRecord(
+    doc_record = DocRecord(
         id=doc_id,
         filename=file.filename,
         text=text,
@@ -900,8 +900,11 @@ async def upload(file: UploadFile = File(...)):
         chunk_size=0,
         overlap=0,
     )
-    # When uploading new docs, prior embeddings are invalid
-    store.reset_embeddings()
+    store.add_doc(doc_record)
+    
+    # 自動保存數據
+    store.save_data()
+    
     return {"doc_id": doc_id, "filename": file.filename, "num_chars": len(text)}
 
 
@@ -1940,6 +1943,36 @@ def chunk(req: ChunkRequest):
     }
 
 
+def clean_text_for_gemini(text: str) -> str:
+    """清理文本以符合Gemini API要求"""
+    import re
+    
+    # 移除控制字符
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+    
+    # 處理法律文檔的特殊格式
+    # 移除過多的換行符，但保留段落結構
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    
+    # 移除多餘的空格
+    text = re.sub(r' +', ' ', text)
+    
+    # 移除行首行尾空格
+    text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)
+    
+    # 確保文本不會太長
+    if len(text) > 8000:
+        # 嘗試在合適的位置截斷（如段落邊界）
+        truncated = text[:8000]
+        last_paragraph = truncated.rfind('\n\n')
+        if last_paragraph > 6000:  # 如果最後一個段落不太遠
+            text = truncated[:last_paragraph]
+        else:
+            text = truncated
+    
+    return text.strip()
+
+
 async def embed_gemini(texts: List[str]) -> List[List[float]]:
     """Call Google Generative API (Gemini) embeddings endpoint using API key.
 
@@ -1965,28 +1998,50 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
         # 逐個處理文本（Gemini API 需要單個請求）
         for i, text in enumerate(texts):
             try:
-                # 檢查文本長度，Gemini API有長度限制
-                # Gemini embedding API 支持最多 2048 tokens，約 10000-20000 字符（中文）
-                MAX_CHARS = 20000
-                original_length = len(text)
-                if original_length > MAX_CHARS:
-                    text = text[:MAX_CHARS]
-                    print(f"⚠️ 文本過長({original_length}字符)，已截斷到{MAX_CHARS}字符")
+                # 使用專門的文本清理函數
+                original_text = text
+                text = clean_text_for_gemini(text)
+                
+                # 如果文本為空或過短，跳過
+                if len(text.strip()) < 10:
+                    print(f"⚠️ 文本過短或為空，跳過處理")
+                    import numpy as np
+                    fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
+                    out.append(fallback_vector)
+                    continue
                 
                 payload = {
                     "model": f"models/{model}",
                     "content": {"parts": [{"text": text}]},
                     "output_dimensionality": EMBEDDING_DIMENSION  # 使用全局配置的維度
                 }
+                
                 r = await client.post(url, headers=headers, json=payload)
                 
                 if r.status_code == 400:
-                    print(f"❌ Gemini API 400錯誤，文本內容可能有問題: {text[:100]}...")
-                    # 使用隨機向量作為fallback
-                    import numpy as np
-                    fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
-                    out.append(fallback_vector)
-                    continue
+                    print(f"❌ Gemini API 400錯誤，嘗試清理文本...")
+                    # 嘗試更激進的文本清理
+                    cleaned_text = re.sub(r'[^\w\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]', ' ', text)
+                    cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+                    
+                    if len(cleaned_text) > 10:
+                        payload["content"]["parts"][0]["text"] = cleaned_text
+                        r = await client.post(url, headers=headers, json=payload)
+                        
+                        if r.status_code == 400:
+                            print(f"❌ 清理後仍失敗，使用fallback向量")
+                            print(f"❌ 原始文本前100字符: {original_text[:100]}")
+                            print(f"❌ 清理後文本前100字符: {cleaned_text[:100]}")
+                            import numpy as np
+                            fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
+                            out.append(fallback_vector)
+                            continue
+                    else:
+                        print(f"❌ 清理後文本過短，使用fallback向量")
+                        import numpy as np
+                        fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
+                        out.append(fallback_vector)
+                        continue
                 
                 r.raise_for_status()
                 data = r.json()
@@ -2022,6 +2077,16 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
                 
             except Exception as e:
                 print(f"❌ 處理第{i+1}個文本時出錯: {e}")
+                print(f"❌ 錯誤文本前100字符: {text[:100] if 'text' in locals() else 'N/A'}")
+                
+                # 嘗試獲取更詳細的錯誤信息
+                if hasattr(e, 'response') and hasattr(e.response, 'text'):
+                    try:
+                        error_detail = e.response.json()
+                        print(f"❌ API錯誤詳情: {error_detail}")
+                    except:
+                        print(f"❌ API錯誤響應: {e.response.text[:200]}")
+                
                 # 使用隨機向量作為fallback
                 import numpy as np
                 fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
@@ -2087,6 +2152,10 @@ async def embed(req: EmbedRequest):
             store.embeddings = vectors
             store.chunk_doc_ids = chunk_doc_ids
             store.chunks_flat = all_chunks
+            
+            # 自動保存數據
+            store.save_data()
+            
             return {
                 "provider": "gemini", 
                 "model": "gemini-embedding-001",
@@ -2104,6 +2173,10 @@ async def embed(req: EmbedRequest):
             store.embeddings = vectors
             store.chunk_doc_ids = chunk_doc_ids
             store.chunks_flat = all_chunks
+            
+            # 自動保存數據
+            store.save_data()
+            
             return {
                 "provider": "bge-m3", 
                 "model": "BAAI/bge-m3",
@@ -2418,6 +2491,7 @@ async def multi_level_embed(req: EmbedRequest):
             doc.multi_level_chunks = converted_chunks
             doc.chunking_strategy = "structured_to_multi_level"
             store.add_doc(doc)
+            store.save_data()
     
     if not all_multi_level_chunks:
         return JSONResponse(
@@ -2544,6 +2618,9 @@ async def multi_level_embed(req: EmbedRequest):
             print(f"📊 進度: {completed_levels}/{total_levels} ({progress:.1f}%)")
     
     print(f"🎉 多層次embedding處理完成！總共處理了 {total_vectors} 個向量，成功完成 {completed_levels}/{total_levels} 個層次")
+    
+    # 自動保存多層次embedding數據
+    store.save_data()
     
     if not level_results:
         return JSONResponse(
@@ -4887,6 +4964,7 @@ async def process_pdf_conversion(task_id: str, file_content: bytes, options: Met
         
         # 重置嵌入狀態
         store.reset_embeddings()
+        store.save_data()
         
         # 保存到緩存
         cache_data = {
@@ -5592,6 +5670,7 @@ def legal_semantic_chunk(req: ChunkConfig):
         store.add_doc(doc)
         
         store.reset_embeddings()
+        store.save_data()
         
         # 計算統計信息
         chunk_lengths = [len(chunk) for chunk in chunks] if chunks else []
@@ -5651,6 +5730,7 @@ def multi_level_semantic_chunk(req: ChunkConfig):
         store.add_doc(doc)
         
         store.reset_embeddings()
+        store.save_data()
         
         # 計算各層次統計
         level_statistics = {}
@@ -6127,6 +6207,234 @@ async def hybrid_retrieve_original(query: str, k: int):
     return []
 
 
+@app.get("/api/embedding-databases")
+async def list_embedding_databases():
+    """列出所有可用的embedding資料庫"""
+    databases = []
+    print(f"🔍 API調用開始: has_multi_level_embeddings={store.has_multi_level_embeddings()}")
+    if store.has_multi_level_embeddings():
+        print(f"🔍 可用層次: {store.get_available_levels()}")
+    
+    # 強制測試多層次embedding
+    print(f"🔍 強制檢查: multi_level_embeddings keys = {list(store.multi_level_embeddings.keys())}")
+    
+    # 手動檢查並創建測試數據
+    if len(store.multi_level_embeddings) == 0:
+        print("🔍 沒有多層次embedding，跳過合併邏輯")
+    else:
+        print(f"🔍 找到多層次embedding: {list(store.multi_level_embeddings.keys())}")
+    
+    # 為了演示目的，如果沒有embedding資料且沒有被標記為已刪除，則創建一些測試embedding資料
+    # 移除自動創建演示embedding資料庫的邏輯
+    # 現在只有在用戶實際創建embedding時才會顯示資料庫
+    
+    # 檢查標準embedding
+    if store.embeddings is not None and store.chunks_flat:
+        # 獲取相關文檔信息
+        doc_info = {}
+        for doc_id in set(store.chunk_doc_ids):
+            doc = store.get_doc(doc_id)
+            if doc:
+                doc_info[doc_id] = {
+                    "filename": doc.filename,
+                    "json_data": doc.json_data is not None
+                }
+        
+        databases.append({
+            "id": "standard_embedding",
+            "type": "standard",
+            "name": "標準Embedding",
+            "provider": "gemini",  # 從配置推斷
+            "model": "gemini-embedding-001",
+            "num_vectors": len(store.embeddings),
+            "dimension": len(store.embeddings[0]) if store.embeddings else 0,
+            "chunking_strategy": "basic",  # 需要從配置推斷
+            "documents": list(doc_info.values()),
+            "created_at": datetime.now().isoformat()
+        })
+    
+    # 檢查多層次embedding - 合併為一個資料庫顯示
+    print(f"🔍 檢查多層次embedding: has_multi_level_embeddings={store.has_multi_level_embeddings()}")
+    if store.has_multi_level_embeddings():
+        available_levels = store.get_available_levels()
+        
+        # 收集所有層次的信息
+        all_doc_info = {}
+        total_vectors = 0
+        providers = set()
+        models = set()
+        dimensions = set()
+        levels_info = []
+        
+        for level in available_levels:
+            level_data = store.get_multi_level_embeddings(level)
+            if level_data:
+                # 收集文檔信息
+                for doc_id in set(level_data.get('doc_ids', [])):
+                    doc = store.get_doc(doc_id)
+                    if doc:
+                        all_doc_info[doc_id] = {
+                            "filename": doc.filename,
+                            "json_data": doc.json_data is not None
+                        }
+                
+                # 統計信息
+                level_vectors = len(level_data.get('embeddings', []))
+                total_vectors += level_vectors
+                providers.add(level_data.get('metadata', {}).get('provider', 'unknown'))
+                models.add(level_data.get('metadata', {}).get('model', 'unknown'))
+                dimensions.add(level_data.get('metadata', {}).get('dimension', 0))
+                
+                levels_info.append({
+                    "level": level,
+                    "description": get_level_description(level),
+                    "num_vectors": level_vectors
+                })
+        
+        if total_vectors > 0:
+            databases.append({
+                "id": "multi_level_combined",
+                "type": "multi_level",
+                "name": "多層次Embedding (多層次分塊 + 多層次Embedding)",
+                "provider": list(providers)[0] if providers else "unknown",
+                "model": list(models)[0] if models else "unknown",
+                "num_vectors": total_vectors,
+                "dimension": list(dimensions)[0] if dimensions else 0,
+                "chunking_strategy": "hierarchical",
+                "documents": list(all_doc_info.values()),
+                "levels": levels_info,
+                "created_at": datetime.now().isoformat()
+            })
+    
+    return databases
+
+
+@app.delete("/api/embedding-databases/{database_id}")
+async def delete_embedding_database(database_id: str):
+    """刪除指定的embedding資料庫"""
+    try:
+        if database_id == "standard_embedding":
+            # 刪除標準embedding
+            if store.embeddings is not None:
+                store.reset_embeddings()
+                store.save_data()
+                # 標記演示資料已被刪除，防止重新創建
+                store.demo_data_deleted = True
+                print(f"✅ 已刪除標準embedding資料庫")
+                return {"message": "標準embedding資料庫已刪除", "success": True}
+            else:
+                return JSONResponse(
+                    status_code=404, 
+                    content={"error": "標準embedding資料庫不存在"}
+                )
+        elif database_id == "multi_level_combined":
+            # 刪除整個多層次embedding資料庫
+            if store.has_multi_level_embeddings():
+                # 清除所有多層次embedding數據
+                store.multi_level_embeddings = {}
+                store.multi_level_chunk_doc_ids = {}
+                store.multi_level_chunks_flat = {}
+                store.multi_level_metadata = {}
+                store.save_data()
+                
+                print(f"✅ 已刪除整個多層次embedding資料庫")
+                return {"message": "多層次embedding資料庫已刪除", "success": True}
+            else:
+                return JSONResponse(
+                    status_code=404, 
+                    content={"error": "多層次embedding資料庫不存在"}
+                )
+        elif database_id.startswith("multi_level_"):
+            # 刪除特定層次的多層次embedding（保留向後兼容性）
+            level_name = database_id.replace("multi_level_", "")
+            if store.has_multi_level_embeddings():
+                available_levels = store.get_available_levels()
+                if level_name in available_levels:
+                    # 刪除特定層次
+                    if level_name in store.multi_level_embeddings:
+                        del store.multi_level_embeddings[level_name]
+                    if level_name in store.multi_level_chunk_doc_ids:
+                        del store.multi_level_chunk_doc_ids[level_name]
+                    if level_name in store.multi_level_chunks_flat:
+                        del store.multi_level_chunks_flat[level_name]
+                    if level_name in store.multi_level_metadata:
+                        del store.multi_level_metadata[level_name]
+                    
+                    print(f"✅ 已刪除多層次embedding層次: {level_name}")
+                    return {"message": f"多層次embedding層次 '{level_name}' 已刪除", "success": True}
+                else:
+                    return JSONResponse(
+                        status_code=404, 
+                        content={"error": f"多層次embedding層次 '{level_name}' 不存在"}
+                    )
+            else:
+                return JSONResponse(
+                    status_code=404, 
+                    content={"error": "多層次embedding資料庫不存在"}
+                )
+        else:
+            return JSONResponse(
+                status_code=400, 
+                content={"error": f"不支持的embedding資料庫類型: {database_id}"}
+            )
+    except Exception as e:
+        print(f"❌ 刪除embedding資料庫失敗: {e}")
+        return JSONResponse(
+            status_code=500, 
+            content={"error": f"刪除embedding資料庫失敗: {str(e)}"}
+        )
+
+
+@app.post("/api/reset-demo-data")
+async def reset_demo_data():
+    """重置演示資料狀態，用於測試目的"""
+    try:
+        store.demo_data_deleted = False
+        store.reset_embeddings()
+        store.save_data()
+        print("✅ 已重置演示資料狀態")
+        return {"message": "演示資料狀態已重置", "success": True}
+    except Exception as e:
+        print(f"❌ 重置演示資料失敗: {e}")
+        return JSONResponse(
+            status_code=500, 
+            content={"error": f"重置演示資料失敗: {str(e)}"}
+        )
+
+
+@app.post("/api/clear-all-data")
+async def clear_all_data():
+    """清除所有數據（用於測試）"""
+    try:
+        store.clear_all_data()
+        print("🗑️ 所有數據已清除")
+        return {"message": "All data cleared successfully", "success": True}
+    except Exception as e:
+        print(f"❌ 清除數據失敗: {e}")
+        return JSONResponse(
+            status_code=500, 
+            content={"error": f"清除數據失敗: {str(e)}"}
+        )
+
+
+@app.get("/api/debug-store")
+async def debug_store():
+    """調試store狀態"""
+    return {
+        "has_standard_embeddings": store.embeddings is not None,
+        "has_multi_level_embeddings": store.has_multi_level_embeddings(),
+        "available_levels": store.get_available_levels(),
+        "multi_level_embeddings_keys": list(store.multi_level_embeddings.keys()),
+        "demo_data_deleted": getattr(store, 'demo_data_deleted', False),
+        "docs_count": len(store.docs)
+    }
+
+
+@app.get("/api/docs")
+async def list_docs():
+    """列出所有文檔"""
+    docs = store.list_docs()
+    return [{"id": d.id, "filename": d.filename, "num_chars": len(d.text)} for d in docs]
 
 
 # ============================================

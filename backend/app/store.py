@@ -2,6 +2,9 @@
 數據存儲模組
 """
 
+import os
+import json
+import pickle
 from typing import Dict, Optional, List, Any
 from .models import DocRecord, EvaluationTask
 
@@ -21,6 +24,16 @@ class InMemoryStore:
         self.multi_level_chunk_doc_ids: Dict[str, List[str]] = {}
         self.multi_level_chunks_flat: Dict[str, List[str]] = {}
         self.multi_level_metadata: Dict[str, Dict[str, Any]] = {}  # 存儲模型信息等元數據
+        
+        # 演示資料管理
+        self.demo_data_deleted = False  # 標記演示資料是否已被刪除
+        
+        # 持久化設置
+        self.data_dir = "data"
+        self.ensure_data_dir()
+        
+        # 啟動時自動載入數據
+        self.load_data()
 
     def reset_embeddings(self):
         """清除向量/索引狀態，以便重新計算嵌入"""
@@ -58,6 +71,109 @@ class InMemoryStore:
     def add_evaluation_task(self, task: EvaluationTask):
         """添加評估任務"""
         self.evaluation_tasks[task.id] = task
+    
+    def ensure_data_dir(self):
+        """確保數據目錄存在"""
+        if not os.path.exists(self.data_dir):
+            os.makedirs(self.data_dir)
+            print(f"✅ 創建數據目錄: {self.data_dir}")
+    
+    def save_data(self):
+        """保存所有數據到文件"""
+        try:
+            # 準備要保存的數據
+            data_to_save = {
+                "docs": {},
+                "embeddings": self.embeddings,
+                "chunk_doc_ids": self.chunk_doc_ids,
+                "chunks_flat": self.chunks_flat,
+                "multi_level_embeddings": self.multi_level_embeddings,
+                "multi_level_chunk_doc_ids": self.multi_level_chunk_doc_ids,
+                "multi_level_chunks_flat": self.multi_level_chunks_flat,
+                "multi_level_metadata": self.multi_level_metadata,
+                "demo_data_deleted": self.demo_data_deleted
+            }
+            
+            # 轉換DocRecord對象為可序列化的字典
+            for doc_id, doc in self.docs.items():
+                data_to_save["docs"][doc_id] = {
+                    "id": doc.id,
+                    "filename": doc.filename,
+                    "text": doc.text,
+                    "chunks": doc.chunks,
+                    "chunk_size": doc.chunk_size,
+                    "overlap": doc.overlap,
+                    "json_data": doc.json_data,
+                    "structured_chunks": doc.structured_chunks,
+                    "generated_questions": doc.generated_questions
+                }
+            
+            # 保存到pickle文件
+            with open(os.path.join(self.data_dir, "store_data.pkl"), "wb") as f:
+                pickle.dump(data_to_save, f)
+            
+            print(f"✅ 數據已保存到 {self.data_dir}/store_data.pkl")
+            
+        except Exception as e:
+            print(f"❌ 保存數據失敗: {e}")
+    
+    def load_data(self):
+        """從文件載入數據"""
+        try:
+            data_file = os.path.join(self.data_dir, "store_data.pkl")
+            if not os.path.exists(data_file):
+                print(f"📁 數據文件不存在，使用空數據: {data_file}")
+                return
+            
+            with open(data_file, "rb") as f:
+                data = pickle.load(f)
+            
+            # 恢復docs
+            self.docs = {}
+            for doc_id, doc_data in data.get("docs", {}).items():
+                self.docs[doc_id] = DocRecord(
+                    id=doc_data["id"],
+                    filename=doc_data["filename"],
+                    text=doc_data["text"],
+                    chunks=doc_data["chunks"],
+                    chunk_size=doc_data["chunk_size"],
+                    overlap=doc_data["overlap"],
+                    json_data=doc_data.get("json_data"),
+                    structured_chunks=doc_data.get("structured_chunks"),
+                    generated_questions=doc_data.get("generated_questions")
+                )
+            
+            # 恢復其他數據
+            self.embeddings = data.get("embeddings")
+            self.chunk_doc_ids = data.get("chunk_doc_ids", [])
+            self.chunks_flat = data.get("chunks_flat", [])
+            self.multi_level_embeddings = data.get("multi_level_embeddings", {})
+            self.multi_level_chunk_doc_ids = data.get("multi_level_chunk_doc_ids", {})
+            self.multi_level_chunks_flat = data.get("multi_level_chunks_flat", {})
+            self.multi_level_metadata = data.get("multi_level_metadata", {})
+            self.demo_data_deleted = data.get("demo_data_deleted", False)
+            
+            print(f"✅ 數據已從 {data_file} 載入")
+            print(f"   📄 文檔數量: {len(self.docs)}")
+            print(f"   🔢 標準embedding: {'有' if self.embeddings is not None else '無'}")
+            print(f"   🏗️ 多層次embedding: {len(self.multi_level_embeddings)} 個層次")
+            
+        except Exception as e:
+            print(f"❌ 載入數據失敗: {e}")
+    
+    def clear_all_data(self):
+        """清除所有數據並保存"""
+        self.docs = {}
+        self.embeddings = None
+        self.chunk_doc_ids = []
+        self.chunks_flat = []
+        self.multi_level_embeddings = {}
+        self.multi_level_chunk_doc_ids = {}
+        self.multi_level_chunks_flat = {}
+        self.multi_level_metadata = {}
+        self.demo_data_deleted = False
+        self.save_data()
+        print("🗑️ 所有數據已清除")
 
     def get_evaluation_task(self, task_id: str) -> Optional[EvaluationTask]:
         """獲取評估任務"""

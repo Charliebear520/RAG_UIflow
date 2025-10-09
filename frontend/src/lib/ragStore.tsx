@@ -42,6 +42,7 @@ type RagContextType = {
   uploadJson: (file: File) => Promise<void>;
   updateJsonData: (newJsonData: any) => void;
   setDocId: (docId: string | null) => void;
+  setEmbedProvider: (provider: string | null) => void;
   chunk: (
     size: number,
     overlap: number,
@@ -446,6 +447,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     uploadJson,
     updateJsonData,
     setDocId,
+    setEmbedProvider,
     chunk,
     setChunkingResultsAndStrategy,
     embed,

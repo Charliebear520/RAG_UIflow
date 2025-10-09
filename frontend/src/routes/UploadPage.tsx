@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useRag } from "../lib/ragStore";
 import Editor from "@monaco-editor/react";
 import { api } from "../lib/api";
+import { EmbeddingDatabaseList } from "../components/EmbeddingDatabaseList";
 
 interface MetadataOptions {
   include_id: boolean;
@@ -566,6 +567,11 @@ export function UploadPage() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Embedding 資料庫列表區塊 */}
+      <div className="col-12">
+        <EmbeddingDatabaseList />
       </div>
 
       {/* 無映射模式：移除 QA Set 映射上傳與預覽區塊 */}

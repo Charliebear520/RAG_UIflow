@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useRag } from "../lib/ragStore";
 import { api } from "../lib/api";
 
 export function RetrievePage() {
   const nav = useNavigate();
+  const location = useLocation();
   const {
     canRetrieve,
     retrieve,
@@ -17,11 +18,38 @@ export function RetrievePage() {
     answer,
     steps,
     legalReferences,
+    embedProvider,
+    setEmbedProvider,
   } = useRag();
   const [query, setQuery] = useState("");
   const [k, setK] = useState(5);
   const [busy, setBusy] = useState(false);
   const [retrievalMethod, setRetrievalMethod] = useState("vector");
+  const [selectedDatabase, setSelectedDatabase] = useState<any>(null);
+  const [databaseMessage, setDatabaseMessage] = useState<string | null>(null);
+
+  // 處理從embedding資料庫列表跳轉過來的情況
+  useEffect(() => {
+    if (location.state?.selectedDatabase) {
+      const database = location.state.selectedDatabase;
+      setSelectedDatabase(database);
+      setDatabaseMessage(
+        location.state.message || `已選擇embedding資料庫: ${database.name}`
+      );
+
+      // 設置embedProvider以啟用檢索功能
+      if (database.provider) {
+        setEmbedProvider(database.provider);
+      }
+
+      // 根據資料庫類型自動選擇合適的檢索方法
+      if (database.type === "multi_level") {
+        setRetrievalMethod("multi_level_fusion");
+      } else if (database.type === "standard") {
+        setRetrievalMethod("vector");
+      }
+    }
+  }, [location.state, setEmbedProvider]);
 
   // 僅保留：標準、HybridRAG、多層次融合檢索
 
@@ -29,6 +57,74 @@ export function RetrievePage() {
     <div className="card">
       <div className="card-body">
         <h2 className="h5 mb-3">Retrieve</h2>
+
+        {/* 顯示選中的embedding資料庫信息 */}
+        {selectedDatabase && (
+          <div className="alert alert-info mb-3">
+            <div className="d-flex justify-content-between align-items-start">
+              <div>
+                <h6 className="alert-heading mb-2">
+                  <i className="bi bi-database me-2"></i>
+                  當前使用的Embedding資料庫
+                </h6>
+                <div className="row text-muted small">
+                  <div className="col-sm-6">
+                    <strong>名稱:</strong> {selectedDatabase.name}
+                  </div>
+                  <div className="col-sm-6">
+                    <strong>類型:</strong>{" "}
+                    {selectedDatabase.type === "multi_level"
+                      ? "多層次Embedding"
+                      : "標準Embedding"}
+                  </div>
+                  <div className="col-sm-6">
+                    <strong>Embedding:</strong> {selectedDatabase.provider} (
+                    {selectedDatabase.model})
+                  </div>
+                  <div className="col-sm-6">
+                    <strong>向量數量:</strong>{" "}
+                    {selectedDatabase.num_vectors.toLocaleString()}
+                  </div>
+                  <div className="col-sm-6">
+                    <strong>分塊方式:</strong>{" "}
+                    {selectedDatabase.chunking_strategy}
+                  </div>
+                  <div className="col-sm-6">
+                    <strong>文檔:</strong>{" "}
+                    {selectedDatabase.documents
+                      .map((d: any) => d.filename)
+                      .join(", ")}
+                  </div>
+                </div>
+              </div>
+              <button
+                className="btn btn-outline-secondary btn-sm"
+                onClick={() => {
+                  setSelectedDatabase(null);
+                  setDatabaseMessage(null);
+                }}
+                title="清除選擇"
+              >
+                <i className="bi bi-x"></i>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {databaseMessage && (
+          <div
+            className="alert alert-success alert-dismissible fade show mb-3"
+            role="alert"
+          >
+            <i className="bi bi-check-circle me-2"></i>
+            {databaseMessage}
+            <button
+              type="button"
+              className="btn-close"
+              onClick={() => setDatabaseMessage(null)}
+            ></button>
+          </div>
+        )}
 
         {/* 檢索方法選擇 */}
         <div className="mb-3">

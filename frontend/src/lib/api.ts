@@ -60,6 +60,7 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 export const api = {
+  base,
   async chunk(body: {
     doc_id: string;
     chunk_size: number;
@@ -342,5 +343,18 @@ export const api = {
       body: data ? JSON.stringify(data) : undefined,
     });
     return json<any>(res);
+  },
+  delete: async (url: string) => {
+    const res = await fetch(`${base}${url}`, {
+      method: "DELETE",
+    });
+    return json<any>(res);
+  },
+  // Embedding資料庫相關API
+  async getEmbeddingDatabases() {
+    return this.get("/embedding-databases");
+  },
+  async deleteEmbeddingDatabase(databaseId: string) {
+    return this.delete(`/embedding-databases/${databaseId}`);
   },
 };
