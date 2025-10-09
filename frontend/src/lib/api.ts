@@ -134,14 +134,6 @@ export const api = {
     });
     return json<any>(res);
   },
-  async hopragEnhancedRetrieve(body: { query: string; k: number }) {
-    const res = await fetch(`${base}/hoprag-enhanced-retrieve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return json<any>(res);
-  },
   async generate(body: { query: string; top_k: number }) {
     const res = await fetch(`${base}/generate`, {
       method: "POST",
@@ -336,37 +328,6 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
-    return json<any>(res);
-  },
-  // HopRAG相關API
-  async getHopragStatus() {
-    const res = await fetch(`${base}/hoprag-status`);
-    return json<any>(res);
-  },
-  async getHopragConfig() {
-    const res = await fetch(`${base}/hoprag-config`);
-    return json<any>(res);
-  },
-  async updateHopragConfig(config: any) {
-    const res = await fetch(`${base}/hoprag-config`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(config),
-    });
-    return json<any>(res);
-  },
-  async buildHopragGraph() {
-    const res = await fetch(`${base}/build-hoprag-graph`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-    return json<any>(res);
-  },
-  async resetHopragSystem() {
-    const res = await fetch(`${base}/hoprag-reset`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
     });
     return json<any>(res);
   },
