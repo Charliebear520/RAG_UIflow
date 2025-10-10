@@ -29,6 +29,7 @@ class RetrievalResult:
     level: str
     rank: int
     metadata: Dict[str, Any]
+    hierarchical_description: str = ""  # 新增層級描述字段
 
 
 @dataclass
@@ -84,7 +85,8 @@ class MultiLevelResultFusion:
                     chunk_index=result['chunk_index'],
                     level=level,
                     rank=result['rank'],
-                    metadata=result.get('metadata', {})
+                    metadata=result.get('metadata', {}),
+                    hierarchical_description=result.get('hierarchical_description', '')  # 添加層級描述
                 )
                 all_results.append(retrieval_result)
         
@@ -267,7 +269,7 @@ class MultiLevelResultFusion:
     
     def _result_to_dict(self, result: RetrievalResult) -> Dict[str, Any]:
         """將RetrievalResult轉換為字典"""
-        return {
+        result_dict = {
             "rank": int(result.rank),
             "content": result.content,
             "similarity": float(result.similarity),
@@ -277,6 +279,12 @@ class MultiLevelResultFusion:
             "level": result.level,
             "metadata": result.metadata
         }
+        
+        # 如果有hierarchical_description字段，添加到結果中
+        if hasattr(result, 'hierarchical_description'):
+            result_dict["hierarchical_description"] = result.hierarchical_description
+        
+        return result_dict
 
 
 def create_fusion_config(

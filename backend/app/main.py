@@ -2652,6 +2652,185 @@ def get_level_description(level_name: str) -> str:
     return descriptions.get(level_name, f"未知層次: {level_name}")
 
 
+def generate_hierarchical_description(doc_id: str, level: str, chunk_index: int, store) -> str:
+    """
+    生成層級描述，例如：著作權法 第三章 第一節 第11條
+    
+    Args:
+        doc_id: 文檔ID
+        level: 層級名稱
+        chunk_index: chunk索引
+        store: 存儲實例
+    
+    Returns:
+        層級描述字符串
+    """
+    try:
+        # 獲取文檔信息
+        doc = store.get_doc(doc_id)
+        if not doc:
+            return f"doc={doc_id}"
+        
+        # 獲取文檔名稱（去除.json後綴）
+        doc_name = doc.filename
+        if doc_name.endswith('.json'):
+            doc_name = doc_name[:-5]
+        
+        # 如果是多層次embedding，嘗試從原始文檔的structured_chunks中獲取層級信息
+        if hasattr(doc, 'structured_chunks') and doc.structured_chunks and chunk_index < len(doc.structured_chunks):
+            structured_chunk = doc.structured_chunks[chunk_index]
+            metadata = structured_chunk.get('metadata', {})
+            content = structured_chunk.get('content', '')
+            
+            # 從內容中提取具體的法律名稱
+            law_name = extract_law_name_from_content(content)
+            if not law_name:
+                # 如果無法從內容提取，嘗試從metadata中獲取
+                if metadata.get('id'):
+                    # 從metadata id中提取法律名稱
+                    law_name = extract_law_name_from_metadata_id(metadata['id'])
+                if not law_name:
+                    law_name = doc_name  # 最後使用文檔名稱
+            
+            # 構建層級描述
+            hierarchy_parts = [law_name]
+            
+            # 添加章節信息
+            if metadata.get('chapter'):
+                chapter = metadata['chapter']
+                # 清理章節格式
+                if chapter != "未分類節":
+                    if not chapter.startswith('第') and not chapter.startswith('章'):
+                        chapter = f"第{chapter}章"
+                    hierarchy_parts.append(chapter)
+            
+            # 添加節信息
+            if metadata.get('section'):
+                section = metadata['section']
+                # 清理節格式
+                if section != "未分類節":
+                    if not section.startswith('第') and not section.startswith('節'):
+                        section = f"第{section}節"
+                    hierarchy_parts.append(section)
+            
+            # 從內容中提取正確的條文號碼，優先使用內容中的信息
+            article_number = extract_article_number_from_content(content)
+            if article_number:
+                hierarchy_parts.append(article_number)
+            elif metadata.get('article'):
+                article = metadata['article']
+                if not article.startswith('第') and not article.startswith('條'):
+                    article = f"第{article}條"
+                hierarchy_parts.append(article)
+            
+            # 添加項信息
+            if metadata.get('items') and len(metadata['items']) > 0:
+                items = metadata['items']
+                if len(items) == 1:
+                    hierarchy_parts.append(f"第{items[0]}項")
+                else:
+                    hierarchy_parts.append(f"第{items[0]}-{items[-1]}項")
+            
+            return ' '.join(hierarchy_parts)
+        
+        # 如果沒有結構化信息，根據層級名稱生成基本描述
+        level_descriptions = {
+            'document': f"{doc_name} 全文",
+            'document_component': f"{doc_name} 章節",
+            'basic_unit_hierarchy': f"{doc_name} 條文層次",
+            'basic_unit': f"{doc_name} 條文",
+            'basic_unit_component': f"{doc_name} 條文組成",
+            'enumeration': f"{doc_name} 列舉項"
+        }
+        
+        return level_descriptions.get(level, f"{doc_name} {level}")
+        
+    except Exception as e:
+        print(f"❌ 生成層級描述失敗: {e}")
+        return f"doc={doc_id}"
+
+
+def extract_law_name_from_content(content: str) -> str:
+    """從內容中提取法律名稱"""
+    import re
+    
+    # 匹配【法律名稱】格式
+    law_pattern = r'【([^】]+)】'
+    match = re.search(law_pattern, content)
+    if match:
+        return match.group(1)
+    
+    # 如果沒有找到【】格式，嘗試其他模式
+    law_patterns = [
+        r'^([^第章節條項]+法)',
+        r'([^第章節條項]+法)',
+    ]
+    
+    for pattern in law_patterns:
+        match = re.search(pattern, content)
+        if match:
+            return match.group(1).strip()
+    
+    return ""
+
+
+def extract_law_name_from_metadata_id(metadata_id: str) -> str:
+    """從metadata ID中提取法律名稱"""
+    import re
+    
+    # metadata id格式通常是：法規名稱：商標法_0_第一章_總則_未分類節_第1條
+    # 提取"法規名稱：商標法"部分
+    law_pattern = r'法規名稱：([^_]+)'
+    match = re.search(law_pattern, metadata_id)
+    if match:
+        return match.group(1)
+    
+    return ""
+
+
+def extract_article_number_from_content(content: str) -> str:
+    """從內容中提取條文號碼"""
+    import re
+    
+    # 按行分割內容，尋找條文號碼
+    lines = content.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # 匹配各種條文號碼格式
+        article_patterns = [
+            r'第(\d+條)',           # 第43條
+            r'第([一二三四五六七八九十百千]+)條',  # 第四十三條
+            r'第(\d+-\d+條)',      # 第43-1條
+            r'第(\d+[之-]\d+條)',   # 第43之1條
+        ]
+        
+        for pattern in article_patterns:
+            match = re.search(pattern, line)
+            if match:
+                # 檢查這行是否看起來像條文標題（通常比較簡短，不包含太多內容）
+                if len(line) < 50:  # 條文標題通常比較短
+                    return f"第{match.group(1)}"
+    
+    # 如果沒有找到簡短的條文標題，嘗試在整個內容中找第一個條文號碼
+    article_patterns = [
+        r'第(\d+條)',
+        r'第([一二三四五六七八九十百千]+)條',
+        r'第(\d+-\d+條)',
+        r'第(\d+[之-]\d+條)',
+    ]
+    
+    for pattern in article_patterns:
+        match = re.search(pattern, content)
+        if match:
+            return f"第{match.group(1)}"
+    
+    return ""
+
+
 def rank_with_dense_vectors(query: str, k: int):
     """使用密集向量進行相似度計算（支持 Gemini 和 BGE-M3）"""
     import numpy as np
@@ -3372,12 +3551,15 @@ def retrieve(req: RetrieveRequest):
         doc = store.docs.get(doc_id)
         
         # 基本結果
+        hierarchical_desc = generate_hierarchical_description(doc_id, "standard", i, store)
+        
         result = {
             "rank": rank,
             "score": float(score),
             "doc_id": doc_id,
             "chunk_index": i,
             "content": chunks_flat[i][:2000],
+            "hierarchical_description": hierarchical_desc,  # 新增層級描述
         }
         
         # 如果有結構化chunks，添加metadata
@@ -3667,6 +3849,9 @@ async def multi_level_retrieve(req: RetrieveRequest):
             doc_id = doc_ids[idx]
             doc = store.get_doc(doc_id)
             
+            # 生成層級描述
+            hierarchical_desc = generate_hierarchical_description(doc_id, recommended_level, idx, store)
+            
             result = {
                 "rank": i + 1,
                 "content": chunks[idx],
@@ -3674,6 +3859,7 @@ async def multi_level_retrieve(req: RetrieveRequest):
                 "doc_id": doc_id,
                 "doc_name": doc.filename if doc else "Unknown",
                 "chunk_index": idx,
+                "hierarchical_description": hierarchical_desc,  # 新增層級描述
                 "metadata": {
                     "level": recommended_level,
                     "query_type": query_type,
@@ -3826,6 +4012,9 @@ async def multi_level_fusion_retrieve(req: MultiLevelFusionRequest):
                 doc_id = doc_ids[idx]
                 doc = store.get_doc(doc_id)
                 
+                # 生成層級描述
+                hierarchical_desc = generate_hierarchical_description(doc_id, level_name, idx, store)
+                
                 result = {
                     "rank": int(i + 1),
                     "content": chunks[idx],
@@ -3833,6 +4022,7 @@ async def multi_level_fusion_retrieve(req: MultiLevelFusionRequest):
                     "doc_id": doc_id,
                     "doc_name": doc.filename if doc else "Unknown",
                     "chunk_index": int(idx),
+                    "hierarchical_description": hierarchical_desc,  # 新增層級描述
                     "metadata": {
                         "level": level_name,
                         "query_type": query_analysis['query_type'],
@@ -3963,6 +4153,9 @@ def hybrid_retrieve(req: RetrieveRequest):
     # 轉換為標準格式
     results = []
     for rank, item in enumerate(hybrid_results, start=1):
+        # 生成層級描述
+        hierarchical_desc = generate_hierarchical_description(item["doc_id"], "hybrid", item["chunk_index"], store)
+        
         result = {
             "rank": rank,
             "score": item["score"],
@@ -3971,7 +4164,8 @@ def hybrid_retrieve(req: RetrieveRequest):
             "doc_id": item["doc_id"],
             "chunk_index": item["chunk_index"],
             "content": item["content"][:2000],
-            "metadata": item["metadata"]
+            "metadata": item["metadata"],
+            "hierarchical_description": hierarchical_desc,  # 新增層級描述
         }
         
         # 添加法律結構信息
@@ -4284,6 +4478,7 @@ def generate(req: GenerateRequest):
 def merge_law_documents(law_documents: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     整合多個法律文檔成一個統一的JSON結構
+    完全按照單個PDF轉換的方式來構建結構
     
     參數:
     - law_documents: 多個法律文檔的列表
@@ -4294,72 +4489,70 @@ def merge_law_documents(law_documents: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not law_documents:
         return {"laws": []}
     
-    # 確保每個法律文檔都有唯一的ID前綴
     merged_laws = []
-    global_id_counter = 0
     
     for doc in law_documents:
         if not doc or "law_name" not in doc:
             continue
             
-        law_name = doc["law_name"]
-        law_prefix = f"{law_name}_{global_id_counter}"
-        
-        # 創建新的法律文檔結構
+        # 直接使用原始文檔結構，確保完全一致
         merged_law = {
-            "law_name": law_name,
+            "law_name": doc["law_name"],
             "chapters": []
         }
         
         # 處理章節
         chapters = doc.get("chapters", [])
         for chapter in chapters:
-            chapter_name = chapter.get("chapter", "")
             merged_chapter = {
-                "chapter": chapter_name,
+                "chapter": chapter.get("chapter", ""),
+                "chapter_no": chapter.get("chapter_no", ""),
+                "type_en": chapter.get("type_en", "Chapter"),
                 "sections": []
             }
             
             # 處理節
             sections = chapter.get("sections", [])
             for section in sections:
-                section_name = section.get("section", "")
                 merged_section = {
-                    "section": section_name,
+                    "section": section.get("section", ""),
+                    "section_no": section.get("section_no", ""),
+                    "type_en": section.get("type_en", "Section"),
                     "articles": []
                 }
                 
                 # 處理條文
                 articles = section.get("articles", [])
                 for article in articles:
-                    article_name = article.get("article", "")
+                    # 按照單個PDF轉換的方式構建條文結構
                     merged_article = {
-                        "article": article_name,
+                        "article": article.get("article", ""),
+                        "article_no": article.get("article_no", ""),
+                        "type_en": article.get("type_en", "Article"),
                         "content": article.get("content", ""),
-                        "items": []
+                        "paragraphs": [],
+                        "metadata": article.get("metadata", {})
                     }
                     
-                    # 處理項目 - 支援新結構 (paragraphs) 和舊結構 (items)
+                    # 處理段落 - 支援新結構 (paragraphs) 和舊結構 (items)
                     paragraphs = article.get("paragraphs", [])
-                    items = article.get("items", [])  # 相容性：items 可能指向 paragraphs
+                    items = article.get("items", [])
                     
                     # 使用 paragraphs 如果存在，否則使用 items
                     items_to_process = paragraphs if paragraphs else items
                     
                     for item in items_to_process:
-                        # 支援新結構的鍵名
-                        item_name = item.get("paragraph", item.get("item", ""))
-                        item_content = item.get("content", "")
-                        
-                        merged_item = {
-                            "item": item_name,  # 保持向後相容
-                            "paragraph": item_name,  # 新結構
-                            "content": item_content,
-                            "sub_items": [],
-                            "subparagraphs": []  # 新結構
+                        # 按照單個PDF轉換的方式構建段落結構
+                        merged_paragraph = {
+                            "paragraph": item.get("paragraph", item.get("item", "")),
+                            "paragraph_no": item.get("paragraph_no", ""),
+                            "type_en": item.get("type_en", "Paragraph"),
+                            "content": item.get("content", ""),
+                            "subparagraphs": [],
+                            "metadata": item.get("metadata", {})
                         }
                         
-                        # 處理子項目 - 支援新結構 (subparagraphs) 和舊結構 (sub_items)
+                        # 處理子段落 - 支援新結構 (subparagraphs) 和舊結構 (sub_items)
                         subparagraphs = item.get("subparagraphs", [])
                         sub_items = item.get("sub_items", [])
                         
@@ -4367,54 +4560,32 @@ def merge_law_documents(law_documents: List[Dict[str, Any]]) -> Dict[str, Any]:
                         sub_items_to_process = subparagraphs if subparagraphs else sub_items
                         
                         for sub_item in sub_items_to_process:
-                            # 支援新結構的鍵名
-                            sub_item_name = sub_item.get("subparagraph", sub_item.get("sub_item", ""))
-                            sub_item_content = sub_item.get("content", "")
-                            
-                            merged_sub_item = {
-                                "sub_item": sub_item_name,  # 保持向後相容
-                                "subparagraph": sub_item_name,  # 新結構
-                                "content": sub_item_content,
-                                "items": [],  # 新結構的第三層
-                                "metadata": {
-                                    "id": f"{law_prefix}_{chapter_name}_{section_name}_{article_name}_{item_name}_{sub_item_name}".replace(" ", "_"),
-                                    "spans": sub_item.get("metadata", {}).get("spans", {}),
-                                    "page_range": sub_item.get("metadata", {}).get("page_range", {})
-                                }
+                            # 按照單個PDF轉換的方式構建子段落結構
+                            merged_subparagraph = {
+                                "subparagraph": sub_item.get("subparagraph", sub_item.get("sub_item", "")),
+                                "subparagraph_no": sub_item.get("subparagraph_no", ""),
+                                "type_en": sub_item.get("type_en", "Subparagraph"),
+                                "content": sub_item.get("content", ""),
+                                "items": [],
+                                "metadata": sub_item.get("metadata", {})
                             }
                             
-                            # 處理第三層項目 (items)
+                            # 處理第三層項目 (items/目)
                             third_level_items = sub_item.get("items", [])
                             for third_item in third_level_items:
-                                third_item_name = third_item.get("item", "")
                                 merged_third_item = {
-                                    "item": third_item_name,
+                                    "item": third_item.get("item", ""),
+                                    "item_no": third_item.get("item_no", ""),
+                                    "type_en": third_item.get("type_en", "Item"),
                                     "content": third_item.get("content", ""),
-                                    "metadata": {
-                                        "id": f"{law_prefix}_{chapter_name}_{section_name}_{article_name}_{item_name}_{sub_item_name}_{third_item_name}".replace(" ", "_"),
-                                        "spans": third_item.get("metadata", {}).get("spans", {}),
-                                        "page_range": third_item.get("metadata", {}).get("page_range", {})
-                                    }
+                                    "metadata": third_item.get("metadata", {})
                                 }
-                                merged_sub_item["items"].append(merged_third_item)
+                                merged_subparagraph["items"].append(merged_third_item)
                             
-                            merged_item["sub_items"].append(merged_sub_item)
-                            merged_item["subparagraphs"].append(merged_sub_item)
+                            merged_paragraph["subparagraphs"].append(merged_subparagraph)
                         
-                        # 為項目添加metadata
-                        merged_item["metadata"] = {
-                            "id": f"{law_prefix}_{chapter_name}_{section_name}_{article_name}_{item_name}".replace(" ", "_"),
-                            "spans": item.get("metadata", {}).get("spans", {}),
-                            "page_range": item.get("metadata", {}).get("page_range", {})
-                        }
-                        merged_article["items"].append(merged_item)
+                        merged_article["paragraphs"].append(merged_paragraph)
                     
-                    # 為條文添加metadata
-                    merged_article["metadata"] = {
-                        "id": f"{law_prefix}_{chapter_name}_{section_name}_{article_name}".replace(" ", "_"),
-                        "spans": article.get("metadata", {}).get("spans", {}),
-                        "page_range": article.get("metadata", {}).get("page_range", {})
-                    }
                     merged_section["articles"].append(merged_article)
                 
                 merged_chapter["sections"].append(merged_section)
@@ -4422,9 +4593,87 @@ def merge_law_documents(law_documents: List[Dict[str, Any]]) -> Dict[str, Any]:
             merged_law["chapters"].append(merged_chapter)
         
         merged_laws.append(merged_law)
-        global_id_counter += 1
     
     return {"laws": merged_laws}
+
+
+def clean_legal_amendments_and_effective_status(text: str) -> str:
+    """
+    清理法規中的修正日期和生效狀態信息
+    
+    移除模式：
+    1. 修正日期：民國 XXX 年 XX 月 XX 日
+    2. 生效狀態：※本法規部分或全部條文尚未生效
+    3. 相關的施行日期說明
+    4. 法規名稱行（避免產生未分類章節）
+    """
+    import re
+    
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # 跳過修正日期行
+        if re.match(r'^修正日期：民國\s*\d+\s*年\s*\d+\s*月\s*\d+\s*日', line):
+            i += 1
+            continue
+            
+        # 跳過生效狀態行
+        if '※本法規部分或全部條文尚未生效' in line or '生效狀態：' in line:
+            i += 1
+            continue
+            
+        # 跳過法規名稱行（避免產生未分類章節）
+        if re.match(r'^法規名稱：', line):
+            i += 1
+            continue
+            
+        # 跳過施行日期說明段落（通常以數字開頭的列表項）
+        if re.match(r'^\d+\.', line) and any(keyword in line for keyword in ['修正', '施行', '生效', '民國', '年', '月', '日']):
+            # 檢查後續行是否也是施行日期說明（包括縮進行）
+            j = i + 1
+            while j < len(lines):
+                next_line = lines[j].strip()
+                # 如果是空行，跳過
+                if not next_line:
+                    j += 1
+                    continue
+                # 如果是以空格/全形空格開頭的縮進行，或者是數字開頭的列表項，或者是包含關鍵詞的行
+                if (next_line.startswith((' ', '　', '\t')) or 
+                    re.match(r'^\d+\.', next_line) or
+                    any(keyword in next_line for keyword in ['修正', '施行', '生效', '民國', '年', '月', '日', '政院', '條文', '增訂', '刪除'])):
+                    j += 1
+                    continue
+                else:
+                    break
+            i = j
+            continue
+            
+        # 跳過以數字開頭且包含修正/施行關鍵詞的連續行
+        if re.match(r'^\d+\.', line) and any(keyword in line for keyword in ['修正', '施行', '生效']):
+            # 檢查是否為修正條文說明
+            if any(keyword in line for keyword in ['條文', '增訂', '刪除']):
+                i += 1
+                continue
+        
+        # 跳過包含施行日期相關關鍵詞的孤立行
+        if (any(keyword in line for keyword in ['政院', '施行日期', '定之', '修正之第']) and 
+            not any(keyword in line for keyword in ['第', '條', '章', '節'])):
+            i += 1
+            continue
+        
+        # 保留其他行
+        cleaned_lines.append(lines[i])
+        i += 1
+    
+    # 進一步清理：移除開頭的空白行，確保從真正的章節開始
+    while cleaned_lines and not cleaned_lines[0].strip():
+        cleaned_lines.pop(0)
+    
+    return '\n'.join(cleaned_lines)
 
 
 def convert_pdf_structured(file_content: bytes, filename: str, options: MetadataOptions) -> Dict[str, Any]:
@@ -4460,6 +4709,13 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
             
         full_text = "\n".join(texts)
         print(f"文本提取完成，總長度: {len(full_text)} 字符")
+        
+        # 清理修正日期和生效狀態信息
+        cleaned_text = clean_legal_amendments_and_effective_status(full_text)
+        print(f"清理完成，清理後長度: {len(cleaned_text)} 字符")
+        
+        # 使用清理後的文本進行後續處理
+        full_text = cleaned_text
 
         def normalize_digits(s: str) -> str:
             # Convert fullwidth digits to ASCII for simpler matching
@@ -4467,10 +4723,11 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
             hw = "0123456789"
             return s.translate(str.maketrans(fw, hw))
 
-        # Determine law name: first non-empty line containing a legal keyword, else filename
-        lines = [normalize_digits((ln or "").strip()) for ln in full_text.splitlines()]
+        # Determine law name: 從原始文本中提取法規名稱，但使用清理後的文本進行結構化
+        original_text = "\n".join(texts)  # 原始未清理的文本
+        original_lines = [normalize_digits((ln or "").strip()) for ln in original_text.splitlines()]
         law_name = None
-        for ln in lines:
+        for ln in original_lines:
             if not ln:
                 continue
             if any(key in ln for key in ["法", "條例", "法規", "法律"]):
@@ -4531,6 +4788,9 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                 current_section = {"section": "未分類節", "articles": []}
                 current_chapter["sections"].append(current_section)
 
+        # 使用清理後的文本進行結構化解析
+        lines = [normalize_digits((ln or "").strip()) for ln in full_text.splitlines()]
+        
         for raw in lines:
             ln = raw.strip()
             if not ln:

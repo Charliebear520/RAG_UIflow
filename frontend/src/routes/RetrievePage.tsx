@@ -544,7 +544,13 @@ export function RetrievePage() {
                         `score=${r.score?.toFixed(3) || "N/A"}`
                       )}
                       <span className="ms-2">
-                        doc={r.doc_id} idx={r.chunk_index}
+                        {r.hierarchical_description ? (
+                          <span className="text-primary">
+                            {r.hierarchical_description}
+                          </span>
+                        ) : (
+                          `doc=${r.doc_id} idx=${r.chunk_index}`
+                        )}
                       </span>
                     </div>
                     {r.legal_structure && (

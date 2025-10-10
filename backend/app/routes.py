@@ -3178,8 +3178,27 @@ async def process_multiple_pdf_conversion(task_id: str, file_contents: List[Dict
         
         # 整合多個法律文檔
         merged_doc = merge_law_documents(law_documents)
-        # 正規化合併後的 metadata（補齊必要鍵）
-        merged_doc = normalize_corpus_metadata(merged_doc)
+
+        # 轉為新結構：僅保留 paragraphs / subparagraphs / items；去除舊鍵 items(條文層別名)/sub_items/sub_sub_items
+        def _strip_legacy_aliases(obj):
+            if isinstance(obj, dict):
+                # 條文層：移除舊別名 items（保留 paragraphs）
+                if 'paragraphs' in obj and 'items' in obj and obj.get('items') is obj.get('paragraphs'):
+                    obj.pop('items', None)
+                # 段落層：移除舊別名 sub_items（保留 subparagraphs）
+                if 'subparagraphs' in obj and 'sub_items' in obj and obj.get('sub_items') is obj.get('subparagraphs'):
+                    obj.pop('sub_items', None)
+                # 子段落層：移除舊別名 sub_sub_items（保留 items 作為第三層「目」）
+                if 'items' in obj and 'sub_sub_items' in obj and obj.get('sub_sub_items') is obj.get('items'):
+                    obj.pop('sub_sub_items', None)
+                # 遞迴處理
+                for v in list(obj.values()):
+                    _strip_legacy_aliases(v)
+            elif isinstance(obj, list):
+                for v in obj:
+                    _strip_legacy_aliases(v)
+
+        _strip_legacy_aliases(merged_doc)
         
         # 合併所有文本內容
         if all_texts:
