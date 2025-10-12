@@ -357,4 +357,69 @@ export const api = {
   async deleteEmbeddingDatabase(databaseId: string) {
     return this.delete(`/embedding-databases/${databaseId}`);
   },
+
+  // E/C/U標註相關API
+  async granularityComparisonRetrieve(params: {
+    query: string;
+    k: number;
+    granularity_combination: string;
+  }) {
+    return json<{
+      query: string;
+      combination: { name: string; levels: string[] };
+      level_contributions: Record<string, any>;
+      fused_results: Array<{
+        content: string;
+        similarity: number;
+        level: string;
+        doc_id: string;
+        chunk_index: number;
+      }>;
+      total_results: number;
+    }>(
+      await fetch(`${base}/granularity-comparison-retrieve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params),
+      })
+    );
+  },
+
+  async saveAnnotations(data: {
+    query: string;
+    results: any[];
+    annotations: Record<number, string>;
+  }) {
+    return json<{
+      saved: number;
+      annotations: any[];
+    }>(
+      await fetch(`${base}/annotations/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      })
+    );
+  },
+
+  async getGranularityCombinations() {
+    return json<{
+      combinations: Record<string, { name: string; levels: string[] }>;
+    }>(await fetch(`${base}/granularity-combinations`));
+  },
+
+  async getAnnotationsForQuery(query: string) {
+    return json<{
+      query: string;
+      annotations: any[];
+    }>(await fetch(`${base}/annotations/query/${encodeURIComponent(query)}`));
+  },
+
+  async deleteAnnotationsForQuery(query: string) {
+    return json<{ message: string }>(
+      await fetch(`${base}/annotations/query/${encodeURIComponent(query)}`, {
+        method: "DELETE",
+      })
+    );
+  },
 };

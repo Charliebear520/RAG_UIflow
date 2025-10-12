@@ -18,8 +18,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
-from .models import ChunkConfig, MetadataOptions, MultiLevelFusionRequest
+from .models import ChunkConfig, MetadataOptions, MultiLevelFusionRequest, ECUAnnotation, GranularityComparisonRequest, AnnotationBatchRequest
 from .hybrid_search import hybrid_rank, HybridConfig
 from .store import InMemoryStore
 from .query_classifier import query_classifier, get_query_analysis
@@ -2682,15 +2683,25 @@ def generate_hierarchical_description(doc_id: str, level: str, chunk_index: int,
             metadata = structured_chunk.get('metadata', {})
             content = structured_chunk.get('content', '')
             
-            # 從內容中提取具體的法律名稱
-            law_name = extract_law_name_from_content(content)
+            # 優先從metadata中獲取法律名稱，這是最可靠的來源
+            law_name = ""
+            if metadata.get('id'):
+                # 從metadata id中提取法律名稱
+                law_name = extract_law_name_from_metadata_id(metadata['id'])
+            
+            # 如果metadata中有law_name字段，也嘗試使用它
+            if not law_name and metadata.get('law_name'):
+                law_name = metadata['law_name']
+                # 清理可能存在的"法規名稱："前綴
+                law_name = law_name.replace('法規名稱：', '')
+            
+            # 如果metadata中沒有，再嘗試從內容中提取
             if not law_name:
-                # 如果無法從內容提取，嘗試從metadata中獲取
-                if metadata.get('id'):
-                    # 從metadata id中提取法律名稱
-                    law_name = extract_law_name_from_metadata_id(metadata['id'])
-                if not law_name:
-                    law_name = doc_name  # 最後使用文檔名稱
+                law_name = extract_law_name_from_content(content)
+            
+            # 最後使用文檔名稱
+            if not law_name:
+                law_name = doc_name
             
             # 構建層級描述
             hierarchy_parts = [law_name]
@@ -2778,12 +2789,23 @@ def extract_law_name_from_metadata_id(metadata_id: str) -> str:
     """從metadata ID中提取法律名稱"""
     import re
     
-    # metadata id格式通常是：法規名稱：商標法_0_第一章_總則_未分類節_第1條
-    # 提取"法規名稱：商標法"部分
+    # 嘗試兩種格式：
+    # 1. 原始格式：法規名稱：商標法_0_第一章_總則_未分類節_第1條
+    # 2. 清理後格式：商標法_0_第一章_總則_未分類節_第1條
+    
+    # 首先嘗試原始格式
     law_pattern = r'法規名稱：([^_]+)'
     match = re.search(law_pattern, metadata_id)
     if match:
         return match.group(1)
+    
+    # 如果沒有找到，嘗試清理後的格式（第一個部分就是法規名稱）
+    parts = metadata_id.split('_')
+    if parts and parts[0]:
+        # 檢查第一個部分是否包含"法"字，確認它是法規名稱
+        first_part = parts[0].strip()
+        if '法' in first_part or '條例' in first_part:
+            return first_part
     
     return ""
 
@@ -6695,6 +6717,261 @@ async def list_docs():
     """列出所有文檔"""
     docs = store.list_docs()
     return [{"id": d.id, "filename": d.filename, "num_chars": len(d.text)} for d in docs]
+
+
+# 定義粒度組合配置
+GRANULARITY_COMBINATIONS = {
+    "flat": {
+        "name": "扁平分塊（僅條文）",
+        "levels": ["basic_unit"]
+    },
+    "fine_grained": {
+        "name": "細粒度三層",
+        "levels": ["basic_unit", "basic_unit_component", "enumeration"]
+    },
+    "mid_grained": {
+        "name": "中粒度四層",
+        "levels": ["basic_unit_hierarchy", "basic_unit", "basic_unit_component", "enumeration"]
+    },
+    "full_ml": {
+        "name": "完整多層次",
+        "levels": ["document", "document_component", "basic_unit_hierarchy", 
+                   "basic_unit", "basic_unit_component", "enumeration"]
+    },
+    "structural_only": {
+        "name": "僅結構層",
+        "levels": ["document", "document_component", "basic_unit_hierarchy"]
+    },
+    "content_only": {
+        "name": "僅內容層",
+        "levels": ["basic_unit", "basic_unit_component", "enumeration"]
+    }
+}
+
+
+@app.get("/api/granularity-combinations")
+def get_granularity_combinations():
+    """獲取可用的粒度組合配置"""
+    return {"combinations": GRANULARITY_COMBINATIONS}
+
+
+@app.post("/api/granularity-comparison-retrieve")
+async def granularity_comparison_retrieve(req: Dict[str, Any]):
+    """
+    使用指定粒度組合進行檢索
+    req = {query, k, granularity_combination}
+    """
+    query = req.get("query")
+    k = req.get("k", 10)
+    combination_key = req.get("granularity_combination", "full_ml")
+    
+    # 獲取層次組合配置
+    combination = GRANULARITY_COMBINATIONS.get(combination_key)
+    if not combination:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Unknown combination: {combination_key}"}
+        )
+    
+    selected_levels = combination["levels"]
+    
+    # 生成查詢向量
+    if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+        query_vector = (await embed_gemini([query]))[0]
+    elif USE_BGE_M3_EMBEDDING:
+        query_vector = embed_bge_m3([query])[0]
+    else:
+        return JSONResponse(status_code=400, content={"error": "No embedding method available"})
+    
+    # 從選定的層次中檢索並融合結果
+    all_results = []
+    level_contributions = {}
+    
+    for level_name in selected_levels:
+        level_data = store.get_multi_level_embeddings(level_name)
+        if not level_data:
+            continue
+        
+        vectors = np.array(level_data['embeddings'])
+        chunks = level_data['chunks']
+        doc_ids = level_data['doc_ids']
+        
+        # 計算相似度
+        similarities = cosine_similarity([query_vector], vectors)[0]
+        
+        # 獲取該層次的top-k結果
+        top_indices = np.argsort(similarities)[::-1][:k]
+        
+        level_results = []
+        for idx in top_indices:
+            result = {
+                "content": chunks[idx],
+                "similarity": float(similarities[idx]),
+                "level": level_name,
+                "doc_id": doc_ids[idx],
+                "chunk_index": int(idx)
+            }
+            level_results.append(result)
+            all_results.append(result)
+        
+        level_contributions[level_name] = {
+            "results": level_results,
+            "total_chunks": len(chunks),
+            "avg_similarity": float(np.mean([r["similarity"] for r in level_results]))
+        }
+    
+    # 融合結果（按相似度排序）
+    fused_results = sorted(all_results, key=lambda x: x["similarity"], reverse=True)
+    
+    return {
+        "query": query,
+        "combination": combination,
+        "level_contributions": level_contributions,
+        "fused_results": fused_results[:k],
+        "total_results": len(all_results)
+    }
+
+
+@app.post("/api/annotations/save")
+async def save_annotations(req: AnnotationBatchRequest):
+    """保存E/C/U標註"""
+    saved_annotations = []
+    
+    for idx_str, label in req.annotations.items():
+        idx = int(idx_str)
+        if idx >= len(req.results):
+            continue
+            
+        result = req.results[idx]
+        annotation = ECUAnnotation(
+            annotation_id=str(uuid.uuid4()),
+            query=req.query,
+            chunk_content=result["content"],
+            chunk_index=idx,
+            level=result.get("level", "unknown"),
+            doc_id=result.get("doc_id", ""),
+            relevance_label=label,
+            annotator="user",
+            timestamp=datetime.now().isoformat()
+        )
+        store.save_annotation(annotation)
+        saved_annotations.append(annotation)
+    
+    return {"saved": len(saved_annotations), "annotations": saved_annotations}
+
+
+@app.get("/api/annotations/stats")
+def get_annotation_stats(query: Optional[str] = None):
+    """獲取標註統計"""
+    if query:
+        annotations = store.get_annotations_for_query(query)
+    else:
+        annotations = store.get_all_annotations()
+    
+    stats = {
+        "total": len(annotations),
+        "by_label": {
+            "E": sum(1 for a in annotations if a.relevance_label == 'E'),
+            "C": sum(1 for a in annotations if a.relevance_label == 'C'),
+            "U": sum(1 for a in annotations if a.relevance_label == 'U')
+        },
+        "by_level": {}
+    }
+    
+    for annotation in annotations:
+        level = annotation.level
+        if level not in stats["by_level"]:
+            stats["by_level"][level] = {"E": 0, "C": 0, "U": 0}
+        stats["by_level"][level][annotation.relevance_label] += 1
+    
+    return stats
+
+
+@app.get("/api/annotations/query/{query}")
+def get_annotations_for_query(query: str):
+    """獲取特定查詢的所有標註"""
+    annotations = store.get_annotations_for_query(query)
+    return {"query": query, "annotations": annotations}
+
+
+@app.delete("/api/annotations/query/{query}")
+def delete_annotations_for_query(query: str):
+    """刪除特定查詢的所有標註"""
+    store.delete_annotations_for_query(query)
+    return {"message": f"Deleted annotations for query: {query}"}
+
+
+def calculate_ecu_metrics(annotations: List[ECUAnnotation], k_values: List[int]) -> Dict:
+    """基於標註計算E/C/U指標"""
+    metrics = {}
+    
+    # 按相似度排序（假設有similarity字段）
+    sorted_annotations = sorted(annotations, key=lambda x: getattr(x, 'similarity', 0), reverse=True)
+    
+    for k in k_values:
+        top_k = sorted_annotations[:k]
+        e_count = sum(1 for a in top_k if a.relevance_label == 'E')
+        c_count = sum(1 for a in top_k if a.relevance_label == 'C')
+        u_count = sum(1 for a in top_k if a.relevance_label == 'U')
+        
+        metrics[f"E@{k}"] = (e_count / k) * 100 if k > 0 else 0
+        metrics[f"C@{k}"] = (c_count / k) * 100 if k > 0 else 0
+        metrics[f"U@{k}"] = (u_count / k) * 100 if k > 0 else 0
+        metrics[f"E+C@{k}"] = ((e_count + c_count) / k) * 100 if k > 0 else 0
+    
+    return metrics
+
+
+@app.get("/api/granularity-comparison-report")
+def generate_comparison_report():
+    """生成粒度對比報告"""
+    all_annotations = store.get_all_annotations()
+    
+    if not all_annotations:
+        return {"message": "No annotations available for comparison"}
+    
+    # 按查詢分組
+    query_groups = {}
+    for annotation in all_annotations:
+        if annotation.query not in query_groups:
+            query_groups[annotation.query] = []
+        query_groups[annotation.query].append(annotation)
+    
+    # 計算各查詢的指標
+    report = {
+        "total_queries": len(query_groups),
+        "total_annotations": len(all_annotations),
+        "per_query_results": {},
+        "aggregate_metrics": {}
+    }
+    
+    k_values = [1, 3, 5, 10]
+    
+    for query, annotations in query_groups.items():
+        metrics = calculate_ecu_metrics(annotations, k_values)
+        report["per_query_results"][query] = {
+            "total_annotations": len(annotations),
+            "metrics": metrics,
+            "label_distribution": {
+                "E": sum(1 for a in annotations if a.relevance_label == 'E'),
+                "C": sum(1 for a in annotations if a.relevance_label == 'C'),
+                "U": sum(1 for a in annotations if a.relevance_label == 'U')
+            }
+        }
+    
+    # 計算聚合指標
+    all_metrics = []
+    for query_data in report["per_query_results"].values():
+        all_metrics.append(query_data["metrics"])
+    
+    if all_metrics:
+        for k in k_values:
+            report["aggregate_metrics"][f"avg_E@{k}"] = np.mean([m[f"E@{k}"] for m in all_metrics])
+            report["aggregate_metrics"][f"avg_C@{k}"] = np.mean([m[f"C@{k}"] for m in all_metrics])
+            report["aggregate_metrics"][f"avg_U@{k}"] = np.mean([m[f"U@{k}"] for m in all_metrics])
+            report["aggregate_metrics"][f"avg_E+C@{k}"] = np.mean([m[f"E+C@{k}"] for m in all_metrics])
+    
+    return report
 
 
 # ============================================

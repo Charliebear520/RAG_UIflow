@@ -6,7 +6,7 @@ import os
 import json
 import pickle
 from typing import Dict, Optional, List, Any
-from .models import DocRecord, EvaluationTask
+from .models import DocRecord, EvaluationTask, ECUAnnotation
 
 
 class InMemoryStore:
@@ -24,6 +24,9 @@ class InMemoryStore:
         self.multi_level_chunk_doc_ids: Dict[str, List[str]] = {}
         self.multi_level_chunks_flat: Dict[str, List[str]] = {}
         self.multi_level_metadata: Dict[str, Dict[str, Any]] = {}  # 存儲模型信息等元數據
+        
+        # E/C/U標註存儲
+        self.annotations: Dict[str, ECUAnnotation] = {}  # annotation_id -> annotation
         
         # 演示資料管理
         self.demo_data_deleted = False  # 標記演示資料是否已被刪除
@@ -46,6 +49,9 @@ class InMemoryStore:
         self.multi_level_chunk_doc_ids = {}
         self.multi_level_chunks_flat = {}
         self.multi_level_metadata = {}
+        
+        # 清除標註數據（可選，根據需要）
+        # self.annotations = {}
 
     def add_doc(self, doc_record: DocRecord):
         """添加文檔記錄"""
@@ -217,6 +223,26 @@ class InMemoryStore:
     def get_available_levels(self) -> List[str]:
         """獲取可用的embedding層次"""
         return list(self.multi_level_embeddings.keys())
+    
+    # E/C/U標註管理方法
+    def save_annotation(self, annotation: ECUAnnotation):
+        """保存標註"""
+        self.annotations[annotation.annotation_id] = annotation
+    
+    def get_annotations_for_query(self, query: str) -> List[ECUAnnotation]:
+        """獲取特定查詢的所有標註"""
+        return [a for a in self.annotations.values() if a.query == query]
+    
+    def get_all_annotations(self) -> List[ECUAnnotation]:
+        """獲取所有標註"""
+        return list(self.annotations.values())
+    
+    def delete_annotations_for_query(self, query: str):
+        """刪除特定查詢的所有標註"""
+        to_delete = [annotation_id for annotation_id, annotation in self.annotations.items() 
+                    if annotation.query == query]
+        for annotation_id in to_delete:
+            del self.annotations[annotation_id]
 
 
 # store實例在main.py中創建，避免重複定義

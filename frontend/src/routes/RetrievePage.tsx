@@ -28,6 +28,71 @@ export function RetrievePage() {
   const [selectedDatabase, setSelectedDatabase] = useState<any>(null);
   const [databaseMessage, setDatabaseMessage] = useState<string | null>(null);
 
+  // E/C/U標註相關狀態
+  const [annotationMode, setAnnotationMode] = useState(false);
+  const [annotations, setAnnotations] = useState<Record<number, string>>({});
+  const [annotationStats, setAnnotationStats] = useState<any>(null);
+
+  // E/C/U標註處理函數
+  const handleAnnotationToggle = (index: number, label: "E" | "C" | "U") => {
+    setAnnotations((prev) => ({
+      ...prev,
+      [index]: prev[index] === label ? "" : label, // 切換選擇
+    }));
+  };
+
+  const handleSubmitAnnotations = async () => {
+    if (!retrieval || !query) return;
+
+    try {
+      // 提交標註
+      const result = await api.saveAnnotations({
+        query: query,
+        results: retrieval,
+        annotations: annotations,
+      });
+
+      // 計算並顯示統計結果
+      const stats = calculateAnnotationStats(annotations, retrieval.length);
+      setAnnotationStats(stats);
+
+      console.log("標註已保存:", result);
+    } catch (error) {
+      console.error("保存標註失敗:", error);
+      alert("保存標註失敗，請重試");
+    }
+  };
+
+  // 統計計算
+  const calculateAnnotationStats = (
+    annotations: Record<number, string>,
+    total: number
+  ) => {
+    const eCount = Object.values(annotations).filter((a) => a === "E").length;
+    const cCount = Object.values(annotations).filter((a) => a === "C").length;
+    const uCount = Object.values(annotations).filter((a) => a === "U").length;
+
+    return {
+      total: total,
+      essential: {
+        count: eCount,
+        percentage: ((eCount / total) * 100).toFixed(1),
+      },
+      complementary: {
+        count: cCount,
+        percentage: ((cCount / total) * 100).toFixed(1),
+      },
+      unnecessary: {
+        count: uCount,
+        percentage: ((uCount / total) * 100).toFixed(1),
+      },
+      relevant: {
+        count: eCount + cCount,
+        percentage: (((eCount + cCount) / total) * 100).toFixed(1),
+      },
+    };
+  };
+
   // 處理從embedding資料庫列表跳轉過來的情況
   useEffect(() => {
     if (location.state?.selectedDatabase) {
@@ -470,6 +535,81 @@ export function RetrievePage() {
                 )}
               </div>
             )}
+
+            {/* 標註控制面板 */}
+            {retrieval && (
+              <div className="card mb-3 border-primary">
+                <div className="card-body">
+                  <div className="d-flex justify-content-between align-items-center">
+                    <div>
+                      <h5 className="mb-1">E/C/U標註模式</h5>
+                      <small className="text-muted">
+                        E=Essential(必需) | C=Complementary(補充) |
+                        U=Unnecessary(不必要)
+                      </small>
+                    </div>
+                    <div>
+                      <button
+                        className={`btn ${
+                          annotationMode ? "btn-primary" : "btn-outline-primary"
+                        } me-2`}
+                        onClick={() => {
+                          setAnnotationMode(!annotationMode);
+                          if (!annotationMode) {
+                            setAnnotations({});
+                            setAnnotationStats(null);
+                          }
+                        }}
+                      >
+                        {annotationMode ? "關閉標註模式" : "開啟標註模式"}
+                      </button>
+                      {annotationMode && (
+                        <button
+                          className="btn btn-success"
+                          disabled={
+                            Object.keys(annotations).length !== retrieval.length
+                          }
+                          onClick={handleSubmitAnnotations}
+                        >
+                          提交標註 ({Object.keys(annotations).length}/
+                          {retrieval.length})
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 標註統計結果 */}
+            {annotationStats && (
+              <div className="alert alert-info">
+                <h6 className="alert-heading">標註統計結果</h6>
+                <div className="row">
+                  <div className="col-md-3">
+                    <strong>Essential:</strong>{" "}
+                    {annotationStats.essential.count} (
+                    {annotationStats.essential.percentage}%)
+                  </div>
+                  <div className="col-md-3">
+                    <strong>Complementary:</strong>{" "}
+                    {annotationStats.complementary.count} (
+                    {annotationStats.complementary.percentage}%)
+                  </div>
+                  <div className="col-md-3">
+                    <strong>Unnecessary:</strong>{" "}
+                    {annotationStats.unnecessary.count} (
+                    {annotationStats.unnecessary.percentage}%)
+                  </div>
+                  <div className="col-md-3">
+                    <strong>Relevant (E+C):</strong>{" "}
+                    {annotationStats.relevant.count} (
+                    {annotationStats.relevant.percentage}%)
+                  </div>
+                </div>
+              </div>
+            )}
+
             <ol>
               {(() => {
                 // 確定要顯示的結果數據
@@ -487,103 +627,147 @@ export function RetrievePage() {
                     key={r.node_id || `${r.doc_id}-${r.chunk_index || index}`}
                     className="mb-2"
                   >
-                    <div className="small text-muted">
-                      {retrievalMethod === "hybrid" ? (
-                        <>
-                          <span className="badge bg-success me-1">
-                            總分: {r.score?.toFixed(3) || "N/A"}
-                          </span>
-                          <span className="badge bg-info me-1">
-                            向量: {r.vector_score?.toFixed(3) || "N/A"}
-                          </span>
-                          <span className="badge bg-warning me-1">
-                            規則: {r.bonus?.toFixed(3) || "N/A"}
-                          </span>
-                        </>
-                      ) : retrievalMethod === "multi_level" ? (
-                        <>
-                          <span className="badge bg-success me-1">
-                            相似度: {r.similarity?.toFixed(3) || "N/A"}
-                          </span>
-                          <span className="badge bg-primary me-1">
-                            層次: {r.metadata?.level || "N/A"}
-                          </span>
-                          <span className="badge bg-info me-1">
-                            查詢類型: {r.metadata?.query_type || "N/A"}
-                          </span>
-                          <span className="badge bg-warning me-1">
-                            置信度:{" "}
-                            {r.metadata?.confidence?.toFixed(2) || "N/A"}
-                          </span>
-                        </>
-                      ) : retrievalMethod === "multi_level_fusion" ? (
-                        <>
-                          <span className="badge bg-success me-1">
-                            融合分數: {r.similarity?.toFixed(3) || "N/A"}
-                          </span>
-                          <span className="badge bg-primary me-1">
-                            排名: {r.rank || "N/A"}
-                          </span>
-                          {r.original_scores && (
-                            <span className="badge bg-info me-1">
-                              原始分數:{" "}
-                              {Object.entries(r.original_scores)
-                                .map(
-                                  ([level, score]) =>
-                                    `${level}:${
-                                      typeof score === "number"
-                                        ? score.toFixed(2)
-                                        : score
-                                    }`
-                                )
-                                .join(", ")}
-                            </span>
+                    <div className="d-flex justify-content-between align-items-start">
+                      <div className="flex-grow-1">
+                        <div className="small text-muted">
+                          {retrievalMethod === "hybrid" ? (
+                            <>
+                              <span className="badge bg-success me-1">
+                                總分: {r.score?.toFixed(3) || "N/A"}
+                              </span>
+                              <span className="badge bg-info me-1">
+                                向量: {r.vector_score?.toFixed(3) || "N/A"}
+                              </span>
+                              <span className="badge bg-warning me-1">
+                                規則: {r.bonus?.toFixed(3) || "N/A"}
+                              </span>
+                            </>
+                          ) : retrievalMethod === "multi_level" ? (
+                            <>
+                              <span className="badge bg-success me-1">
+                                相似度: {r.similarity?.toFixed(3) || "N/A"}
+                              </span>
+                              <span className="badge bg-primary me-1">
+                                層次: {r.metadata?.level || "N/A"}
+                              </span>
+                              <span className="badge bg-info me-1">
+                                查詢類型: {r.metadata?.query_type || "N/A"}
+                              </span>
+                              <span className="badge bg-warning me-1">
+                                置信度:{" "}
+                                {r.metadata?.confidence?.toFixed(2) || "N/A"}
+                              </span>
+                            </>
+                          ) : retrievalMethod === "multi_level_fusion" ? (
+                            <>
+                              <span className="badge bg-success me-1">
+                                融合分數: {r.similarity?.toFixed(3) || "N/A"}
+                              </span>
+                              <span className="badge bg-primary me-1">
+                                排名: {r.rank || "N/A"}
+                              </span>
+                              {r.original_scores && (
+                                <span className="badge bg-info me-1">
+                                  原始分數:{" "}
+                                  {Object.entries(r.original_scores)
+                                    .map(
+                                      ([level, score]) =>
+                                        `${level}:${
+                                          typeof score === "number"
+                                            ? score.toFixed(2)
+                                            : score
+                                        }`
+                                    )
+                                    .join(", ")}
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            `score=${r.score?.toFixed(3) || "N/A"}`
                           )}
-                        </>
-                      ) : (
-                        `score=${r.score?.toFixed(3) || "N/A"}`
-                      )}
-                      <span className="ms-2">
-                        {r.hierarchical_description ? (
-                          <span className="text-primary">
-                            {r.hierarchical_description}
+                          <span className="ms-2">
+                            {r.hierarchical_description ? (
+                              <span className="text-primary">
+                                {r.hierarchical_description}
+                              </span>
+                            ) : (
+                              `doc=${r.doc_id} idx=${r.chunk_index}`
+                            )}
                           </span>
-                        ) : (
-                          `doc=${r.doc_id} idx=${r.chunk_index}`
+                        </div>
+                        {r.legal_structure && (
+                          <div className="mt-1 mb-2">
+                            <span className="badge bg-primary me-1">
+                              {r.legal_structure.law_name}
+                            </span>
+                            {r.legal_structure.article && (
+                              <span className="badge bg-secondary me-1">
+                                {r.legal_structure.article}
+                              </span>
+                            )}
+                            {r.legal_structure.item && (
+                              <span className="badge bg-info me-1">
+                                {r.legal_structure.item}
+                              </span>
+                            )}
+                            {r.legal_structure.sub_item && (
+                              <span className="badge bg-warning me-1">
+                                {r.legal_structure.sub_item}
+                              </span>
+                            )}
+                            <span className="badge bg-light text-dark">
+                              {r.legal_structure.chunk_type}
+                            </span>
+                          </div>
                         )}
-                      </span>
-                    </div>
-                    {r.legal_structure && (
-                      <div className="mt-1 mb-2">
-                        <span className="badge bg-primary me-1">
-                          {r.legal_structure.law_name}
-                        </span>
-                        {r.legal_structure.article && (
-                          <span className="badge bg-secondary me-1">
-                            {r.legal_structure.article}
-                          </span>
-                        )}
-                        {r.legal_structure.item && (
-                          <span className="badge bg-info me-1">
-                            {r.legal_structure.item}
-                          </span>
-                        )}
-                        {r.legal_structure.sub_item && (
-                          <span className="badge bg-warning me-1">
-                            {r.legal_structure.sub_item}
-                          </span>
-                        )}
-                        <span className="badge bg-light text-dark">
-                          {r.legal_structure.chunk_type}
-                        </span>
+                        <pre
+                          className="bg-light p-2 rounded"
+                          style={{ whiteSpace: "pre-wrap" }}
+                        >
+                          {r.content}
+                        </pre>
                       </div>
-                    )}
-                    <pre
-                      className="bg-light p-2 rounded"
-                      style={{ whiteSpace: "pre-wrap" }}
-                    >
-                      {r.content}
-                    </pre>
+
+                      {/* 標註按鈕（僅在標註模式下顯示） */}
+                      {annotationMode && (
+                        <div className="ms-3" style={{ minWidth: "200px" }}>
+                          <div className="btn-group-vertical" role="group">
+                            <button
+                              className={`btn btn-sm ${
+                                annotations[index] === "E"
+                                  ? "btn-success"
+                                  : "btn-outline-success"
+                              }`}
+                              onClick={() => handleAnnotationToggle(index, "E")}
+                            >
+                              {annotations[index] === "E" ? "✓ " : ""}Essential
+                            </button>
+                            <button
+                              className={`btn btn-sm ${
+                                annotations[index] === "C"
+                                  ? "btn-info"
+                                  : "btn-outline-info"
+                              }`}
+                              onClick={() => handleAnnotationToggle(index, "C")}
+                            >
+                              {annotations[index] === "C" ? "✓ " : ""}
+                              Complementary
+                            </button>
+                            <button
+                              className={`btn btn-sm ${
+                                annotations[index] === "U"
+                                  ? "btn-secondary"
+                                  : "btn-outline-secondary"
+                              }`}
+                              onClick={() => handleAnnotationToggle(index, "U")}
+                            >
+                              {annotations[index] === "U" ? "✓ " : ""}
+                              Unnecessary
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </li>
                 ));
               })()}

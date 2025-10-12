@@ -120,6 +120,34 @@ class GenerateQuestionsRequest(BaseModel):
     difficulty_levels: List[str] = ["基礎", "進階", "應用"]
 
 
+class ECUAnnotation(BaseModel):
+    """E/C/U標註記錄"""
+    annotation_id: str
+    query: str
+    chunk_content: str
+    chunk_index: int
+    level: str  # 層次名稱
+    doc_id: str
+    relevance_label: str  # 'E', 'C', 'U'
+    annotator: str  # 標註者標識
+    timestamp: str
+    notes: Optional[str] = None
+
+
+class GranularityComparisonRequest(BaseModel):
+    """粒度對比實驗請求"""
+    queries: List[Dict[str, Any]]  # 包含query和gold_standard
+    k: int = 10
+    combinations_to_test: List[str]  # 要測試的組合keys
+
+
+class AnnotationBatchRequest(BaseModel):
+    """批量標註請求"""
+    query: str
+    results: List[Dict[str, Any]]
+    annotations: Dict[str, str]  # {chunk_index: label}
+
+
 class MetadataOptions(BaseModel):
     """元數據選項"""
     include_page_numbers: bool = True
