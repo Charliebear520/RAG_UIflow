@@ -83,7 +83,10 @@ export const api = {
     });
     return json<any>(res);
   },
-  async multiLevelEmbed(body?: { doc_ids?: string[] }) {
+  async multiLevelEmbed(body?: {
+    doc_ids?: string[];
+    experimental_groups?: string[];
+  }) {
     const res = await fetch(`${base}/multi-level-embed`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -115,7 +118,11 @@ export const api = {
     });
     return json<any>(res);
   },
-  async multiLevelRetrieve(body: { query: string; k: number }) {
+  async multiLevelRetrieve(body: {
+    query: string;
+    k: number;
+    experimental_groups?: string[];
+  }) {
     const res = await fetch(`${base}/multi-level-retrieve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -127,6 +134,7 @@ export const api = {
     query: string;
     k: number;
     fusion_strategy?: string;
+    experimental_groups?: string[];
   }) {
     const res = await fetch(`${base}/multi-level-fusion-retrieve`, {
       method: "POST",
@@ -421,5 +429,73 @@ export const api = {
         method: "DELETE",
       })
     );
+  },
+
+  // 實驗組對比API
+  async experimentalGroupsGenerateEmbeddings(params: {
+    doc_id: string;
+    groups_to_embed: string[];
+  }) {
+    return json<{
+      doc_id: string;
+      groups_processed: string[];
+      results: Record<string, any>;
+      message: string;
+    }>(
+      await fetch(`${base}/experimental-groups-generate-embeddings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params),
+      })
+    );
+  },
+
+  async experimentalGroupsBatchRetrieve(params: {
+    query: string;
+    k: number;
+    groups_to_test: string[];
+  }) {
+    return json<{
+      query: string;
+      k: number;
+      groups_tested: string[];
+      results: Record<
+        string,
+        {
+          group_info: {
+            name: string;
+            description: string;
+            levels: string[];
+            research_purpose: string;
+          };
+          level_contributions: Record<string, any>;
+          fused_results: Array<{
+            content: string;
+            similarity: number;
+            level: string;
+            doc_id: string;
+            chunk_index: number;
+          }>;
+          total_results: number;
+        }
+      >;
+    }>(
+      await fetch(`${base}/experimental-groups-batch-retrieve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params),
+      })
+    );
+  },
+
+  async getGranularityComparisonReport() {
+    return json<{
+      total_queries: number;
+      total_annotations: number;
+      experimental_groups: string[];
+      per_query_results: Record<string, any>;
+      group_comparison: Record<string, any>;
+      marginal_benefit_analysis: Record<string, any>;
+    }>(await fetch(`${base}/granularity-comparison-report`));
   },
 };

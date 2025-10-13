@@ -20,6 +20,7 @@ export function RetrievePage() {
     legalReferences,
     embedProvider,
     setEmbedProvider,
+    selectedExperimentalGroups,
   } = useRag();
   const [query, setQuery] = useState("");
   const [k, setK] = useState(5);
@@ -190,6 +191,21 @@ export function RetrievePage() {
             ></button>
           </div>
         )}
+
+        {/* 顯示實驗組信息 */}
+        {selectedExperimentalGroups &&
+          selectedExperimentalGroups.length > 0 && (
+            <div className="alert alert-warning mb-3">
+              <h6 className="alert-heading">🎯 實驗組限制檢索</h6>
+              <p className="mb-2">
+                <strong>當前使用的實驗組:</strong>{" "}
+                {selectedExperimentalGroups.join(", ")}
+              </p>
+              <p className="mb-0 small text-muted">
+                檢索將只使用這些實驗組對應的embedding層次，確保實驗的純淨性。
+              </p>
+            </div>
+          )}
 
         {/* 檢索方法選擇 */}
         <div className="mb-3">

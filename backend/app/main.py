@@ -2458,7 +2458,7 @@ def find_parent_article_content(structured_chunks: list, current_metadata: dict)
 
 
 @app.post("/api/multi-level-embed")
-async def multi_level_embed(req: EmbedRequest):
+async def multi_level_embed(req: Dict[str, Any]):
     """多層次embedding端點 - 為論文中的六個粒度級別創建獨立的embedding"""
     print(f"🔍 多层级Embedding函数被调用，请求: {req}")
     print(f"🔍 配置检查:")
@@ -2466,7 +2466,8 @@ async def multi_level_embed(req: EmbedRequest):
     print(f"   GOOGLE_API_KEY: {'已設置' if GOOGLE_API_KEY else '未設置'}")
     print(f"   USE_BGE_M3_EMBEDDING: {USE_BGE_M3_EMBEDDING}")
     # 收集選定文檔的多層次chunks
-    selected = req.doc_ids or list(store.docs.keys())
+    selected = req.get("doc_ids") or list(store.docs.keys())
+    experimental_groups = req.get("experimental_groups", [])  # 新增：實驗組選擇
     all_multi_level_chunks = {}
     
     for doc_id in selected:
@@ -2509,6 +2510,27 @@ async def multi_level_embed(req: EmbedRequest):
         'basic_unit_component',        # 5. 基本單位組成部分層級
         'enumeration'                  # 6. 列舉層級
     ]
+    
+    # 如果指定了實驗組，只處理相關層次
+    if experimental_groups:
+        print(f"🎯 收到實驗組選擇: {experimental_groups}")
+        # 收集所有需要的層次
+        required_levels = set()
+        for group_key in experimental_groups:
+            if group_key in GRANULARITY_COMBINATIONS:
+                group_levels = GRANULARITY_COMBINATIONS[group_key]["levels"]
+                print(f"   📋 {group_key}: {GRANULARITY_COMBINATIONS[group_key]['name']} -> 層次: {group_levels}")
+                required_levels.update(group_levels)
+            else:
+                print(f"   ⚠️ 未知的實驗組: {group_key}")
+        
+        # 只處理需要的層次
+        original_levels = six_levels.copy()
+        six_levels = [level for level in six_levels if level in required_levels]
+        print(f"🎯 實驗組模式：從 {len(original_levels)} 個層次中選擇 {len(six_levels)} 個層次")
+        print(f"   原始層次: {original_levels}")
+        print(f"   選中層次: {six_levels}")
+        print(f"   跳過層次: {[level for level in original_levels if level not in required_levels]}")
     
     # 為每個層次創建獨立的embedding
     level_results = {}
@@ -2623,12 +2645,49 @@ async def multi_level_embed(req: EmbedRequest):
     # 自動保存多層次embedding數據
     store.save_data()
     
+    # 確保多層次embedding狀態正確設置
+    print(f"🎉 多層次embedding完成，保存的層次: {list(store.multi_level_embeddings.keys())}")
+    print(f"🔍 store.has_multi_level_embeddings(): {store.has_multi_level_embeddings()}")
+    print(f"🔍 可用層次: {store.get_available_levels()}")
+    
+    # 如果這是A組（僅basic_unit），也創建標準embedding以保持兼容性
+    if experimental_groups and len(experimental_groups) == 1 and experimental_groups[0] == "group_a":
+        if "basic_unit" in store.multi_level_embeddings:
+            basic_unit_data = store.multi_level_embeddings["basic_unit"]
+            store.embeddings = basic_unit_data.get('embeddings', [])
+            store.chunk_doc_ids = basic_unit_data.get('doc_ids', [])
+            store.chunks_flat = basic_unit_data.get('chunks', [])
+            print(f"🔄 A組：同步創建標準embedding，向量數量: {len(store.embeddings)}")
+            store.save_data()
+    
     if not level_results:
         return JSONResponse(
             status_code=500,
             content={"error": "Failed to create embeddings for any level"}
         )
     
+    # 如果指定了實驗組，計算各組的embedding狀態
+    group_results = {}
+    if experimental_groups:
+        for group_key in experimental_groups:
+            if group_key in GRANULARITY_COMBINATIONS:
+                combination = GRANULARITY_COMBINATIONS[group_key]
+                group_levels = combination["levels"]
+                
+                group_results[group_key] = {
+                    "name": combination["name"],
+                    "levels": group_levels,
+                    "embedding_status": {},
+                    "total_chunks": 0
+                }
+                
+                for level in group_levels:
+                    if level in level_results:
+                        group_results[group_key]["embedding_status"][level] = "completed"
+                        group_results[group_key]["total_chunks"] += level_results[level]["num_chunks"]
+                    else:
+                        group_results[group_key]["embedding_status"][level] = "missing"
+
     return {
         "message": "Six-level embeddings created successfully",
         "total_vectors": total_vectors,
@@ -2636,7 +2695,8 @@ async def multi_level_embed(req: EmbedRequest):
         "available_levels": list(level_results.keys()),
         "level_descriptions": {
             level: get_level_description(level) for level in six_levels
-        }
+        },
+        "experimental_groups": group_results if experimental_groups else None
     }
 
 
@@ -3777,8 +3837,15 @@ def hierarchical_retrieve(req: RetrieveRequest):
 
 
 @app.post("/api/multi-level-retrieve")
-async def multi_level_retrieve(req: RetrieveRequest):
-    """多層次檢索：基於查詢分類的智能層次選擇檢索"""
+async def multi_level_retrieve(req: Dict[str, Any]):
+    """多層次檢索：基於查詢分類的智能層次選擇檢索，支持實驗組限制"""
+    query = req.get("query")
+    k = req.get("k", 10)
+    experimental_groups = req.get("experimental_groups", [])
+    
+    if not query:
+        return JSONResponse(status_code=400, content={"error": "Query is required"})
+    
     # 檢查是否有可用的多層次embedding
     if not store.has_multi_level_embeddings():
         return JSONResponse(
@@ -3786,14 +3853,26 @@ async def multi_level_retrieve(req: RetrieveRequest):
             content={"error": "Multi-level embeddings not available. Please run /api/multi-level-embed first."}
         )
     
+    # 如果指定了實驗組，限制可用的層次
+    available_levels = store.get_available_levels()
+    if experimental_groups:
+        print(f"🎯 實驗組限制檢索: {experimental_groups}")
+        # 收集實驗組需要的層次
+        required_levels = set()
+        for group_key in experimental_groups:
+            if group_key in GRANULARITY_COMBINATIONS:
+                required_levels.update(GRANULARITY_COMBINATIONS[group_key]["levels"])
+        
+        # 只使用實驗組需要的層次
+        available_levels = [level for level in available_levels if level in required_levels]
+        print(f"🎯 實驗組可用層次: {available_levels}")
+    
     # 分析查詢並分類
-    query_analysis = get_query_analysis(req.query)
+    query_analysis = get_query_analysis(query)
     recommended_level = query_analysis['recommended_level']
     query_type = query_analysis['query_type']
     confidence = query_analysis['confidence']
     
-    # 獲取可用的embedding層次
-    available_levels = store.get_available_levels()
     print(f"🔍 查詢分析：類型={query_type}, 置信度={confidence:.3f}, 推薦層次={recommended_level}")
     print(f"📊 可用層次: {available_levels}")
     
@@ -6574,10 +6653,23 @@ async def list_embedding_databases():
                 })
         
         if total_vectors > 0:
+            # 根據層次組合確定實驗組
+            level_names = [level["level"] for level in levels_info]
+            group_name = "未知實驗組"
+            
+            if level_names == ["basic_unit"]:
+                group_name = "A組：僅條文層 (Baseline)"
+            elif set(level_names) == {"basic_unit_hierarchy", "basic_unit"}:
+                group_name = "B組：條文+章節結構"
+            elif set(level_names) == {"basic_unit", "basic_unit_component", "enumeration"}:
+                group_name = "C組：條文+細節層次"
+            elif len(level_names) == 6:
+                group_name = "D組：完整多層次ML-RAG"
+            
             databases.append({
                 "id": "multi_level_combined",
                 "type": "multi_level",
-                "name": "多層次Embedding (多層次分塊 + 多層次Embedding)",
+                "name": f"實驗組Embedding - {group_name}",
                 "provider": list(providers)[0] if providers else "unknown",
                 "model": list(models)[0] if models else "unknown",
                 "num_vectors": total_vectors,
@@ -6585,6 +6677,7 @@ async def list_embedding_databases():
                 "chunking_strategy": "hierarchical",
                 "documents": list(all_doc_info.values()),
                 "levels": levels_info,
+                "experimental_group": group_name,
                 "created_at": datetime.now().isoformat()
             })
     
@@ -6707,6 +6800,13 @@ async def debug_store():
         "has_multi_level_embeddings": store.has_multi_level_embeddings(),
         "available_levels": store.get_available_levels(),
         "multi_level_embeddings_keys": list(store.multi_level_embeddings.keys()),
+        "multi_level_embeddings_details": {
+            level: {
+                "num_vectors": len(store.multi_level_embeddings.get(level, {}).get('embeddings', [])),
+                "metadata": store.multi_level_embeddings.get(level, {}).get('metadata', {})
+            }
+            for level in store.get_available_levels()
+        },
         "demo_data_deleted": getattr(store, 'demo_data_deleted', False),
         "docs_count": len(store.docs)
     }
@@ -6719,32 +6819,61 @@ async def list_docs():
     return [{"id": d.id, "filename": d.filename, "num_chars": len(d.text)} for d in docs]
 
 
-# 定義粒度組合配置
+# 定義粒度組合配置 - 對應論文的六個層次
 GRANULARITY_COMBINATIONS = {
-    "flat": {
-        "name": "扁平分塊（僅條文）",
-        "levels": ["basic_unit"]
+    # A組：僅層次 4 (基本單元層 - 條文)
+    "group_a": {
+        "name": "A組：僅條文層 (Baseline)",
+        "description": "傳統平面法的表現 - 僅使用基本單元層（條文）",
+        "levels": ["basic_unit"],
+        "research_purpose": "基線對照組，評估傳統平面檢索的表現"
     },
-    "fine_grained": {
-        "name": "細粒度三層",
-        "levels": ["basic_unit", "basic_unit_component", "enumeration"]
+    
+    # B組：層次 3 + 4 (基本單元層級層 + 基本單元層)
+    "group_b": {
+        "name": "B組：條文+章節結構",
+        "description": "基本單元層 + 基本單元層級層（章、節、編）",
+        "levels": ["basic_unit_hierarchy", "basic_unit"],
+        "research_purpose": "評估結構分組（如：《商標法》的「章、節」）的嵌入是否能更好地捕捉廣泛主題(aboutness)"
     },
-    "mid_grained": {
-        "name": "中粒度四層",
-        "levels": ["basic_unit_hierarchy", "basic_unit", "basic_unit_component", "enumeration"]
+    
+    # C組：層次 4 + 5 + 6 (基本單元層 + 基本單元組成層 + 列舉層)
+    "group_c": {
+        "name": "C組：條文+細節層次",
+        "description": "基本單元層 + 基本單元組成層（項）+ 列舉層（款、目）",
+        "levels": ["basic_unit", "basic_unit_component", "enumeration"],
+        "research_purpose": "評估細節化層次對於處理臺灣法律中常見的列舉式規定（如：《商標法》第30條的15款不得註冊情形）所帶來的精確度增益"
     },
-    "full_ml": {
-        "name": "完整多層次",
+    
+    # D組：層次 1 + 2 + 3 + 4 + 5 + 6 (完整多層次)
+    "group_d": {
+        "name": "D組：完整多層次ML-RAG",
+        "description": "包含所有六個粒度層次",
         "levels": ["document", "document_component", "basic_unit_hierarchy", 
-                   "basic_unit", "basic_unit_component", "enumeration"]
+                   "basic_unit", "basic_unit_component", "enumeration"],
+        "research_purpose": "作為最佳效能的對比組，評估完整多層次方法的綜合表現"
     },
-    "structural_only": {
+    
+    # 額外的對比組合，用於更細緻的分析
+    "document_only": {
+        "name": "僅文件層",
+        "description": "僅使用文件層級embedding",
+        "levels": ["document"],
+        "research_purpose": "評估最高層級結構的獨立貢獻"
+    },
+    
+    "structure_only": {
         "name": "僅結構層",
-        "levels": ["document", "document_component", "basic_unit_hierarchy"]
+        "description": "僅使用結構層次（文件、文件組件、基本單元層級）",
+        "levels": ["document", "document_component", "basic_unit_hierarchy"],
+        "research_purpose": "評估純結構層次的貢獻，不包含具體內容"
     },
+    
     "content_only": {
         "name": "僅內容層",
-        "levels": ["basic_unit", "basic_unit_component", "enumeration"]
+        "description": "僅使用內容層次（條文、項、款目）",
+        "levels": ["basic_unit", "basic_unit_component", "enumeration"],
+        "research_purpose": "評估純內容層次的貢獻，不包含高層結構"
     }
 }
 
@@ -6753,6 +6882,56 @@ GRANULARITY_COMBINATIONS = {
 def get_granularity_combinations():
     """獲取可用的粒度組合配置"""
     return {"combinations": GRANULARITY_COMBINATIONS}
+
+
+@app.post("/api/test-experimental-groups")
+async def test_experimental_groups(req: Dict[str, Any]):
+    """測試實驗組層次選擇邏輯"""
+    experimental_groups = req.get("experimental_groups", [])
+    
+    if not experimental_groups:
+        return {"message": "請提供experimental_groups參數"}
+    
+    # 模擬實驗組選擇邏輯
+    six_levels = [
+        'document', 'document_component', 'basic_unit_hierarchy', 
+        'basic_unit', 'basic_unit_component', 'enumeration'
+    ]
+    
+    print(f"🧪 測試實驗組選擇: {experimental_groups}")
+    
+    # 收集所有需要的層次
+    required_levels = set()
+    group_details = {}
+    
+    for group_key in experimental_groups:
+        if group_key in GRANULARITY_COMBINATIONS:
+            group_info = GRANULARITY_COMBINATIONS[group_key]
+            group_levels = group_info["levels"]
+            required_levels.update(group_levels)
+            
+            group_details[group_key] = {
+                "name": group_info["name"],
+                "description": group_info["description"],
+                "levels": group_levels,
+                "research_purpose": group_info["research_purpose"]
+            }
+        else:
+            group_details[group_key] = {"error": "未知的實驗組"}
+    
+    # 確定要處理的層次
+    selected_levels = [level for level in six_levels if level in required_levels]
+    skipped_levels = [level for level in six_levels if level not in required_levels]
+    
+    return {
+        "experimental_groups": experimental_groups,
+        "group_details": group_details,
+        "all_levels": six_levels,
+        "selected_levels": selected_levels,
+        "skipped_levels": skipped_levels,
+        "total_selected": len(selected_levels),
+        "total_skipped": len(skipped_levels)
+    }
 
 
 @app.post("/api/granularity-comparison-retrieve")
@@ -6922,6 +7101,190 @@ def calculate_ecu_metrics(annotations: List[ECUAnnotation], k_values: List[int])
     return metrics
 
 
+@app.post("/api/experimental-groups-generate-embeddings")
+async def experimental_groups_generate_embeddings(req: Dict[str, Any]):
+    """
+    為不同實驗組生成對應層次的embedding
+    req = {
+        "doc_id": str,
+        "groups_to_embed": List[str]  # ["group_a", "group_b", "group_c", "group_d"]
+    }
+    """
+    doc_id = req.get("doc_id")
+    groups_to_embed = req.get("groups_to_embed", ["group_a", "group_b", "group_c", "group_d"])
+    
+    if not doc_id:
+        return JSONResponse(status_code=400, content={"error": "Document ID is required"})
+    
+    doc = store.get_doc(doc_id)
+    if not doc:
+        return JSONResponse(status_code=404, content={"error": "Document not found"})
+    
+    results = {}
+    
+    for group_key in groups_to_embed:
+        if group_key not in GRANULARITY_COMBINATIONS:
+            continue
+            
+        combination = GRANULARITY_COMBINATIONS[group_key]
+        selected_levels = combination["levels"]
+        
+        # 為該實驗組生成embedding
+        group_results = {
+            "group_info": combination,
+            "levels_processed": [],
+            "total_chunks": 0,
+            "embedding_status": "processing"
+        }
+        
+        try:
+            # 獲取該組需要的層次數據
+            for level_name in selected_levels:
+                # 檢查是否已有該層次的embedding
+                existing_data = store.get_multi_level_embeddings(level_name)
+                if existing_data and len(existing_data['embeddings']) > 0:
+                    group_results["levels_processed"].append({
+                        "level": level_name,
+                        "status": "existing",
+                        "chunk_count": len(existing_data['chunks'])
+                    })
+                    group_results["total_chunks"] += len(existing_data['chunks'])
+                else:
+                    # 需要生成該層次的embedding
+                    group_results["levels_processed"].append({
+                        "level": level_name,
+                        "status": "missing",
+                        "chunk_count": 0
+                    })
+            
+            results[group_key] = group_results
+            
+        except Exception as e:
+            results[group_key] = {
+                "group_info": combination,
+                "error": str(e),
+                "embedding_status": "error"
+            }
+    
+    return {
+        "doc_id": doc_id,
+        "groups_processed": list(results.keys()),
+        "results": results,
+        "message": "請先為需要的層次生成embedding，然後再進行實驗組對比"
+    }
+
+
+@app.post("/api/experimental-groups-batch-retrieve")
+async def experimental_groups_batch_retrieve(req: Dict[str, Any]):
+    """
+    批量檢索不同實驗組的結果，用於對比實驗
+    注意：需要先為各實驗組生成對應的embedding
+    req = {
+        "query": str,
+        "k": int,
+        "groups_to_test": List[str]  # ["group_a", "group_b", "group_c", "group_d"]
+    }
+    """
+    query = req.get("query")
+    k = req.get("k", 10)
+    groups_to_test = req.get("groups_to_test", ["group_a", "group_b", "group_c", "group_d"])
+    
+    if not query:
+        return JSONResponse(status_code=400, content={"error": "Query is required"})
+    
+    # 檢查各實驗組是否有對應的embedding
+    missing_embeddings = []
+    for group_key in groups_to_test:
+        if group_key not in GRANULARITY_COMBINATIONS:
+            continue
+        combination = GRANULARITY_COMBINATIONS[group_key]
+        for level_name in combination["levels"]:
+            level_data = store.get_multi_level_embeddings(level_name)
+            if not level_data or len(level_data['embeddings']) == 0:
+                missing_embeddings.append(f"{group_key}: {level_name}")
+    
+    if missing_embeddings:
+        return JSONResponse(
+            status_code=400, 
+            content={
+                "error": "Missing embeddings for experimental groups",
+                "missing": missing_embeddings,
+                "message": "請先為這些層次生成embedding：\n" + "\n".join(missing_embeddings)
+            }
+        )
+    
+    # 生成查詢向量
+    if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+        query_vector = (await embed_gemini([query]))[0]
+    elif USE_BGE_M3_EMBEDDING:
+        query_vector = embed_bge_m3([query])[0]
+    else:
+        return JSONResponse(status_code=400, content={"error": "No embedding method available"})
+    
+    results = {}
+    
+    for group_key in groups_to_test:
+        if group_key not in GRANULARITY_COMBINATIONS:
+            continue
+            
+        combination = GRANULARITY_COMBINATIONS[group_key]
+        selected_levels = combination["levels"]
+        
+        # 從選定的層次中檢索並融合結果
+        all_results = []
+        level_contributions = {}
+        
+        for level_name in selected_levels:
+            level_data = store.get_multi_level_embeddings(level_name)
+            if not level_data:
+                continue
+            
+            vectors = np.array(level_data['embeddings'])
+            chunks = level_data['chunks']
+            doc_ids = level_data['doc_ids']
+            
+            # 計算相似度
+            similarities = cosine_similarity([query_vector], vectors)[0]
+            
+            # 獲取該層次的top-k結果
+            top_indices = np.argsort(similarities)[::-1][:k]
+            
+            level_results = []
+            for idx in top_indices:
+                result = {
+                    "content": chunks[idx],
+                    "similarity": float(similarities[idx]),
+                    "level": level_name,
+                    "doc_id": doc_ids[idx],
+                    "chunk_index": int(idx)
+                }
+                level_results.append(result)
+                all_results.append(result)
+            
+            level_contributions[level_name] = {
+                "results": level_results,
+                "total_chunks": len(chunks),
+                "avg_similarity": float(np.mean([r["similarity"] for r in level_results])) if level_results else 0
+            }
+        
+        # 融合結果（按相似度排序）
+        fused_results = sorted(all_results, key=lambda x: x["similarity"], reverse=True)
+        
+        results[group_key] = {
+            "group_info": combination,
+            "level_contributions": level_contributions,
+            "fused_results": fused_results[:k],
+            "total_results": len(all_results)
+        }
+    
+    return {
+        "query": query,
+        "k": k,
+        "groups_tested": list(results.keys()),
+        "results": results
+    }
+
+
 @app.get("/api/granularity-comparison-report")
 def generate_comparison_report():
     """生成粒度對比報告"""
@@ -6930,46 +7293,81 @@ def generate_comparison_report():
     if not all_annotations:
         return {"message": "No annotations available for comparison"}
     
-    # 按查詢分組
-    query_groups = {}
+    # 按查詢和實驗組分組
+    query_group_data = {}
     for annotation in all_annotations:
-        if annotation.query not in query_groups:
-            query_groups[annotation.query] = []
-        query_groups[annotation.query].append(annotation)
+        # 從annotation中提取實驗組信息（需要在前端標註時記錄）
+        query = annotation.query
+        group_info = getattr(annotation, 'experimental_group', 'unknown')
+        
+        if query not in query_group_data:
+            query_group_data[query] = {}
+        if group_info not in query_group_data[query]:
+            query_group_data[query][group_info] = []
+        
+        query_group_data[query][group_info].append(annotation)
     
-    # 計算各查詢的指標
+    # 計算各查詢各組的指標
     report = {
-        "total_queries": len(query_groups),
+        "total_queries": len(query_group_data),
         "total_annotations": len(all_annotations),
+        "experimental_groups": ["group_a", "group_b", "group_c", "group_d"],
         "per_query_results": {},
-        "aggregate_metrics": {}
+        "group_comparison": {},
+        "marginal_benefit_analysis": {}
     }
     
     k_values = [1, 3, 5, 10]
     
-    for query, annotations in query_groups.items():
-        metrics = calculate_ecu_metrics(annotations, k_values)
-        report["per_query_results"][query] = {
-            "total_annotations": len(annotations),
-            "metrics": metrics,
-            "label_distribution": {
-                "E": sum(1 for a in annotations if a.relevance_label == 'E'),
-                "C": sum(1 for a in annotations if a.relevance_label == 'C'),
-                "U": sum(1 for a in annotations if a.relevance_label == 'U')
+    # 計算各查詢的結果
+    for query, group_annotations in query_group_data.items():
+        report["per_query_results"][query] = {}
+        
+        for group, annotations in group_annotations.items():
+            metrics = calculate_ecu_metrics(annotations, k_values)
+            report["per_query_results"][query][group] = {
+                "total_annotations": len(annotations),
+                "metrics": metrics,
+                "label_distribution": {
+                    "E": sum(1 for a in annotations if a.relevance_label == 'E'),
+                    "C": sum(1 for a in annotations if a.relevance_label == 'C'),
+                    "U": sum(1 for a in annotations if a.relevance_label == 'U')
+                }
             }
-        }
     
-    # 計算聚合指標
-    all_metrics = []
-    for query_data in report["per_query_results"].values():
-        all_metrics.append(query_data["metrics"])
+    # 計算各實驗組的聚合指標
+    for group in report["experimental_groups"]:
+        group_metrics = []
+        for query_data in report["per_query_results"].values():
+            if group in query_data:
+                group_metrics.append(query_data[group]["metrics"])
+        
+        if group_metrics:
+            report["group_comparison"][group] = {}
+            for k in k_values:
+                report["group_comparison"][group][f"avg_E@{k}"] = np.mean([m[f"E@{k}"] for m in group_metrics])
+                report["group_comparison"][group][f"avg_C@{k}"] = np.mean([m[f"C@{k}"] for m in group_metrics])
+                report["group_comparison"][group][f"avg_U@{k}"] = np.mean([m[f"U@{k}"] for m in group_metrics])
+                report["group_comparison"][group][f"avg_E+C@{k}"] = np.mean([m[f"E+C@{k}"] for m in group_metrics])
     
-    if all_metrics:
-        for k in k_values:
-            report["aggregate_metrics"][f"avg_E@{k}"] = np.mean([m[f"E@{k}"] for m in all_metrics])
-            report["aggregate_metrics"][f"avg_C@{k}"] = np.mean([m[f"C@{k}"] for m in all_metrics])
-            report["aggregate_metrics"][f"avg_U@{k}"] = np.mean([m[f"U@{k}"] for m in all_metrics])
-            report["aggregate_metrics"][f"avg_E+C@{k}"] = np.mean([m[f"E+C@{k}"] for m in all_metrics])
+    # 計算邊際效益分析
+    if "group_a" in report["group_comparison"]:
+        baseline = report["group_comparison"]["group_a"]
+        for group in ["group_b", "group_c", "group_d"]:
+            if group in report["group_comparison"]:
+                comparison = report["group_comparison"][group]
+                report["marginal_benefit_analysis"][f"{group}_vs_group_a"] = {}
+                
+                for k in k_values:
+                    report["marginal_benefit_analysis"][f"{group}_vs_group_a"][f"E@{k}_improvement"] = (
+                        comparison[f"avg_E@{k}"] - baseline[f"avg_E@{k}"]
+                    )
+                    report["marginal_benefit_analysis"][f"{group}_vs_group_a"][f"E+C@{k}_improvement"] = (
+                        comparison[f"avg_E+C@{k}"] - baseline[f"avg_E+C@{k}"]
+                    )
+                    report["marginal_benefit_analysis"][f"{group}_vs_group_a"][f"U@{k}_reduction"] = (
+                        baseline[f"avg_U@{k}"] - comparison[f"avg_U@{k}"]
+                    )
     
     return report
 

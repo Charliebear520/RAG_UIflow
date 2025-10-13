@@ -22,6 +22,7 @@ type RagContextType = {
   embedProvider: string | null;
   embedModel: string | null;
   embedDimension: number | null;
+  selectedExperimentalGroups: string[] | null;
   retrieval: any[] | null;
   answer: string | null;
   steps: any[] | null;
@@ -43,6 +44,7 @@ type RagContextType = {
   updateJsonData: (newJsonData: any) => void;
   setDocId: (docId: string | null) => void;
   setEmbedProvider: (provider: string | null) => void;
+  setSelectedExperimentalGroups: (groups: string[] | null) => void;
   chunk: (
     size: number,
     overlap: number,
@@ -54,7 +56,7 @@ type RagContextType = {
     strategy: string
   ) => void;
   embed: () => Promise<void>;
-  multiLevelEmbed: () => Promise<void>;
+  multiLevelEmbed: (experimentalGroups?: string[]) => Promise<void>;
   retrieve: (query: string, k: number) => Promise<void>;
   hybridRetrieve: (query: string, k: number) => Promise<void>;
   hierarchicalRetrieve: (query: string, k: number) => Promise<void>;
@@ -80,6 +82,9 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
   const [embedProvider, setEmbedProvider] = useState<string | null>(null);
   const [embedModel, setEmbedModel] = useState<string | null>(null);
   const [embedDimension, setEmbedDimension] = useState<number | null>(null);
+  const [selectedExperimentalGroups, setSelectedExperimentalGroups] = useState<
+    string[] | null
+  >(null);
   const [retrieval, setRetrieval] = useState<any[] | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
   const [steps, setSteps] = useState<any[] | null>(null);
@@ -292,8 +297,10 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     setEmbedDimension(res.dimension || res.num_features || null);
   }
 
-  async function multiLevelEmbed() {
-    const res = await api.multiLevelEmbed();
+  async function multiLevelEmbed(experimentalGroups?: string[]) {
+    const res = await api.multiLevelEmbed({
+      experimental_groups: experimentalGroups,
+    });
     setEmbedProvider(
       res.levels?.conceptual?.provider ||
         res.levels?.procedural?.provider ||
@@ -312,6 +319,8 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
         res.levels?.normative?.dimension ||
         null
     );
+    // 保存選定的實驗組
+    setSelectedExperimentalGroups(experimentalGroups || null);
   }
 
   async function retrieve(query: string, k: number) {
@@ -372,11 +381,17 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function multiLevelRetrieve(query: string, k: number) {
-    const res = await api.multiLevelRetrieve({ query, k });
+    // 根據選定的實驗組進行檢索
+    const res = await api.multiLevelRetrieve({
+      query,
+      k,
+      experimental_groups: selectedExperimentalGroups || undefined,
+    });
     const retrievalData = res.results.map((result: any) => ({
       ...result,
       metrics: res.metrics,
       query_analysis: res.query_analysis,
+      experimental_groups: selectedExperimentalGroups || undefined, // 記錄使用的實驗組
     }));
     setRetrieval(retrievalData);
   }
@@ -386,16 +401,19 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     k: number,
     fusionStrategy: string = "weighted_sum"
   ) {
+    // 根據選定的實驗組進行融合檢索
     const res = await api.multiLevelFusionRetrieve({
       query,
       k,
       fusion_strategy: fusionStrategy,
+      experimental_groups: selectedExperimentalGroups || undefined,
     });
     const retrievalData = res.results.map((result: any) => ({
       ...result,
       metrics: res.metrics,
       query_analysis: res.query_analysis,
       level_results: res.level_results,
+      experimental_groups: selectedExperimentalGroups || undefined, // 記錄使用的實驗組
     }));
     setRetrieval(retrievalData);
   }
@@ -431,6 +449,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     embedProvider,
     embedModel,
     embedDimension,
+    selectedExperimentalGroups,
     retrieval,
     answer,
     steps,
@@ -448,6 +467,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     updateJsonData,
     setDocId,
     setEmbedProvider,
+    setSelectedExperimentalGroups,
     chunk,
     setChunkingResultsAndStrategy,
     embed,

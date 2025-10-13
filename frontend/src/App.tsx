@@ -95,6 +95,24 @@ export default function App() {
         Upload → Chunk → Embed → Retrieve → Generate
       </p>
 
+      {/* 導航按鈕 */}
+      <div style={{ marginBottom: 20 }}>
+        <button
+          style={{
+            marginRight: 10,
+            padding: "8px 16px",
+            backgroundColor: "#007bff",
+            color: "white",
+            border: "none",
+            borderRadius: 4,
+            cursor: "pointer",
+          }}
+          onClick={() => window.location.reload()}
+        >
+          主頁面
+        </button>
+      </div>
+
       <Section title="1) Upload">
         <input
           type="file"
