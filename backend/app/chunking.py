@@ -834,6 +834,73 @@ class StructuredHierarchicalChunking(ChunkingStrategy):
         
         return "\n".join(filter(None, chunk_parts))
     
+    def _build_article_chunk_simple(self, article_data: dict, law_name: str, chapter_title: str, section_title: str) -> str:
+        """構建簡化的條文級chunk - 僅包含條文主文，不包含項、款、目"""
+        chunk_parts = [
+            f"【{law_name}】",
+            chapter_title,
+            section_title,
+            article_data.get("article", "")
+        ]
+        
+        # 僅添加條文主文內容，不包含項、款、目
+        if "content" in article_data and not self._is_deleted_text(article_data["content"]):
+            chunk_parts.append(article_data["content"])
+        
+        return "\n".join(filter(None, chunk_parts))
+    
+    def _build_item_chunk_with_context(self, item_data: dict, law_name: str, chapter_title: str, 
+                                      section_title: str, article_title: str, article_content: str, 
+                                      experimental_group: str) -> str:
+        """構建帶有上下文脈絡的項chunk"""
+        chunk_parts = [
+            f"【{law_name}】",
+            chapter_title,
+            section_title,
+            article_title,
+            article_content,  # 條文主文作為上文脈絡
+            item_data.get("paragraph", ""),
+            item_data.get("content", "")
+        ]
+        return "\n".join(filter(None, chunk_parts))
+    
+    def _build_sub_item_chunk_with_context(self, sub_item_data: dict, law_name: str, chapter_title: str, 
+                                          section_title: str, article_title: str, item_title: str, 
+                                          article_content: str, item_data: dict, experimental_group: str) -> str:
+        """構建帶有上下文脈絡的款chunk"""
+        chunk_parts = [
+            f"【{law_name}】",
+            chapter_title,
+            section_title,
+            article_title,
+            article_content,  # 條文主文作為上文脈絡
+            item_title,
+            item_data.get("content", ""),  # 項內容作為上文脈絡
+            sub_item_data.get("subparagraph", ""),
+            sub_item_data.get("content", "")
+        ]
+        return "\n".join(filter(None, chunk_parts))
+    
+    def _build_item_third_level_with_context(self, third_item: dict, law_name: str, chapter_title: str, 
+                                           section_title: str, article_title: str, item_title: str, 
+                                           subparagraph_name: str, article_content: str, item_data: dict, 
+                                           sub_item_data: dict, experimental_group: str) -> str:
+        """構建帶有上下文脈絡的目chunk"""
+        chunk_parts = [
+            f"【{law_name}】",
+            chapter_title,
+            section_title,
+            article_title,
+            article_content,  # 條文主文作為上文脈絡
+            item_title,
+            item_data.get("content", ""),  # 項內容作為上文脈絡
+            subparagraph_name,
+            sub_item_data.get("content", ""),  # 款內容作為上文脈絡
+            third_item.get("item", ""),
+            third_item.get("content", "")
+        ]
+        return "\n".join(filter(None, chunk_parts))
+    
     def _build_law_chunk(self, law_data: dict) -> str:
         """構建法規級chunk - 整個法規"""
         law_name = law_data.get("law_name", "未命名法規")
@@ -1296,20 +1363,35 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
         """
         多層級結構化分割，一次性生成所有六個粒度級別的分塊
         
+        Args:
+            text: 原始文本
+            json_data: 結構化JSON數據
+            experimental_group: 實驗組名稱 ("group_a", "group_b", "group_c", "group_d")
+        
         Returns:
             List[Dict]: 包含所有六個層次的chunk列表
         """
         if json_data and ("laws" in json_data or "chapters" in json_data):
             # 同時支援多法規格式(laws)與單一法規格式(chapters)
             normalized_json = json_data if "laws" in json_data else {"laws": [json_data]}
-            return self._multi_level_chunk_by_json_structure(normalized_json)
+            experimental_group = kwargs.get('experimental_group', 'group_d')  # 默認完整模式
+            return self._multi_level_chunk_by_json_structure(normalized_json, experimental_group)
         else:
             # 如果沒有JSON結構，回退到普通層次分割
             hierarchical_chunker = HierarchicalChunking()
             return hierarchical_chunker.chunk_with_span(text)
     
-    def _multi_level_chunk_by_json_structure(self, json_data: dict) -> List[Dict[str, Any]]:
-        """根據JSON結構進行多層級分割，返回按照 Chapter/Section/Article/Paragraph/Subparagraph/Item 六層的chunks"""
+    def _multi_level_chunk_by_json_structure(self, json_data: dict, experimental_group: str = 'group_d') -> List[Dict[str, Any]]:
+        """根據JSON結構進行多層級分割，返回按照 Chapter/Section/Article/Paragraph/Subparagraph/Item 六層的chunks
+        
+        Args:
+            json_data: JSON結構數據
+            experimental_group: 實驗組名稱，決定分塊策略
+                - group_a: 僅條文層，不包含項、款、目
+                - group_b: 條文+章節結構
+                - group_c: 條文+細節層次（項、款、目）
+                - group_d: 完整多層次
+        """
         all_chunks = []
         
         # 處理所有法律
@@ -1386,7 +1468,14 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                         
                         # 3. 條 Article（內容為「（刪除）」時跳過）
                         if not self._is_deleted_text(article_content):
-                            article_chunk = self._build_article_chunk(article_data, law_name, chapter_title, section_title)
+                            # 根據實驗組決定條文chunk的內容
+                            if experimental_group == 'group_a':
+                                # 實驗組A：僅條文主文，不包含項、款、目
+                                article_chunk = self._build_article_chunk_simple(article_data, law_name, chapter_title, section_title)
+                            else:
+                                # 其他實驗組：包含完整內容
+                                article_chunk = self._build_article_chunk(article_data, law_name, chapter_title, section_title)
+                            
                             all_chunks.append({
                                 "content": article_chunk,
                                 "span": {"start": 0, "end": len(article_chunk)},
@@ -1399,85 +1488,122 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                                     "section": section_title,
                                     "article": article_title,
                                     "chunk_index": len(all_chunks),
-                                    "length": len(article_chunk)
+                                    "length": len(article_chunk),
+                                    "experimental_group": experimental_group
                                 }
                             })
                         else:
                             # 刪除條不再生成後續層級
                             continue
                         
-                        # 處理項 - 支援新結構 (paragraphs) 和舊結構 (items)
-                        paragraphs = article_data.get("paragraphs", [])
-                        for item_data in paragraphs:
-                            # 4. 項 Paragraph（僅使用新結構）
-                            item_title = item_data.get("paragraph", "")
-                            item_chunk = self._build_item_chunk(item_data, law_name, chapter_title, section_title, article_title, article_content)
-                            all_chunks.append({
-                                "content": item_chunk,
-                                "span": {"start": 0, "end": len(item_chunk)},
-                                "metadata": {
-                                    "strategy": "multi_level_structured",
-                                    "level": "Paragraph",
-                                    "level_en": "Paragraph",
-                                    "law_name": law_name,
-                                    "chapter": chapter_title,
-                                    "section": section_title,
-                                    "article": article_title,
-                                    "paragraph": item_title,
-                                    "chunk_index": len(all_chunks),
-                                    "length": len(item_chunk)
-                                }
-                            })
-                            
-                            # 處理款/目（僅使用新結構 subparagraphs → items）
-                            subparagraphs = item_data.get("subparagraphs", [])
-                            for sub_item_data in subparagraphs:
-                                # 5. 款 Subparagraph
-                                sub_item_chunk = self._build_sub_item_chunk(sub_item_data, law_name, chapter_title, section_title, article_title, item_title, article_content)
-                                subparagraph_name = sub_item_data.get("subparagraph", "")
+                        # 處理項 - 根據實驗組決定是否包含項層級
+                        if experimental_group in ['group_c', 'group_d']:
+                            paragraphs = article_data.get("paragraphs", [])
+                            for item_data in paragraphs:
+                                # 4. 項 Paragraph（僅使用新結構）
+                                item_title = item_data.get("paragraph", "")
+                                
+                                # 根據實驗組決定項chunk的上下文脈絡
+                                if experimental_group in ['group_c', 'group_d']:
+                                    # 項層級需要包含條文主文作為上文脈絡
+                                    item_chunk = self._build_item_chunk_with_context(
+                                        item_data, law_name, chapter_title, section_title, 
+                                        article_title, article_content, experimental_group
+                                    )
+                                else:
+                                    item_chunk = self._build_item_chunk(item_data, law_name, chapter_title, section_title, article_title, article_content)
+                                
                                 all_chunks.append({
-                                    "content": sub_item_chunk,
-                                    "span": {"start": 0, "end": len(sub_item_chunk)},
+                                    "content": item_chunk,
+                                    "span": {"start": 0, "end": len(item_chunk)},
                                     "metadata": {
                                         "strategy": "multi_level_structured",
-                                        "level": "Subparagraph",
-                                        "level_en": "Subparagraph",
+                                        "level": "Paragraph",
+                                        "level_en": "Paragraph",
                                         "law_name": law_name,
                                         "chapter": chapter_title,
                                         "section": section_title,
                                         "article": article_title,
                                         "paragraph": item_title,
-                                        "subparagraph": subparagraph_name,
                                         "chunk_index": len(all_chunks),
-                                        "length": len(sub_item_chunk)
+                                        "length": len(item_chunk),
+                                        "experimental_group": experimental_group
                                     }
                                 })
-
-                                # 6. 目 Item（第三層枚舉）
-                                third_items = sub_item_data.get("items", [])
-                                for third in third_items:
-                                    third_name = third.get("item", "")
-                                    third_chunk = third.get("content", "") or ""
-                                    if not third_chunk:
-                                        continue
+                                
+                                # 處理款/目（僅使用新結構 subparagraphs → items）
+                                subparagraphs = item_data.get("subparagraphs", [])
+                                for sub_item_data in subparagraphs:
+                                    # 5. 款 Subparagraph
+                                    subparagraph_name = sub_item_data.get("subparagraph", "")
+                                    
+                                    # 根據實驗組決定款chunk的上下文脈絡
+                                    if experimental_group in ['group_c', 'group_d']:
+                                        # 款層級需要包含條文主文和項內容作為上文脈絡
+                                        sub_item_chunk = self._build_sub_item_chunk_with_context(
+                                            sub_item_data, law_name, chapter_title, section_title, 
+                                            article_title, item_title, article_content, item_data, experimental_group
+                                        )
+                                    else:
+                                        sub_item_chunk = self._build_sub_item_chunk(sub_item_data, law_name, chapter_title, section_title, article_title, item_title, article_content)
+                                    
                                     all_chunks.append({
-                                        "content": third_chunk,
-                                        "span": {"start": 0, "end": len(third_chunk)},
+                                        "content": sub_item_chunk,
+                                        "span": {"start": 0, "end": len(sub_item_chunk)},
                                         "metadata": {
                                             "strategy": "multi_level_structured",
-                                            "level": "Item",
-                                            "level_en": "Item",
+                                            "level": "Subparagraph",
+                                            "level_en": "Subparagraph",
                                             "law_name": law_name,
                                             "chapter": chapter_title,
                                             "section": section_title,
                                             "article": article_title,
                                             "paragraph": item_title,
                                             "subparagraph": subparagraph_name,
-                                            "item": third_name,
                                             "chunk_index": len(all_chunks),
-                                            "length": len(third_chunk)
+                                            "length": len(sub_item_chunk),
+                                            "experimental_group": experimental_group
                                         }
                                     })
+
+                                    # 6. 目 Item（第三層枚舉）
+                                    third_items = sub_item_data.get("items", [])
+                                    for third in third_items:
+                                        third_name = third.get("item", "")
+                                        third_content = third.get("content", "") or ""
+                                        if not third_content:
+                                            continue
+                                        
+                                        # 根據實驗組決定目chunk的上下文脈絡
+                                        if experimental_group in ['group_c', 'group_d']:
+                                            # 目層級需要包含條文主文、項內容和款內容作為上文脈絡
+                                            third_chunk = self._build_item_third_level_with_context(
+                                                third, law_name, chapter_title, section_title, 
+                                                article_title, item_title, subparagraph_name, 
+                                                article_content, item_data, sub_item_data, experimental_group
+                                            )
+                                        else:
+                                            third_chunk = third_content
+                                        
+                                        all_chunks.append({
+                                            "content": third_chunk,
+                                            "span": {"start": 0, "end": len(third_chunk)},
+                                            "metadata": {
+                                                "strategy": "multi_level_structured",
+                                                "level": "Item",
+                                                "level_en": "Item",
+                                                "law_name": law_name,
+                                                "chapter": chapter_title,
+                                                "section": section_title,
+                                                "article": article_title,
+                                                "paragraph": item_title,
+                                                "subparagraph": subparagraph_name,
+                                                "item": third_name,
+                                                "chunk_index": len(all_chunks),
+                                                "length": len(third_chunk),
+                                                "experimental_group": experimental_group
+                                            }
+                                        })
         
         return all_chunks
 

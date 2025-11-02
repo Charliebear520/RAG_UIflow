@@ -110,6 +110,14 @@ export const api = {
     });
     return json<any>(res);
   },
+  async hybridRrfRetrieve(body: { query: string; k: number }) {
+    const res = await fetch(`${base}/hybrid-rrf-retrieve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return json<any>(res);
+  },
   async hierarchicalRetrieve(body: { query: string; k: number }) {
     const res = await fetch(`${base}/hierarchical-retrieve`, {
       method: "POST",
@@ -361,6 +369,9 @@ export const api = {
   // Embedding資料庫相關API
   async getEmbeddingDatabases() {
     return this.get("/embedding-databases");
+  },
+  async activateEmbeddingDatabase(databaseId: string) {
+    return this.post(`/embedding-databases/${databaseId}/activate`, {});
   },
   async deleteEmbeddingDatabase(databaseId: string) {
     return this.delete(`/embedding-databases/${databaseId}`);

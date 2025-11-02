@@ -118,14 +118,24 @@ export function EmbeddingDatabaseList() {
     return `${documents.length} 個文檔`;
   };
 
-  const handleUseDatabase = (database: EmbeddingDatabase) => {
-    // 跳轉到Retrieve頁面，並攜帶資料庫信息
-    navigate("/retrieve", {
-      state: {
-        selectedDatabase: database,
-        message: `已選擇embedding資料庫: ${database.name}`,
-      },
-    });
+  const handleUseDatabase = async (database: EmbeddingDatabase) => {
+    try {
+      // 先激活embedding資料庫，加載對應的FAISS和BM25索引
+      console.log(`🔄 激活embedding資料庫: ${database.id}`);
+      const result = await api.activateEmbeddingDatabase(database.id);
+      console.log("✅ 激活結果:", result);
+      
+      // 跳轉到Retrieve頁面，並攜帶資料庫信息
+      navigate("/retrieve", {
+        state: {
+          selectedDatabase: database,
+          message: `已選擇並激活embedding資料庫: ${database.name}`,
+        },
+      });
+    } catch (err) {
+      console.error("激活embedding資料庫失敗:", err);
+      alert(err instanceof Error ? err.message : "激活資料庫失敗，請重試");
+    }
   };
 
   if (loading) {

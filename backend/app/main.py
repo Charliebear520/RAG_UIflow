@@ -20,9 +20,13 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 
-from .models import ChunkConfig, MetadataOptions, MultiLevelFusionRequest, ECUAnnotation, GranularityComparisonRequest, AnnotationBatchRequest
+from .models import DocRecord, ChunkConfig, MetadataOptions, MultiLevelFusionRequest, ECUAnnotation, GranularityComparisonRequest, AnnotationBatchRequest
 from .hybrid_search import hybrid_rank, HybridConfig
 from .store import InMemoryStore
+from .faiss_store import FAISSVectorStore
+from .bm25_index import BM25KeywordIndex
+from .metadata_enhancer import MetadataEnhancer
+from .enhanced_hybrid_rag import EnhancedHybridRAG, EnhancedHybridConfig
 from .query_classifier import query_classifier, get_query_analysis
 from .result_fusion import MultiLevelResultFusion, FusionConfig, fuse_multi_level_results
 try:
@@ -95,18 +99,7 @@ except Exception:  # pragma: no cover
     httpx = None
 
 
-# ---- Simple in-memory store (demo only) ----
-@dataclass
-class DocRecord:
-    id: str
-    filename: str
-    text: str
-    chunks: List[str]
-    chunk_size: int
-    overlap: int
-    json_data: Optional[Dict[str, Any]] = None  # 存儲結構化JSON數據
-    structured_chunks: Optional[List[Dict[str, Any]]] = None  # 存儲結構化chunks
-    generated_questions: Optional[List[str]] = None  # 存儲生成的問題
+# DocRecord 已從 models 導入
 
 
 
@@ -117,6 +110,26 @@ class DocRecord:
 
 from .store import InMemoryStore
 store = InMemoryStore()
+
+# 新增：FAISS向量存儲
+faiss_store = FAISSVectorStore()
+
+# 新增：BM25關鍵字索引
+bm25_index = BM25KeywordIndex()
+
+# 新增：Metadata增強器
+metadata_enhancer = MetadataEnhancer()
+
+# 新增：增強版HybridRAG
+enhanced_hybrid_rag = EnhancedHybridRAG(faiss_store, bm25_index, metadata_enhancer)
+
+# 初始化時載入已保存的數據
+try:
+    faiss_store.load_data()
+    bm25_index.load_data()
+    print("✅ 已載入FAISS和BM25數據")
+except Exception as e:
+    print(f"⚠️ 載入FAISS和BM25數據失敗: {e}")
 
 
 
@@ -155,6 +168,7 @@ class ChunkRequest(BaseModel):
 
 class EmbedRequest(BaseModel):
     doc_ids: Optional[List[str]] = None  # if None, embed all
+    enable_metadata_enhancement: bool = True  # 是否啟用metadata增強
 
 
 class RetrieveRequest(BaseModel):
@@ -641,124 +655,6 @@ def calculate_static_importance(chapter: str, section: str, article: str) -> flo
 
 
 
-def extract_spans_with_pdfplumber(pdf_file, text_content: str, full_text: str = "") -> List[Dict[str, Any]]:
-    """使用pdfplumber提取文字片段範圍"""
-    spans = []
-    
-    try:
-        # 重置文件指針
-        pdf_file.seek(0)
-        
-        with pdfplumber.open(pdf_file) as pdf:
-            # 首先在整個文檔中查找內容
-            all_text = ""
-            page_texts = []
-            
-            for page_num, page in enumerate(pdf.pages, 1):
-                page_text = page.extract_text() or ""
-                page_texts.append(page_text)
-                all_text += page_text + "\n"
-            
-            # 在完整文本中查找內容
-            if text_content.strip():
-                # 清理文本內容，去除多餘空白
-                clean_content = re.sub(r'\s+', ' ', text_content.strip())
-                clean_all_text = re.sub(r'\s+', ' ', all_text)
-                
-                start_idx = clean_all_text.find(clean_content)
-                if start_idx != -1:
-                    end_idx = start_idx + len(clean_content)
-                    
-                    # 計算在哪個頁面
-                    page_num = 1
-                    current_pos = 0
-                    for i, page_text in enumerate(page_texts):
-                        clean_page_text = re.sub(r'\s+', ' ', page_text)
-                        page_len = len(clean_page_text)
-                        
-                        if current_pos <= start_idx < current_pos + page_len:
-                            page_num = i + 1
-                            # 計算在該頁面內的相對位置
-                            page_start = start_idx - current_pos
-                            page_end = page_start + len(clean_content)
-                            
-                            spans.append({
-                                "start_char": start_idx,
-                                "end_char": end_idx,
-                                "page_start_char": page_start,
-                                "page_end_char": page_end,
-                                "text": clean_content[:100] + "..." if len(clean_content) > 100 else clean_content,
-                                "page": page_num,
-                                "confidence": 1.0
-                            })
-                            break
-                        current_pos += page_len + 1  # +1 for newline
-                
-                # 如果沒找到完整匹配，嘗試部分匹配
-                if not spans and len(clean_content) > 10:
-                    # 嘗試匹配前20個字符
-                    partial_content = clean_content[:20]
-                    start_idx = clean_all_text.find(partial_content)
-                    if start_idx != -1:
-                        end_idx = start_idx + len(clean_content)
-                        
-                        # 計算頁面位置
-                        page_num = 1
-                        current_pos = 0
-                        for i, page_text in enumerate(page_texts):
-                            clean_page_text = re.sub(r'\s+', ' ', page_text)
-                            page_len = len(clean_page_text)
-                            
-                            if current_pos <= start_idx < current_pos + page_len:
-                                page_num = i + 1
-                                page_start = start_idx - current_pos
-                                page_end = page_start + len(clean_content)
-                                
-                                spans.append({
-                                    "start_char": start_idx,
-                                    "end_char": end_idx,
-                                    "page_start_char": page_start,
-                                    "page_end_char": page_end,
-                                    "text": clean_content[:100] + "..." if len(clean_content) > 100 else clean_content,
-                                    "page": page_num,
-                                    "confidence": 0.8,
-                                    "note": "partial_match"
-                                })
-                                break
-                            current_pos += page_len + 1
-            
-            # 如果還是沒找到，使用關鍵詞匹配
-            if not spans and text_content.strip():
-                keywords = re.findall(r'[\u4e00-\u9fff]+', text_content)
-                if keywords:
-                    # 找到包含最多關鍵詞的頁面
-                    best_page = 1
-                    best_score = 0
-                    
-                    for page_num, page_text in enumerate(page_texts, 1):
-                        clean_page_text = re.sub(r'\s+', ' ', page_text)
-                        score = sum(1 for keyword in keywords if keyword in clean_page_text)
-                        if score > best_score:
-                            best_score = score
-                            best_page = page_num
-                    
-                    if best_score > 0:
-                        spans.append({
-                            "start_char": 0,
-                            "end_char": len(text_content),
-                            "page_start_char": 0,
-                            "page_end_char": len(text_content),
-                            "text": text_content[:100] + "..." if len(text_content) > 100 else text_content,
-                            "page": best_page,
-                            "confidence": 0.5,
-                            "note": "keyword_match",
-                            "matched_keywords": [kw for kw in keywords if kw in page_texts[best_page-1]]
-                        })
-                        
-    except Exception as e:
-        print(f"Error extracting spans: {e}")
-    
-    return spans
 
 
 def get_text_position_in_document(full_text: str, target_text: str) -> Dict[str, Any]:
@@ -795,41 +691,6 @@ def get_text_position_in_document(full_text: str, target_text: str) -> Dict[str,
     return {"start": 0, "end": 0, "found": False, "confidence": 0.0}
 
 
-def get_page_range_for_text(pdf_file, target_text: str) -> Dict[str, int]:
-    """獲取文本在PDF中的頁碼範圍"""
-    try:
-        # 重置文件指针
-        pdf_file.seek(0)
-        
-        with pdfplumber.open(pdf_file) as pdf:
-            start_page = None
-            end_page = None
-            
-            for page_num, page in enumerate(pdf.pages, 1):
-                page_text = page.extract_text() or ""
-                clean_page_text = re.sub(r'\s+', ' ', page_text)
-                clean_target = re.sub(r'\s+', ' ', target_text.strip())
-                
-                if clean_target in clean_page_text:
-                    if start_page is None:
-                        start_page = page_num
-                    end_page = page_num
-                elif len(clean_target) > 10:
-                    # 嘗試部分匹配
-                    partial = clean_target[:20]
-                    if partial in clean_page_text:
-                        if start_page is None:
-                            start_page = page_num
-                        end_page = page_num
-            
-            if start_page is not None:
-                return {"start": start_page, "end": end_page or start_page}
-            else:
-                return {"start": 1, "end": 1}  # 默認值
-                
-    except Exception as e:
-        print(f"Error getting page range: {e}")
-        return {"start": 1, "end": 1}  # 默认值
 
 
 
@@ -1951,22 +1812,26 @@ def clean_text_for_gemini(text: str) -> str:
     # 移除控制字符
     text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
     
-    # 處理法律文檔的特殊格式
-    # 移除過多的換行符，但保留段落結構
+    # 移除全角特殊字符（但保留中文常用标点）
+    # 移除【】、〖〗、『』等全角方括号和特殊符号
+    text = re.sub(r'[【】〖〗『』［］〔〕｛｝〈〉《》「」『』]', '', text)
+    
+    # 处理法律文档的特殊格式
+    # 移除过多的换行符，但保留段落结构
     text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
     
-    # 移除多餘的空格
+    # 移除多余的空格
     text = re.sub(r' +', ' ', text)
     
     # 移除行首行尾空格
     text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)
     
-    # 確保文本不會太長
+    # 确保文本不会太长
     if len(text) > 8000:
-        # 嘗試在合適的位置截斷（如段落邊界）
+        # 尝试在合适的位置截断（如段落边界）
         truncated = text[:8000]
         last_paragraph = truncated.rfind('\n\n')
-        if last_paragraph > 6000:  # 如果最後一個段落不太遠
+        if last_paragraph > 6000:  # 如果最后一个段落不太远
             text = truncated[:last_paragraph]
         else:
             text = truncated
@@ -2021,8 +1886,16 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
                 
                 if r.status_code == 400:
                     print(f"❌ Gemini API 400錯誤，嘗試清理文本...")
-                    # 嘗試更激進的文本清理
-                    cleaned_text = re.sub(r'[^\w\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]', ' ', text)
+                    # 尝试读取错误详情
+                    try:
+                        error_data = r.json()
+                        print(f"❌ API錯誤詳情: {error_data}")
+                    except:
+                        print(f"❌ API錯誤響應: {r.text[:200]}")
+                    
+                    # 尝试更激进的文本清理（保留中文字符和常用标点）
+                    # 只移除可能引起问题的特殊字符
+                    cleaned_text = re.sub(r'[^\w\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef\u3001\u3002\u300a\u300b\u300c\u300d\u300e\u300f\u2018\u2019\u201c\u201d]', ' ', text)
                     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
                     
                     if len(cleaned_text) > 10:
@@ -2030,19 +1903,14 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
                         r = await client.post(url, headers=headers, json=payload)
                         
                         if r.status_code == 400:
-                            print(f"❌ 清理後仍失敗，使用fallback向量")
+                            print(f"❌ 清理後仍失敗，拋出異常而不是使用fallback向量")
                             print(f"❌ 原始文本前100字符: {original_text[:100]}")
                             print(f"❌ 清理後文本前100字符: {cleaned_text[:100]}")
-                            import numpy as np
-                            fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
-                            out.append(fallback_vector)
-                            continue
+                            # 不再使用fallback向量，而是抛出异常
+                            raise RuntimeError(f"Gemini API返回400錯誤，無法處理文本。原始文本前100字符: {original_text[:100]}")
                     else:
-                        print(f"❌ 清理後文本過短，使用fallback向量")
-                        import numpy as np
-                        fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
-                        out.append(fallback_vector)
-                        continue
+                        print(f"❌ 清理後文本過短，拋出異常")
+                        raise RuntimeError(f"清理後文本過短（{len(cleaned_text)}字符），無法生成embedding")
                 
                 r.raise_for_status()
                 data = r.json()
@@ -2125,19 +1993,114 @@ def embed_bge_m3(texts: List[str]) -> List[List[float]]:
 @app.post("/api/embed")
 async def embed(req: EmbedRequest):
     print(f"🔍 Embed函数被调用，请求: {req}")
-    # gather chunks across selected docs
-    selected = req.doc_ids or list(store.docs.keys())
-    print(f"🔍 选中的文档: {selected}")
+    
+    # 收集選定文檔的chunks
+    # 如果沒有指定doc_ids，只選擇使用structured_hierarchical策略的最近文檔
+    requested_doc_ids = req.doc_ids
+    if requested_doc_ids:
+        # 即使指定了doc_ids，也要按文件名去重，避免重複embedding同名文檔
+        candidates = []
+        for doc_id in requested_doc_ids:
+            doc = store.docs.get(doc_id)
+            if doc:
+                candidates.append((doc_id, doc))
+        
+        if not candidates:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "指定的文檔ID不存在"}
+            )
+        
+        # 按文件名去重，只選擇每個文件名的第一個文檔（或者chunks最多的）
+        filename_to_doc = {}  # {filename: (doc_id, doc, chunk_count)}
+        for doc_id, doc in candidates:
+            # 優先使用structured_chunks計算chunk數量
+            chunk_count = len(doc.structured_chunks) if doc.structured_chunks else (len(doc.chunks) if doc.chunks else 0)
+            if doc.filename not in filename_to_doc:
+                filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
+            else:
+                existing_count = filename_to_doc[doc.filename][2]
+                if chunk_count > existing_count:
+                    print(f"🔄 發現更新的文檔 {doc.filename}: {chunk_count} > {existing_count} chunks")
+                    filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
+                else:
+                    print(f"⚠️ 跳過重複文檔 {doc.filename} (doc_id: {doc_id})，已選擇chunks更多的版本")
+        
+        selected = [doc_id for doc_id, _, _ in filename_to_doc.values()]
+        if len(selected) < len(requested_doc_ids):
+            print(f"⚠️ 去重後，從 {len(requested_doc_ids)} 個指定的文檔中選擇了 {len(selected)} 個文檔")
+    else:
+        # 只選擇使用structured_hierarchical或multi_level_structured策略的文檔
+        candidates = [
+            (doc_id, doc) for doc_id, doc in store.docs.items()
+            if doc and getattr(doc, 'chunking_strategy', None) in ['structured_hierarchical', 'multi_level_structured']
+        ]
+        
+        if not candidates:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "沒有找到使用structured_hierarchical策略的文檔。請先進行多層級結構化分塊。"}
+            )
+        
+        # 按文件名去重，只選擇每個文件名的第一個文檔（或者chunks最多的）
+        filename_to_doc = {}  # {filename: (doc_id, doc, chunk_count)}
+        for doc_id, doc in candidates:
+            # 優先使用structured_chunks計算chunk數量
+            chunk_count = len(doc.structured_chunks) if doc.structured_chunks else (len(doc.chunks) if doc.chunks else 0)
+            if doc.filename not in filename_to_doc:
+                filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
+            else:
+                existing_count = filename_to_doc[doc.filename][2]
+                if chunk_count > existing_count:
+                    print(f"🔄 發現更新的文檔 {doc.filename}: {chunk_count} > {existing_count} chunks")
+                    filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
+        
+        selected = [doc_id for doc_id, _, _ in filename_to_doc.values()]
+        print(f"🔍 未指定doc_ids，自動選擇 {len(selected)} 個使用structured_hierarchical策略的文檔（已去重）: {[store.docs[d].filename for d in selected]}")
+    
     all_chunks: List[str] = []
     chunk_doc_ids: List[str] = []
-    for d in selected:
-        doc = store.docs.get(d)
-        if doc and doc.chunks:
+    chunk_ids: List[str] = []
+    
+    # 優先使用structured_chunks，如果沒有才使用doc.chunks
+    for doc_id in selected:
+        doc = store.docs.get(doc_id)
+        if not doc:
+            continue
+        
+        # 優先使用structured_chunks（實際顯示的428個chunks）
+        if doc.structured_chunks:
+            print(f"✅ 使用文檔 {doc.filename} 的structured_chunks（{len(doc.structured_chunks)}個chunks）")
+            for i, chunk_data in enumerate(doc.structured_chunks):
+                if isinstance(chunk_data, dict):
+                    content = chunk_data.get('content', '')
+                else:
+                    content = str(chunk_data)
+                
+                if content:
+                    all_chunks.append(content)
+                    chunk_doc_ids.append(doc.id)
+                    chunk_id = chunk_data.get('chunk_id', '') if isinstance(chunk_data, dict) else f"{doc.id}_{i}"
+                    chunk_ids.append(chunk_id if chunk_id else f"{doc.id}_{i}")
+        elif doc.chunks:
+            # 回退到舊的doc.chunks
+            print(f"⚠️ 文檔 {doc.filename} 沒有structured_chunks，使用doc.chunks（{len(doc.chunks)}個chunks）")
             all_chunks.extend(doc.chunks)
             chunk_doc_ids.extend([doc.id] * len(doc.chunks))
+            # 生成chunk_id
+            for i in range(len(doc.chunks)):
+                chunk_ids.append(f"{doc.id}_{i}")
 
     if not all_chunks:
         return JSONResponse(status_code=400, content={"error": "no chunks to embed"})
+    
+    # 打印統計信息
+    print(f"📊 Embedding統計: 將為 {len(selected)} 個文檔進行embedding，共 {len(all_chunks)} 個chunks")
+    for doc_id in selected:
+        doc = store.docs.get(doc_id)
+        if doc:
+            chunk_count = len([c for c in chunk_doc_ids if c == doc_id])
+            print(f"   文檔 {doc.filename}: {chunk_count} 個chunks")
 
     # 調試信息
     print(f"🔍 Embedding 調試信息:")
@@ -2145,23 +2108,67 @@ async def embed(req: EmbedRequest):
     print(f"   GOOGLE_API_KEY: {'已設置' if GOOGLE_API_KEY else '未設置'}")
     print(f"   USE_BGE_M3_EMBEDDING: {USE_BGE_M3_EMBEDDING}")
     print(f"   SENTENCE_TRANSFORMERS_AVAILABLE: {SENTENCE_TRANSFORMERS_AVAILABLE}")
+    print(f"🎯 實驗組A統一使用 {EMBEDDING_DIMENSION} 維索引")
+    print(f"📊 當前EMBEDDING_DIMENSION配置: {EMBEDDING_DIMENSION}")
     
     # 嘗試使用 Gemini embedding（主要選項）
     if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
         try:
             vectors = await embed_gemini(all_chunks)
+            # 使用實際向量維度，如果為空則使用全局配置
+            dimension = len(vectors[0]) if vectors and len(vectors) > 0 else EMBEDDING_DIMENSION
+            print(f"📊 檢測到embedding維度: {dimension} (配置: {EMBEDDING_DIMENSION})")
+            
+            # 驗證維度一致性
+            if dimension != EMBEDDING_DIMENSION:
+                print(f"⚠️ 警告：實際embedding維度({dimension})與配置({EMBEDDING_DIMENSION})不同")
+            
+            # 清除舊索引（如果維度不同），確保一致性
+            if faiss_store.has_vectors() and faiss_store.dimension != dimension:
+                print(f"⚠️ 檢測到舊索引維度({faiss_store.dimension})與新embedding維度({dimension})不匹配，清除舊索引")
+                faiss_store.reset_vectors()
+                # 同時清除BM25索引以保持一致性
+                bm25_index.reset_index()
+            
+            # 創建FAISS索引
+            faiss_store.create_index(dimension, "flat")
+            faiss_store.add_vectors(vectors, chunk_ids, chunk_doc_ids, all_chunks)
+            
+            # 構建BM25索引
+            bm25_index.build_index(all_chunks, chunk_ids, chunk_doc_ids)
+            
+            # 檢查是否已有enhanced metadata（在分塊階段生成）
+            enhanced_metadata = {}
+            if hasattr(store, 'enhanced_metadata') and store.enhanced_metadata:
+                print("📋 使用已存在的enhanced metadata...")
+                enhanced_metadata = store.enhanced_metadata
+                
+                # 設置增強metadata到FAISS存儲
+                for chunk_id, metadata in enhanced_metadata.items():
+                    faiss_store.set_enhanced_metadata(chunk_id, metadata)
+            else:
+                print("⚠️ 未找到enhanced metadata，HybridRAG將使用基礎metadata")
+            
+            # 保持原有store的兼容性
             store.embeddings = vectors
             store.chunk_doc_ids = chunk_doc_ids
             store.chunks_flat = all_chunks
             
             # 自動保存數據
             store.save_data()
+            faiss_store.save_data()
+            bm25_index.save_data()
+            
+            print(f"✅ 完成embedding: FAISS索引({len(vectors)}向量), BM25索引({len(all_chunks)}文檔), 增強metadata({len(enhanced_metadata)}條)")
             
             return {
                 "provider": "gemini", 
                 "model": "gemini-embedding-001",
                 "num_vectors": len(vectors),
-                "dimension": len(vectors[0]) if vectors else 0
+                "dimension": dimension,
+                "enhanced_metadata_count": len(enhanced_metadata),
+                "faiss_available": True,
+                "bm25_available": True
             }
         except Exception as e:
             print(f"Gemini embedding failed: {e}")
@@ -2171,18 +2178,47 @@ async def embed(req: EmbedRequest):
     if USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
         try:
             vectors = embed_bge_m3(all_chunks)
+            dimension = len(vectors[0]) if vectors else 1024
+            
+            # 創建FAISS索引
+            faiss_store.create_index(dimension, "flat")
+            faiss_store.add_vectors(vectors, chunk_ids, chunk_doc_ids, all_chunks)
+            
+            # 構建BM25索引
+            bm25_index.build_index(all_chunks, chunk_ids, chunk_doc_ids)
+            
+            # 檢查是否已有enhanced metadata（在分塊階段生成）
+            enhanced_metadata = {}
+            if hasattr(store, 'enhanced_metadata') and store.enhanced_metadata:
+                print("📋 使用已存在的enhanced metadata...")
+                enhanced_metadata = store.enhanced_metadata
+                
+                # 設置增強metadata到FAISS存儲
+                for chunk_id, metadata in enhanced_metadata.items():
+                    faiss_store.set_enhanced_metadata(chunk_id, metadata)
+            else:
+                print("⚠️ 未找到enhanced metadata，HybridRAG將使用基礎metadata")
+            
+            # 保持原有store的兼容性
             store.embeddings = vectors
             store.chunk_doc_ids = chunk_doc_ids
             store.chunks_flat = all_chunks
             
             # 自動保存數據
             store.save_data()
+            faiss_store.save_data()
+            bm25_index.save_data()
+            
+            print(f"✅ 完成embedding: FAISS索引({len(vectors)}向量), BM25索引({len(all_chunks)}文檔), 增強metadata({len(enhanced_metadata)}條)")
             
             return {
                 "provider": "bge-m3", 
                 "model": "BAAI/bge-m3",
                 "num_vectors": len(vectors),
-                "dimension": len(vectors[0]) if vectors else 0
+                "dimension": dimension,
+                "enhanced_metadata_count": len(enhanced_metadata),
+                "faiss_available": True,
+                "bm25_available": True
             }
         except Exception as e:
             print(f"BGE-M3 embedding failed: {e}")
@@ -2457,6 +2493,345 @@ def find_parent_article_content(structured_chunks: list, current_metadata: dict)
     return ""
 
 
+@app.post("/api/generate-enhanced-metadata")
+async def generate_enhanced_metadata(req: Dict[str, Any]):
+    """在分塊階段生成enhanced metadata - 專門用於HybridRAG"""
+    print(f"🔧 生成enhanced metadata請求: {req}")
+    
+    try:
+        # 獲取所有chunks
+        all_chunks = []
+        chunk_ids = []
+        chunk_doc_ids = []
+        
+        for doc_id, doc in store.docs.items():
+            if doc.structured_chunks:
+                for chunk in doc.structured_chunks:
+                    all_chunks.append(chunk.get("content", ""))
+                    chunk_ids.append(chunk.get("chunk_id", f"{doc_id}_{len(chunk_ids)}"))
+                    chunk_doc_ids.append(doc_id)
+        
+        if not all_chunks:
+            return {"error": "沒有找到可用的chunks"}
+        
+        # 準備chunks數據
+        chunks_data = [
+            {
+                "chunk_id": chunk_ids[i],
+                "content": all_chunks[i],
+                "metadata": {}
+            }
+            for i in range(len(all_chunks))
+        ]
+        
+        # 批量增強metadata
+        print(f"🔧 開始為 {len(chunks_data)} 個chunks生成enhanced metadata...")
+        enhanced_metadata = metadata_enhancer.enhance_metadata_batch(chunks_data)
+        
+        # 保存到store
+        store.enhanced_metadata = enhanced_metadata
+        store.save_data()
+        
+        # 統計信息
+        article_level_count = sum(1 for meta in enhanced_metadata.values() if meta.get("is_article_level", False))
+        chapter_section_count = sum(1 for meta in enhanced_metadata.values() if meta.get("is_chapter_section_level", False))
+        inherited_count = sum(1 for meta in enhanced_metadata.values() if meta.get("inherited_from"))
+        
+        return {
+            "success": True,
+            "message": "Enhanced metadata生成完成",
+            "stats": {
+                "total_chunks": len(chunks_data),
+                "enhanced_metadata_count": len(enhanced_metadata),
+                "article_level_chunks": article_level_count,
+                "chapter_section_chunks": chapter_section_count,
+                "inherited_chunks": inherited_count
+            }
+        }
+        
+    except Exception as e:
+        print(f"❌ 生成enhanced metadata失敗: {e}")
+        return {"error": f"生成enhanced metadata失敗: {str(e)}"}
+
+@app.get("/api/enhanced-metadata-stats")
+async def get_enhanced_metadata_stats():
+    """獲取enhanced metadata統計信息"""
+    try:
+        if not hasattr(store, 'enhanced_metadata') or not store.enhanced_metadata:
+            return {
+                "enhanced_metadata_count": 0,
+                "message": "尚未生成enhanced metadata"
+            }
+        
+        enhanced_metadata = store.enhanced_metadata
+        article_level_count = sum(1 for meta in enhanced_metadata.values() if meta.get("is_article_level", False))
+        chapter_section_count = sum(1 for meta in enhanced_metadata.values() if meta.get("is_chapter_section_level", False))
+        inherited_count = sum(1 for meta in enhanced_metadata.values() if meta.get("inherited_from"))
+        
+        return {
+            "enhanced_metadata_count": len(enhanced_metadata),
+            "article_level_chunks": article_level_count,
+            "chapter_section_chunks": chapter_section_count,
+            "inherited_chunks": inherited_count,
+            "enhancement_levels": {
+                "full": sum(1 for meta in enhanced_metadata.values() if meta.get("enhancement_level") == "full"),
+                "medium": sum(1 for meta in enhanced_metadata.values() if meta.get("enhancement_level") == "medium"),
+                "lightweight": sum(1 for meta in enhanced_metadata.values() if meta.get("enhancement_level") == "lightweight"),
+                "none": sum(1 for meta in enhanced_metadata.values() if meta.get("enhancement_level") == "none"),
+            }
+        }
+    except Exception as e:
+        print(f"❌ 獲取enhanced metadata統計失敗: {e}")
+        return {"error": f"獲取統計失敗: {str(e)}"}
+
+@app.get("/api/chunking-hierarchy-stats")
+async def get_chunking_hierarchy_stats():
+    """獲取分塊結果的法律層級統計信息 - 統計實際顯示的分塊列表（428個分塊）"""
+    try:
+        # 獲取所有文檔的多層級分塊數據
+        hierarchy_stats = {
+            'document': 0,                    # 章級 (文件層級)
+            'document_component': 0,          # 節級 (文件組成部分層級) 
+            'basic_unit_hierarchy': 0,        # 條級 (基本單位層次結構層級)
+            'basic_unit': 0,                  # 項級 (基本單位層級)
+            'basic_unit_component': 0,        # 款級 (基本單位組成部分層級)
+            'enumeration': 0                  # 目級 (列舉層級)
+        }
+        
+        total_chunks = 0
+        
+        # 層級映射：將level_en或chunk_by映射到六層分類
+        # 注意：前端顯示標籤為 Chapter->章, Section->節, Article->條, Paragraph->項, Subparagraph->款, Item->目
+        def map_level_to_hierarchy(level_en: str = None, chunk_by: str = None) -> str:
+            """將level_en或chunk_by映射到六層分類"""
+            # 優先使用level_en（如果存在）
+            if level_en:
+                level_en_lower = level_en.lower()
+                if level_en_lower == 'law':
+                    return 'document'  # 章級 (文件層級)
+                elif level_en_lower == 'chapter':
+                    return 'document'  # 章級 (文件層級)
+                elif level_en_lower == 'section':
+                    return 'document_component'  # 節級 (文件組成部分層級)
+                elif level_en_lower == 'article':
+                    return 'basic_unit_hierarchy'  # 條級 (基本單位層次結構層級)
+                elif level_en_lower == 'paragraph':
+                    return 'basic_unit'  # 項級 (基本單位層級)
+                elif level_en_lower == 'subparagraph':
+                    return 'basic_unit_component'  # 款級 (基本單位組成部分層級)
+                elif level_en_lower == 'item':
+                    return 'enumeration'  # 目級 (列舉層級)
+            
+            # 如果沒有level_en，使用chunk_by
+            if chunk_by:
+                chunk_by_lower = chunk_by.lower()
+                if chunk_by_lower == 'law':
+                    return 'document'  # 章級 (文件層級)
+                elif chunk_by_lower == 'chapter':
+                    return 'document'  # 章級 (文件層級)
+                elif chunk_by_lower == 'section':
+                    return 'document_component'  # 節級 (文件組成部分層級)
+                elif chunk_by_lower == 'article':
+                    return 'basic_unit_hierarchy'  # 條級 (基本單位層次結構層級)
+                elif chunk_by_lower == 'paragraph':
+                    return 'basic_unit'  # 項級 (基本單位層級)
+                elif chunk_by_lower == 'subparagraph':
+                    return 'basic_unit_component'  # 款級 (基本單位組成部分層級)
+                elif chunk_by_lower == 'item':
+                    return 'enumeration'  # 目級 (列舉層級)
+            
+            # 默認歸類到項級（basic_unit）
+            return 'basic_unit'
+        
+        # 遍歷所有文檔
+        # 只統計使用structured_hierarchical策略的文檔（避免統計所有文檔導致數字過大）
+        # 按文件名去重，只統計每個文件名的第一個符合條件的文檔（避免重複統計）
+        # 如果有同名文檔，優先選擇有structured_chunks且chunks數量最多的
+        filename_to_doc = {}  # {filename: (doc_id, doc, chunk_count)}
+        
+        # 第一次遍歷：找出每個文件名的最佳文檔（有structured_chunks且chunks最多的）
+        for doc_id, doc in store.docs.items():
+            # 只統計structured_hierarchical策略的文檔
+            chunking_strategy = getattr(doc, 'chunking_strategy', None)
+            if chunking_strategy not in ['structured_hierarchical', 'multi_level_structured']:
+                continue
+            
+            # 優先統計structured_chunks（實際顯示的428個chunks）
+            if doc.structured_chunks:
+                chunk_count = len(doc.structured_chunks)
+                
+                # 如果這個文件名還沒有記錄，或者這個文檔有更多的chunks，則更新
+                if doc.filename not in filename_to_doc:
+                    filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
+                else:
+                    existing_count = filename_to_doc[doc.filename][2]
+                    if chunk_count > existing_count:
+                        print(f"🔄 發現更新的文檔 {doc.filename}: {chunk_count} > {existing_count} chunks")
+                        filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
+        
+        # 第二次遍歷：只統計選中的文檔
+        for filename, (doc_id, doc, chunk_count) in filename_to_doc.items():
+            doc_chunk_count = 0
+            # 統計每個chunk的層級
+            for chunk in doc.structured_chunks:
+                metadata = chunk.get('metadata', {})
+                level_en = metadata.get('level_en') or metadata.get('level')
+                chunk_by = metadata.get('chunk_by')
+                
+                # 映射到六層分類
+                hierarchy_level = map_level_to_hierarchy(level_en, chunk_by)
+                
+                if hierarchy_level in hierarchy_stats:
+                    hierarchy_stats[hierarchy_level] += 1
+                    total_chunks += 1
+                    doc_chunk_count += 1
+            
+            chunking_strategy = getattr(doc, 'chunking_strategy', None)
+            print(f"📊 統計文檔 {doc.filename} (策略: {chunking_strategy}, doc_id: {doc_id}): {doc_chunk_count} 個分塊")
+        
+        # 添加中文層級名稱映射
+        level_names = {
+            'document': '章級 (文件層級)',
+            'document_component': '節級 (文件組成部分層級)',
+            'basic_unit_hierarchy': '條級 (基本單位層次結構層級)', 
+            'basic_unit': '項級 (基本單位層級)',
+            'basic_unit_component': '款級 (基本單位組成部分層級)',
+            'enumeration': '目級 (列舉層級)'
+        }
+        
+        print(f"📊 總統計結果: 總分塊數={total_chunks}, 各層級統計={hierarchy_stats}")
+        
+        return {
+            "total_chunks": total_chunks,
+            "hierarchy_stats": hierarchy_stats,
+            "level_names": level_names,
+            "has_multi_level_chunks": any(count > 0 for count in hierarchy_stats.values())
+        }
+        
+    except Exception as e:
+        print(f"❌ 獲取分塊層級統計失敗: {e}")
+        return {"error": f"獲取統計失敗: {str(e)}"}
+
+@app.get("/api/chunks-by-hierarchy/{level_name}")
+async def get_chunks_by_hierarchy(level_name: str):
+    """根據法律層級獲取chunks列表"""
+    try:
+        chunks_by_level = []
+        
+        # 遍歷所有文檔
+        for doc_id, doc in store.docs.items():
+            # 優先使用multi_level_chunks
+            if doc.multi_level_chunks and isinstance(doc.multi_level_chunks, dict):
+                # 從多層級chunks中獲取指定層級的chunks
+                if level_name in doc.multi_level_chunks:
+                    chunks = doc.multi_level_chunks[level_name]
+                    if chunks:
+                        for i, chunk_data in enumerate(chunks):
+                            chunk_info = {
+                                'chunk_id': f"{doc_id}_{level_name}_{i}",
+                                'doc_id': doc_id,
+                                'doc_name': doc.filename,
+                                'level': level_name,
+                                'content': chunk_data.get('content', ''),
+                                'metadata': chunk_data.get('metadata', {}),
+                                'span': chunk_data.get('span', {}),
+                                'chunk_index': i
+                            }
+                            chunks_by_level.append(chunk_info)
+            elif doc.structured_chunks:
+                # 從結構化chunks中篩選指定層級
+                for i, chunk in enumerate(doc.structured_chunks):
+                    metadata = chunk.get('metadata', {})
+                    chunk_by = metadata.get('chunk_by', 'article')
+                    
+                    # 檢查是否匹配指定的層級
+                    level_matches = False
+                    if level_name == 'document' and chunk_by == 'law':
+                        level_matches = True
+                    elif level_name == 'document_component' and chunk_by == 'chapter':
+                        level_matches = True
+                    elif level_name == 'basic_unit_hierarchy' and chunk_by == 'section':
+                        level_matches = True
+                    elif level_name == 'basic_unit' and chunk_by == 'article':
+                        level_matches = True
+                    elif level_name == 'basic_unit_component' and chunk_by == 'paragraph':
+                        level_matches = True
+                    elif level_name == 'enumeration' and chunk_by in ['subparagraph', 'item']:
+                        level_matches = True
+                    
+                    if level_matches:
+                        chunk_info = {
+                            'chunk_id': f"{doc_id}_structured_{i}",
+                            'doc_id': doc_id,
+                            'doc_name': doc.filename,
+                            'level': level_name,
+                            'content': chunk.get('content', ''),
+                            'metadata': metadata,
+                            'span': chunk.get('span', {}),
+                            'chunk_index': i
+                        }
+                        chunks_by_level.append(chunk_info)
+        
+        return {
+            "level_name": level_name,
+            "chunks": chunks_by_level,
+            "total_count": len(chunks_by_level)
+        }
+        
+    except Exception as e:
+        print(f"❌ 獲取層級chunks失敗: {e}")
+        return {"error": f"獲取chunks失敗: {str(e)}"}
+
+@app.get("/api/enhanced-metadata-list")
+async def get_enhanced_metadata_list():
+    """獲取enhanced metadata列表"""
+    try:
+        if not hasattr(store, 'enhanced_metadata') or not store.enhanced_metadata:
+            return {"enhanced_metadata": {}}
+        
+        return {"enhanced_metadata": store.enhanced_metadata}
+    except Exception as e:
+        print(f"❌ 獲取enhanced metadata列表失敗: {e}")
+        return {"error": f"獲取列表失敗: {str(e)}"}
+
+@app.post("/api/update-enhanced-metadata")
+async def update_enhanced_metadata(req: Dict[str, Any]):
+    """更新特定chunk的enhanced metadata"""
+    try:
+        chunk_id = req.get("chunk_id")
+        enhanced_metadata = req.get("enhanced_metadata")
+        
+        if not chunk_id or not enhanced_metadata:
+            return {"error": "缺少必要參數"}
+        
+        # 更新store中的enhanced metadata
+        if not hasattr(store, 'enhanced_metadata'):
+            store.enhanced_metadata = {}
+        
+        store.enhanced_metadata[chunk_id] = enhanced_metadata
+        store.save_data()
+        
+        # 同時更新FAISS存儲中的metadata
+        if faiss_store.has_vectors():
+            faiss_store.set_enhanced_metadata(chunk_id, enhanced_metadata)
+            faiss_store.save_data()
+        
+        return {"success": True, "message": "Enhanced metadata更新成功"}
+    except Exception as e:
+        print(f"❌ 更新enhanced metadata失敗: {e}")
+        return {"error": f"更新失敗: {str(e)}"}
+
+@app.post("/api/multi-level-embed-fast")
+async def multi_level_embed_fast(req: Dict[str, Any]):
+    """快速多層次embedding - 不進行metadata增強，專門用於多層次融合檢索"""
+    print(f"🚀 快速多層次embedding請求: {req}")
+    
+    # 設置為不進行metadata增強
+    req["enable_metadata_enhancement"] = False
+    
+    # 調用標準的多層次embedding
+    return await multi_level_embed(req)
+
 @app.post("/api/multi-level-embed")
 async def multi_level_embed(req: Dict[str, Any]):
     """多層次embedding端點 - 為論文中的六個粒度級別創建獨立的embedding"""
@@ -2466,40 +2841,147 @@ async def multi_level_embed(req: Dict[str, Any]):
     print(f"   GOOGLE_API_KEY: {'已設置' if GOOGLE_API_KEY else '未設置'}")
     print(f"   USE_BGE_M3_EMBEDDING: {USE_BGE_M3_EMBEDDING}")
     # 收集選定文檔的多層次chunks
-    selected = req.get("doc_ids") or list(store.docs.keys())
+    # 如果沒有指定doc_ids，只選擇使用structured_hierarchical策略的最近文檔
+    requested_doc_ids = req.get("doc_ids")
+    if requested_doc_ids:
+        # 即使指定了doc_ids，也要按文件名去重，避免重複embedding同名文檔
+        candidates = []
+        for doc_id in requested_doc_ids:
+            doc = store.docs.get(doc_id)
+            if doc:
+                candidates.append((doc_id, doc))
+        
+        if not candidates:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "指定的文檔ID不存在"}
+            )
+        
+        # 按文件名去重，只選擇每個文件名的第一個文檔（或者chunks最多的）
+        filename_to_doc = {}  # {filename: (doc_id, doc, chunk_count)}
+        for doc_id, doc in candidates:
+            chunk_count = len(doc.structured_chunks) if doc.structured_chunks else 0
+            if doc.filename not in filename_to_doc:
+                filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
+            else:
+                existing_count = filename_to_doc[doc.filename][2]
+                if chunk_count > existing_count:
+                    print(f"🔄 發現更新的文檔 {doc.filename}: {chunk_count} > {existing_count} chunks")
+                    filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
+                else:
+                    print(f"⚠️ 跳過重複文檔 {doc.filename} (doc_id: {doc_id})，已選擇chunks更多的版本")
+        
+        selected = [doc_id for doc_id, _, _ in filename_to_doc.values()]
+        if len(selected) < len(requested_doc_ids):
+            print(f"⚠️ 去重後，從 {len(requested_doc_ids)} 個指定的文檔中選擇了 {len(selected)} 個文檔")
+    else:
+        # 只選擇使用structured_hierarchical或multi_level_structured策略的文檔
+        candidates = [
+            (doc_id, doc) for doc_id, doc in store.docs.items()
+            if doc and getattr(doc, 'chunking_strategy', None) in ['structured_hierarchical', 'multi_level_structured']
+        ]
+        
+        if not candidates:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "沒有找到使用structured_hierarchical策略的文檔。請先進行多層級結構化分塊。"}
+            )
+        
+        # 按文件名去重，只選擇每個文件名的第一個文檔（或者chunks最多的）
+        filename_to_doc = {}  # {filename: (doc_id, doc, chunk_count)}
+        for doc_id, doc in candidates:
+            chunk_count = len(doc.structured_chunks) if doc.structured_chunks else 0
+            if doc.filename not in filename_to_doc:
+                filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
+            else:
+                existing_count = filename_to_doc[doc.filename][2]
+                if chunk_count > existing_count:
+                    print(f"🔄 發現更新的文檔 {doc.filename}: {chunk_count} > {existing_count} chunks")
+                    filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
+        
+        selected = [doc_id for doc_id, _, _ in filename_to_doc.values()]
+        print(f"🔍 未指定doc_ids，自動選擇 {len(selected)} 個使用structured_hierarchical策略的文檔（已去重）: {[store.docs[d].filename for d in selected]}")
+    
     experimental_groups = req.get("experimental_groups", [])  # 新增：實驗組選擇
     all_multi_level_chunks = {}
     
     for doc_id in selected:
         doc = store.docs.get(doc_id)
+        if not doc:
+            continue
+            
+        # 優先使用已有的multi_level_chunks
         if doc and hasattr(doc, 'multi_level_chunks') and doc.multi_level_chunks:
             all_multi_level_chunks[doc_id] = doc.multi_level_chunks
-        elif doc and ((hasattr(doc, 'structured_chunks') and doc.structured_chunks) or (hasattr(doc, 'json_data') and doc.json_data)):
-            # 若已有結構化chunks或有json結構，優先基於JSON生成完整六層，避免只剩條級
-            print(f"🔄 基於JSON生成六個粒度級別格式，文檔: {doc.filename}")
+            print(f"✅ 使用文檔 {doc.filename} 已有的multi_level_chunks")
+        # 優先使用已有的structured_chunks，而不是重新從JSON生成
+        elif doc and hasattr(doc, 'structured_chunks') and doc.structured_chunks:
+            print(f"🔄 從structured_chunks轉換為multi_level_chunks，文檔: {doc.filename}")
+            try:
+                # 直接從structured_chunks轉換，而不是重新從JSON生成
+                converted_chunks = convert_structured_to_multi_level(doc.structured_chunks)
+                all_multi_level_chunks[doc_id] = converted_chunks
+                # 保存到文檔
+                doc.multi_level_chunks = converted_chunks
+                store.add_doc(doc)
+                store.save_data()
+                print(f"✅ 成功轉換 {doc.filename} 的structured_chunks為multi_level_chunks")
+            except Exception as e:
+                print(f"⚠️ 從structured_chunks轉換失敗: {e}")
+                # 如果轉換失敗，才回退到從JSON生成
+                if hasattr(doc, 'json_data') and doc.json_data:
+                    experimental_group = experimental_groups[0] if experimental_groups else 'group_d'
+                    print(f"🔄 回退：基於JSON生成六個粒度級別格式，文檔: {doc.filename}，實驗組: {experimental_group}")
+                    try:
+                        from .chunking import MultiLevelStructuredChunking
+                        ml_chunker = MultiLevelStructuredChunking()
+                        raw_multi_level_list = ml_chunker.chunk_with_span(
+                            doc.text, 
+                            json_data=doc.json_data,
+                            experimental_group=experimental_group
+                        )
+                        converted_chunks = convert_structured_to_multi_level(raw_multi_level_list)
+                        all_multi_level_chunks[doc_id] = converted_chunks
+                        doc.multi_level_chunks = converted_chunks
+                        store.add_doc(doc)
+                        store.save_data()
+                    except Exception as e2:
+                        print(f"❌ 基於JSON生成也失敗: {e2}")
+        # 最後才考慮從JSON生成（通常不應該走到這裡）
+        elif doc and hasattr(doc, 'json_data') and doc.json_data:
+            experimental_group = experimental_groups[0] if experimental_groups else 'group_d'
+            print(f"⚠️ 警告：文檔 {doc.filename} 沒有structured_chunks，將從JSON重新生成（可能產生不一致的結果）")
             try:
                 from .chunking import MultiLevelStructuredChunking
                 ml_chunker = MultiLevelStructuredChunking()
-                # 直接從 JSON 產生多層級帶 span 的列表
-                raw_multi_level_list = ml_chunker.chunk_with_span(doc.text, json_data=getattr(doc, 'json_data', None))
-                # 統一轉為六層字典結構
+                raw_multi_level_list = ml_chunker.chunk_with_span(
+                    doc.text, 
+                    json_data=doc.json_data,
+                    experimental_group=experimental_group
+                )
                 converted_chunks = convert_structured_to_multi_level(raw_multi_level_list)
+                all_multi_level_chunks[doc_id] = converted_chunks
+                doc.multi_level_chunks = converted_chunks
+                doc.chunking_strategy = "structured_to_multi_level"
+                store.add_doc(doc)
+                store.save_data()
             except Exception as e:
-                print(f"⚠️ 基於JSON生成多層級失敗，回退用structured_chunks轉換: {e}")
-                converted_chunks = convert_structured_to_multi_level(doc.structured_chunks or [])
-
-            all_multi_level_chunks[doc_id] = converted_chunks
-            # 保存到文檔
-            doc.multi_level_chunks = converted_chunks
-            doc.chunking_strategy = "structured_to_multi_level"
-            store.add_doc(doc)
-            store.save_data()
+                print(f"❌ 基於JSON生成多層級失敗: {e}")
     
     if not all_multi_level_chunks:
         return JSONResponse(
             status_code=400, 
             content={"error": "No multi-level chunks available. Please run structured hierarchical chunking or multi-level semantic chunking first."}
         )
+    
+    # 打印每個文檔的multi_level_chunks統計
+    print(f"📊 收集到的multi_level_chunks統計:")
+    for doc_id, multi_chunks in all_multi_level_chunks.items():
+        doc = store.docs.get(doc_id)
+        doc_name = doc.filename if doc else doc_id
+        total_chunks = sum(len(chunks) for chunks in multi_chunks.values() if isinstance(chunks, list))
+        level_counts = {level: len(chunks) for level, chunks in multi_chunks.items() if isinstance(chunks, list)}
+        print(f"   文檔 {doc_name}: 總計 {total_chunks} 個chunks, 各層級: {level_counts}")
     
     # 論文中的六個層次
     six_levels = [
@@ -2539,6 +3021,8 @@ async def multi_level_embed(req: Dict[str, Any]):
     completed_levels = 0
     
     print(f"🚀 開始多層次embedding處理，共 {total_levels} 個層次")
+    print(f"🎯 所有實驗組（A、B、C、D）統一使用 {EMBEDDING_DIMENSION} 維索引")
+    print(f"📊 當前EMBEDDING_DIMENSION配置: {EMBEDDING_DIMENSION}")
     
     for level_idx, level_name in enumerate(six_levels):
         level_chunks = []
@@ -2579,13 +3063,65 @@ async def multi_level_embed(req: Dict[str, Any]):
                 print(f"📊 進度: {completed_levels}/{total_levels} ({progress:.1f}%)")
                 continue
             
+            # 驗證向量維度
+            dimension = len(vectors[0]) if vectors and len(vectors) > 0 else EMBEDDING_DIMENSION
+            print(f"📊 層次 '{level_name}' embedding維度: {dimension} (配置: {EMBEDDING_DIMENSION})")
+            
+            # 驗證維度一致性（應該都是3072）
+            if dimension != EMBEDDING_DIMENSION:
+                print(f"⚠️ 警告：層次 '{level_name}' 的embedding維度({dimension})與配置({EMBEDDING_DIMENSION})不同")
+                print(f"⚠️ 強制使用配置的維度 {EMBEDDING_DIMENSION}，請檢查embedding配置")
+            
+            # 檢查並清除舊的多層次索引（如果維度不匹配）
+            if level_name in faiss_store.multi_level_index_info:
+                old_dimension = faiss_store.multi_level_index_info[level_name].dimension
+                if old_dimension != dimension:
+                    print(f"⚠️ 檢測到層次 '{level_name}' 舊索引維度({old_dimension})與新embedding維度({dimension})不匹配，清除舊索引")
+                    # 清除該層次的舊索引
+                    if level_name in faiss_store.multi_level_indices:
+                        del faiss_store.multi_level_indices[level_name]
+                    if level_name in faiss_store.multi_level_index_info:
+                        del faiss_store.multi_level_index_info[level_name]
+                    if level_name in faiss_store.multi_level_chunk_ids:
+                        faiss_store.multi_level_chunk_ids[level_name] = []
+                    if level_name in faiss_store.multi_level_chunk_doc_ids:
+                        faiss_store.multi_level_chunk_doc_ids[level_name] = []
+                    if level_name in faiss_store.multi_level_chunks_flat:
+                        faiss_store.multi_level_chunks_flat[level_name] = []
+            
             # 存儲該層次的embedding和元數據
             metadata = {
                 "provider": provider,
                 "model": model,
-                "dimension": len(vectors[0]) if vectors else 0
+                "dimension": dimension
             }
             store.set_multi_level_embeddings(level_name, vectors, level_chunks, level_doc_ids, metadata)
+            
+            # 新增：存儲到FAISS和BM25
+            # 確保chunk_id包含層次信息，避免跨層次重複
+            level_chunk_ids = [f"{level_name}_{doc_id}_{i}" for i, doc_id in enumerate(level_doc_ids)]
+            faiss_store.add_multi_level_vectors(level_name, vectors, level_chunk_ids, level_doc_ids, level_chunks)
+            bm25_index.build_multi_level_index(level_name, level_chunks, level_chunk_ids, level_doc_ids)
+            
+            # 新增：批量增強該層次的metadata（可選）
+            level_enhanced_metadata = {}
+            if req.get("enable_metadata_enhancement", True):
+                print(f"🔧 開始增強層次 '{level_name}' 的metadata...")
+                level_chunks_data = [
+                    {
+                        "chunk_id": level_chunk_ids[i],
+                        "content": level_chunks[i],
+                        "metadata": {}
+                    }
+                    for i in range(len(level_chunks))
+                ]
+                level_enhanced_metadata = metadata_enhancer.enhance_metadata_batch(level_chunks_data)
+                
+                # 設置增強metadata到FAISS存儲
+                for chunk_id, enhanced_metadata in level_enhanced_metadata.items():
+                    faiss_store.set_multi_level_enhanced_metadata(level_name, chunk_id, enhanced_metadata)
+            else:
+                print(f"⚠️ 跳過層次 '{level_name}' 的metadata增強")
             
             level_results[level_name] = {
                 "provider": provider,
@@ -2644,6 +3180,8 @@ async def multi_level_embed(req: Dict[str, Any]):
     
     # 自動保存多層次embedding數據
     store.save_data()
+    faiss_store.save_data()
+    bm25_index.save_data()
     
     # 確保多層次embedding狀態正確設置
     print(f"🎉 多層次embedding完成，保存的層次: {list(store.multi_level_embeddings.keys())}")
@@ -2696,7 +3234,10 @@ async def multi_level_embed(req: Dict[str, Any]):
         "level_descriptions": {
             level: get_level_description(level) for level in six_levels
         },
-        "experimental_groups": group_results if experimental_groups else None
+        "experimental_groups": group_results if experimental_groups else None,
+        "faiss_available": True,
+        "bm25_available": True,
+        "enhanced_metadata_available": True
     }
 
 
@@ -2711,6 +3252,88 @@ def get_level_description(level_name: str) -> str:
         'enumeration': '列舉層級 (Enumeration Level) - 項目、子項'
     }
     return descriptions.get(level_name, f"未知層次: {level_name}")
+
+
+def generate_hierarchical_description_from_metadata(doc_id: str, metadata: Dict[str, Any], content: str, store) -> str:
+    """
+    從metadata直接生成層級描述（用於多層級檢索）
+    
+    Args:
+        doc_id: 文檔ID
+        metadata: chunk的metadata
+        content: chunk內容
+        store: 存儲實例
+    
+    Returns:
+        層級描述字符串
+    """
+    try:
+        # 獲取文檔信息
+        doc = store.get_doc(doc_id)
+        if not doc:
+            return f"doc={doc_id}"
+        
+        # 獲取文檔名稱（去除.json後綴）
+        doc_name = doc.filename
+        if doc_name.endswith('.json'):
+            doc_name = doc_name[:-5]
+        
+        # 優先從metadata中獲取法律名稱
+        law_name = ""
+        if metadata.get('id'):
+            law_name = extract_law_name_from_metadata_id(metadata['id'])
+        
+        if not law_name and metadata.get('law_name'):
+            law_name = metadata['law_name'].replace('法規名稱：', '')
+        
+        if not law_name:
+            law_name = extract_law_name_from_content(content)
+        
+        if not law_name:
+            law_name = doc_name
+        
+        # 構建層級描述
+        hierarchy_parts = [law_name]
+        
+        # 添加章節信息
+        if metadata.get('chapter'):
+            chapter = metadata['chapter']
+            if chapter != "未分類章" and chapter != "未分類節":
+                if not chapter.startswith('第') and not chapter.startswith('章'):
+                    chapter = f"第{chapter}章"
+                hierarchy_parts.append(chapter)
+        
+        # 添加節信息
+        if metadata.get('section'):
+            section = metadata['section']
+            if section != "未分類節":
+                if not section.startswith('第') and not section.startswith('節'):
+                    section = f"第{section}節"
+                hierarchy_parts.append(section)
+        
+        # 從內容中提取正確的條文號碼，優先使用內容中的信息
+        article_number = extract_article_number_from_content(content)
+        if article_number:
+            hierarchy_parts.append(article_number)
+        elif metadata.get('article'):
+            article = metadata['article']
+            if not article.startswith('第') and not article.startswith('條'):
+                article = f"第{article}條"
+            hierarchy_parts.append(article)
+        
+        # 添加項信息
+        if metadata.get('items') and len(metadata['items']) > 0:
+            items = metadata['items']
+            if len(items) == 1:
+                hierarchy_parts.append(f"第{items[0]}項")
+            else:
+                hierarchy_parts.append(f"第{items[0]}-{items[-1]}項")
+        
+        return ' '.join(hierarchy_parts)
+        
+    except Exception as e:
+        print(f"❌ 從metadata生成層級描述失敗: {e}")
+        return f"doc={doc_id}"
 
 
 def generate_hierarchical_description(doc_id: str, level: str, chunk_index: int, store) -> str:
@@ -2914,9 +3537,35 @@ def extract_article_number_from_content(content: str) -> str:
 
 
 def rank_with_dense_vectors(query: str, k: int):
-    """使用密集向量進行相似度計算（支持 Gemini 和 BGE-M3）"""
+    """使用密集向量進行相似度計算（支持 Gemini 和 BGE-M3，優先使用FAISS）"""
     import numpy as np
-    # 確保embeddings是numpy數組格式
+    
+    # 優先使用FAISS
+    if faiss_store.has_vectors():
+        try:
+            # 生成查詢向量
+            if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+                try:
+                    query_vector = asyncio_run(embed_gemini([query]))[0]
+                except Exception as e:
+                    print(f"Gemini query embedding failed: {e}")
+                    if USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+                        query_vector = embed_bge_m3([query])[0]
+                    else:
+                        raise RuntimeError("Both Gemini and BGE-M3 query embedding failed")
+            elif USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+                query_vector = embed_bge_m3([query])[0]
+            else:
+                raise RuntimeError("No dense embedding method available")
+            
+            # FAISS搜索
+            indices, scores = faiss_store.search(query_vector, k)
+            return indices, scores
+            
+        except Exception as e:
+            print(f"FAISS search failed, falling back to NumPy: {e}")
+    
+    # 回退到NumPy（保持向後兼容）
     if store.embeddings is None:
         raise ValueError("No embeddings available")
     if isinstance(store.embeddings, list):
@@ -4315,6 +4964,631 @@ def hybrid_retrieve(req: RetrieveRequest):
     }
 
 
+@app.post("/api/enhanced-hybrid-retrieve")
+def enhanced_hybrid_retrieve(req: RetrieveRequest):
+    """使用增強版HybridRAG進行檢索"""
+    print(f"🚀 增強版HybridRAG檢索請求: {req.query}, k={req.k}")
+    
+    # 檢查是否有FAISS和BM25索引（標準或多層次）
+    faiss_available = faiss_store.has_vectors() or faiss_store.has_multi_level_vectors()
+    bm25_available = bm25_index.has_index() or bm25_index.has_multi_level_index()
+    print(f"📊 索引狀態: FAISS={faiss_available}, BM25={bm25_available}")
+    
+    # 如果索引不可用，嘗試自動重新加載
+    if not faiss_available or not bm25_available:
+        print("⚠️ 索引不完整，嘗試自動重新加載...")
+        try:
+            # 嘗試從磁盤加載索引
+            if not faiss_available:
+                print("🔄 嘗試重新加載FAISS索引...")
+                faiss_store.load_data()
+                faiss_available = faiss_store.has_vectors() or faiss_store.has_multi_level_vectors()
+                print(f"   FAISS加載結果: {faiss_available}")
+            
+            if not bm25_available:
+                print("🔄 嘗試重新加載BM25索引...")
+                bm25_index.load_data()
+                bm25_available = bm25_index.has_index() or bm25_index.has_multi_level_index()
+                print(f"   BM25加載結果: {bm25_available}")
+            
+            # 如果加載失敗，嘗試從store重建（標準索引）
+            if (not faiss_available or not bm25_available) and (store.embeddings is not None and store.chunks_flat):
+                print("⚠️ 索引文件不存在，嘗試從store重建標準索引...")
+                vectors = store.embeddings
+                chunks = store.chunks_flat
+                chunk_ids = [f"{doc_id}_{i}" for i, doc_id in enumerate(store.chunk_doc_ids)]
+                
+                # 重建FAISS索引
+                if not faiss_available and vectors:
+                    print("🔧 重建FAISS索引...")
+                    dimension = len(vectors[0]) if vectors else EMBEDDING_DIMENSION
+                    faiss_store.create_index(dimension, "flat")
+                    faiss_store.add_vectors(vectors, chunk_ids, store.chunk_doc_ids, chunks)
+                    
+                    # 恢復enhanced metadata
+                    if hasattr(store, 'enhanced_metadata') and store.enhanced_metadata:
+                        for chunk_id, metadata in store.enhanced_metadata.items():
+                            faiss_store.set_enhanced_metadata(chunk_id, metadata)
+                    
+                    faiss_store.save_data()
+                    faiss_available = faiss_store.has_vectors() or faiss_store.has_multi_level_vectors()
+                    print(f"   ✅ FAISS索引已重建: {faiss_available}")
+                
+                # 重建BM25索引
+                if not bm25_available and chunks:
+                    print("🔧 重建BM25索引...")
+                    bm25_index.build_index(chunks, chunk_ids, store.chunk_doc_ids)
+                    bm25_index.save_data()
+                    bm25_available = bm25_index.has_index() or bm25_index.has_multi_level_index()
+                    print(f"   ✅ BM25索引已重建: {bm25_available}")
+            
+        except Exception as e:
+            print(f"⚠️ 自動重新加載索引失敗: {e}")
+    
+    # 再次檢查索引狀態
+    if not faiss_available and not bm25_available:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "No enhanced indices available. Please run /api/embed or /api/multi-level-embed first.",
+                "faiss_available": faiss_available,
+                "bm25_available": bm25_available,
+                "suggestion": "請先執行 /api/embed 或 /api/multi-level-embed 來創建索引，或從Upload頁面選擇已存在的Embedding資料庫"
+            }
+        )
+    
+    try:
+        # 配置增強版HybridRAG
+        config = EnhancedHybridConfig(
+            vector_weight=0.6,
+            bm25_weight=0.25,
+            metadata_weight=0.15,
+            w_law_match=0.15,
+            w_article_match=0.15,
+            w_concept_match=0.1,
+            w_keyword_hit=0.05,
+            w_domain_match=0.05,
+            w_title_match=0.1,
+            w_category_match=0.05,
+            max_bonus=0.4,
+            title_boost_factor=1.5,
+            category_boost_factor=1.3,
+            # Metadata向下繼承配置
+            enable_inheritance_strategy=True,
+            metadata_match_threshold=0.3,
+            inheritance_bonus=0.1,
+            inheritance_boost_factor=1.2
+        )
+        
+        # 執行增強版HybridRAG檢索
+        enhanced_results = enhanced_hybrid_rag.retrieve(req.query, req.k, config)
+        
+        # 生成層級描述
+        for result in enhanced_results:
+            if 'doc_id' in result:
+                doc_id = result.get('doc_id', 'unknown')
+                level = 'basic_unit'  # 默認層級
+                chunk_index = result.get('chunk_index', 0)
+                result['hierarchical_description'] = generate_hierarchical_description(
+                    doc_id, level, chunk_index, store
+                )
+        
+        print(f"✅ 增強版HybridRAG檢索完成，返回 {len(enhanced_results)} 個結果")
+        
+        return {
+            "results": enhanced_results,
+            "query": req.query,
+            "final_results": len(enhanced_results),
+            "config": config.__dict__,
+            "retrieval_stats": enhanced_hybrid_rag.get_retrieval_stats()
+        }
+        
+    except Exception as e:
+        print(f"❌ 增強版HybridRAG檢索失敗: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Enhanced HybridRAG retrieval failed: {str(e)}"}
+        )
+
+
+@app.post("/api/hybrid-rrf-retrieve")
+async def hybrid_rrf_retrieve(req: RetrieveRequest):
+    """HybridRAG(RRF)檢索：純RRF融合向量+BM25，不考慮Metadata加分"""
+    print(f"🔄 HybridRAG(RRF)檢索請求: {req.query}, k={req.k}")
+    
+    # 驗證查詢
+    if not req.query or not req.query.strip():
+        error_msg = "Query cannot be empty"
+        print(f"❌ 驗證失敗: {error_msg}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": error_msg}
+        )
+    
+    if req.k <= 0:
+        error_msg = f"k must be greater than 0, got {req.k}"
+        print(f"❌ 驗證失敗: {error_msg}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": error_msg}
+        )
+    
+    # 檢查是否有FAISS和BM25索引（標準或多層次）
+    faiss_available = faiss_store.has_vectors() or faiss_store.has_multi_level_vectors()
+    bm25_available = bm25_index.has_index() or bm25_index.has_multi_level_index()
+    print(f"📊 索引狀態: FAISS={faiss_available}, BM25={bm25_available}")
+    
+    # 如果索引不可用，嘗試自動重新加載
+    if not faiss_available or not bm25_available:
+        print("⚠️ 索引不完整，嘗試自動重新加載...")
+        try:
+            # 嘗試從磁盤加載索引
+            if not faiss_available:
+                print("🔄 嘗試重新加載FAISS索引...")
+                faiss_store.load_data()
+                faiss_available = faiss_store.has_vectors() or faiss_store.has_multi_level_vectors()
+                print(f"   FAISS加載結果: {faiss_available}")
+            
+            if not bm25_available:
+                print("🔄 嘗試重新加載BM25索引...")
+                bm25_index.load_data()
+                bm25_available = bm25_index.has_index() or bm25_index.has_multi_level_index()
+                print(f"   BM25加載結果: {bm25_available}")
+            
+            # 如果加載失敗，嘗試從store重建（標準索引）
+            if (not faiss_available or not bm25_available) and (store.embeddings is not None and store.chunks_flat):
+                print("⚠️ 索引文件不存在，嘗試從store重建標準索引...")
+                vectors = store.embeddings
+                chunks = store.chunks_flat
+                chunk_ids = [f"{doc_id}_{i}" for i, doc_id in enumerate(store.chunk_doc_ids)]
+                
+                # 重建FAISS索引
+                if not faiss_available and vectors:
+                    print("🔧 重建FAISS索引...")
+                    dimension = len(vectors[0]) if vectors else EMBEDDING_DIMENSION
+                    faiss_store.create_index(dimension, "flat")
+                    faiss_store.add_vectors(vectors, chunk_ids, store.chunk_doc_ids, chunks)
+                    
+                    # 恢復enhanced metadata
+                    if hasattr(store, 'enhanced_metadata') and store.enhanced_metadata:
+                        for chunk_id, metadata in store.enhanced_metadata.items():
+                            faiss_store.set_enhanced_metadata(chunk_id, metadata)
+                    
+                    faiss_store.save_data()
+                    faiss_available = faiss_store.has_vectors() or faiss_store.has_multi_level_vectors()
+                    print(f"   ✅ FAISS索引已重建: {faiss_available}")
+                
+                # 重建BM25索引
+                if not bm25_available and chunks:
+                    print("🔧 重建BM25索引...")
+                    bm25_index.build_index(chunks, chunk_ids, store.chunk_doc_ids)
+                    bm25_index.save_data()
+                    bm25_available = bm25_index.has_index() or bm25_index.has_multi_level_index()
+                    print(f"   ✅ BM25索引已重建: {bm25_available}")
+            
+        except Exception as e:
+            print(f"⚠️ 自動重新加載索引失敗: {e}")
+    
+    # 再次檢查索引狀態
+    if not faiss_available and not bm25_available:
+        error_msg = "No enhanced indices available. Please run /api/embed or /api/multi-level-embed first."
+        print(f"❌ 驗證失敗: {error_msg}")
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": error_msg,
+                "faiss_available": faiss_available,
+                "bm25_available": bm25_available,
+                "suggestion": "請先執行 /api/embed 或 /api/multi-level-embed 來創建索引，或從Upload頁面選擇已存在的Embedding資料庫"
+            }
+        )
+    
+    try:
+        # 1. 向量檢索 - 生成查詢向量
+        print("📊 執行向量檢索...")
+        query_vector = None
+        if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+            try:
+                query_vector = (await embed_gemini([req.query]))[0]
+                # 驗證向量維度
+                if not query_vector or len(query_vector) != EMBEDDING_DIMENSION:
+                    raise ValueError(f"Query vector dimension mismatch: expected {EMBEDDING_DIMENSION}, got {len(query_vector) if query_vector else 0}")
+                print(f"✅ 使用Gemini生成查詢向量，維度: {len(query_vector)}")
+            except Exception as e:
+                print(f"❌ Gemini query embedding failed: {e}")
+                # 全部使用Gemini，不使用BGE-M3 fallback
+                raise RuntimeError(
+                    f"Gemini embedding failed: {str(e)}. "
+                    f"請檢查：1) GOOGLE_API_KEY是否正確 2) 網絡連接是否正常 3) 查詢文本是否包含無法處理的特殊字符"
+                )
+        else:
+            raise RuntimeError(
+                f"Gemini embedding未啟用或API key未設置。"
+                f"USE_GEMINI_EMBEDDING={USE_GEMINI_EMBEDDING}, GOOGLE_API_KEY={'已設置' if GOOGLE_API_KEY else '未設置'}"
+            )
+        
+        # 驗證query_vector
+        if not query_vector:
+            raise RuntimeError("Failed to generate query vector")
+        
+        # 檢測是標準索引還是多層次索引
+        use_standard_index = faiss_store.has_vectors()
+        use_multi_level_index = faiss_store.has_multi_level_vectors()
+        
+        # 優先使用多層次索引（如果存在），因為這是實驗組B、C、D使用的索引
+        # 如果標準索引維度不匹配，自動清除並使用多層次索引
+        if use_standard_index:
+            expected_dim = faiss_store.dimension
+            query_dim = len(query_vector)
+            if query_dim != expected_dim:
+                print(f"⚠️ 檢測到標準索引維度({expected_dim})與查詢向量維度({query_dim})不匹配")
+                if use_multi_level_index:
+                    print(f"💡 自動清除舊的標準索引，改用多層次索引（實驗組B/C/D）")
+                    faiss_store.reset_vectors()
+                    bm25_index.reset_index()
+                    use_standard_index = False
+                else:
+                    print(f"❌ 維度不匹配: 查詢向量維度={query_dim}, FAISS索引維度={expected_dim}")
+                    print(f"💡 解決方案: 請重新運行 /api/embed 或 /api/multi-level-embed 以統一維度")
+                    raise ValueError(
+                        f"Query vector dimension ({query_dim}) does not match FAISS index dimension ({expected_dim}). "
+                        f"Please re-run /api/embed or /api/multi-level-embed to regenerate embeddings with the same dimension. "
+                        f"Current EMBEDDING_DIMENSION setting: {EMBEDDING_DIMENSION}"
+                    )
+        
+        all_candidates = {}
+        
+        # 1. 向量檢索（支持標準和多層次）
+        print("📊 執行向量檢索...")
+        # 優先使用多層次索引（如果存在），因為這是實驗組B、C、D使用的索引
+        # 只有在沒有多層次索引時才使用標準索引
+        if use_multi_level_index:
+            # 多層次索引檢索：檢索所有層次並合併（實驗組B、C、D）
+            print(f"✅ 使用多層次索引進行檢索（實驗組B/C/D）")
+            available_levels = faiss_store.get_available_levels()
+            print(f"🔍 多層次索引可用層次: {available_levels}")
+            
+            for level_name in available_levels:
+                try:
+                    level_indices, level_scores = faiss_store.search_multi_level(level_name, query_vector, req.k * 10)
+                    print(f"   ✅ 層次 '{level_name}' 返回 {len(level_indices)} 個候選")
+                    
+                    # 為該層次的結果分配rank
+                    for rank, (idx, score) in enumerate(zip(level_indices, level_scores), start=1):
+                        chunk_info = faiss_store.get_multi_level_chunk_by_index(level_name, idx)
+                        if chunk_info and 'chunk_id' in chunk_info:
+                            chunk_id = chunk_info['chunk_id']
+                            # 跨層次可能會有相同chunk_id，使用第一個層次的排名
+                            if chunk_id not in all_candidates:
+                                # 從multi_level_chunks中獲取原始metadata（如果可用）
+                                doc_id = chunk_info.get('doc_id', 'unknown')
+                                content = chunk_info.get('content', '')
+                                enhanced_metadata = chunk_info.get('enhanced_metadata', {})
+                                
+                                # 嘗試從doc的multi_level_chunks中找到對應的chunk以獲取原始metadata
+                                original_metadata = {}
+                                doc = store.docs.get(doc_id) if doc_id != 'unknown' else None
+                                if doc and hasattr(doc, 'multi_level_chunks') and doc.multi_level_chunks:
+                                    if level_name in doc.multi_level_chunks:
+                                        doc_level_chunks = doc.multi_level_chunks[level_name]
+                                        # 通過content精確匹配找到對應的chunk（最可靠的方法）
+                                        # 因為multi_level_chunks中的content和檢索返回的content應該完全一致
+                                        matched = False
+                                        for chunk_data in doc_level_chunks:
+                                            chunk_content = chunk_data.get('content', '')
+                                            # 精確匹配或前200字符匹配（考慮可能的微小差異）
+                                            if chunk_content == content or (
+                                                len(chunk_content) > 100 and 
+                                                len(content) > 100 and
+                                                chunk_content[:200] == content[:200]
+                                            ):
+                                                original_metadata = chunk_data.get('metadata', {})
+                                                matched = True
+                                                print(f"📋 chunk_id {chunk_id}: 通過content匹配找到metadata - 章:{original_metadata.get('chapter', '')}, 節:{original_metadata.get('section', '')}, 條:{original_metadata.get('article', '')}")
+                                                break
+                                        
+                                        # 如果仍然沒找到，嘗試通過chunk_id中的索引推算
+                                        if not matched:
+                                            try:
+                                                import re
+                                                match = re.search(r'_(\d+)$', chunk_id)
+                                                if match:
+                                                    global_idx = int(match.group(1))
+                                                    # 統計在level_chunks中，屬於當前doc_id的chunks數量（到global_idx為止）
+                                                    # 通過store.multi_level_chunk_doc_ids來統計
+                                                    if level_name in store.multi_level_chunk_doc_ids:
+                                                        level_doc_ids = store.multi_level_chunk_doc_ids[level_name]
+                                                        # 統計前global_idx個chunks中屬於當前doc_id的數量
+                                                        doc_chunk_count = sum(1 for i in range(min(global_idx + 1, len(level_doc_ids))) if level_doc_ids[i] == doc_id)
+                                                        relative_idx = doc_chunk_count - 1  # 減1因為當前chunk是第doc_chunk_count個
+                                                        if 0 <= relative_idx < len(doc_level_chunks):
+                                                            original_metadata = doc_level_chunks[relative_idx].get('metadata', {})
+                                                            print(f"📋 chunk_id {chunk_id}: 通過索引推算找到metadata - 章:{original_metadata.get('chapter', '')}, 節:{original_metadata.get('section', '')}, 條:{original_metadata.get('article', '')}")
+                                            except (ValueError, IndexError, AttributeError) as e:
+                                                print(f"⚠️ 解析chunk_id失敗: {chunk_id}, 錯誤: {e}")
+                                
+                                all_candidates[chunk_id] = {
+                                    'chunk_id': chunk_id,
+                                    'doc_id': doc_id,
+                                    'content': content,
+                                    'enhanced_metadata': enhanced_metadata,
+                                    'original_metadata': original_metadata,  # 保存原始metadata
+                                    'chunk_index': idx,
+                                    'level': level_name,
+                                    'vector_rank': rank,
+                                    'vector_score': float(score),
+                                    'bm25_rank': None,
+                                    'bm25_score': 0.0
+                                }
+                except Exception as e:
+                    print(f"   ⚠️ 層次 '{level_name}' 檢索失敗: {e}")
+        elif use_standard_index:
+            # 標準索引檢索（實驗組A）
+            print(f"✅ 使用標準索引進行檢索（實驗組A）")
+            vector_indices, vector_scores = faiss_store.search(query_vector, req.k * 10)
+            print(f"✅ 標準向量檢索返回 {len(vector_indices)} 個候選")
+            
+            # 為向量結果分配rank
+            for rank, (idx, score) in enumerate(zip(vector_indices, vector_scores), start=1):
+                chunk_info = faiss_store.get_chunk_by_index(idx)
+                if chunk_info and 'chunk_id' in chunk_info:
+                    chunk_id = chunk_info['chunk_id']
+                    all_candidates[chunk_id] = {
+                        'chunk_id': chunk_id,
+                        'doc_id': chunk_info.get('doc_id', 'unknown'),
+                        'content': chunk_info.get('content', ''),
+                        'enhanced_metadata': chunk_info.get('enhanced_metadata', {}),
+                        'chunk_index': idx,
+                        'level': 'standard',
+                        'vector_rank': rank,
+                        'vector_score': float(score),
+                        'bm25_rank': None,
+                        'bm25_score': 0.0
+                    }
+        else:
+            print("⚠️ FAISS索引不可用，跳過向量檢索")
+        
+        # 2. BM25檢索（支持標準和多層次）
+        print("📊 執行BM25檢索...")
+        # 優先使用多層次索引（如果存在）
+        if bm25_index.has_multi_level_index():
+            # 多層次BM25檢索：檢索所有層次並合併（實驗組B、C、D）
+            print(f"✅ 使用多層次BM25索引進行檢索（實驗組B/C/D）")
+            available_levels = bm25_index.get_available_levels()
+            print(f"🔍 多層次BM25索引可用層次: {available_levels}")
+            
+            for level_name in available_levels:
+                try:
+                    level_indices, level_scores = bm25_index.search_multi_level(level_name, req.query, req.k * 10)
+                    print(f"   ✅ 層次 '{level_name}' BM25返回 {len(level_indices)} 個候選")
+                    
+                    # 為該層次的結果分配rank並合併
+                    for rank, (idx, score) in enumerate(zip(level_indices, level_scores), start=1):
+                        chunk_info = bm25_index.get_multi_level_chunk_by_index(level_name, idx)
+                        if chunk_info and 'chunk_id' in chunk_info:
+                            chunk_id = chunk_info['chunk_id']
+                            if chunk_id in all_candidates:
+                                all_candidates[chunk_id]['bm25_rank'] = rank
+                                all_candidates[chunk_id]['bm25_score'] = float(score)
+                            else:
+                                all_candidates[chunk_id] = {
+                                    'chunk_id': chunk_id,
+                                    'doc_id': chunk_info.get('doc_id', 'unknown'),
+                                    'content': chunk_info.get('content', ''),
+                                    'enhanced_metadata': {},
+                                    'chunk_index': idx,
+                                    'level': level_name,
+                                    'vector_rank': None,
+                                    'vector_score': 0.0,
+                                    'bm25_rank': rank,
+                                    'bm25_score': float(score)
+                                }
+                except Exception as e:
+                    print(f"   ⚠️ 層次 '{level_name}' BM25檢索失敗: {e}")
+        elif bm25_index.has_index():
+            # 標準BM25檢索
+            bm25_indices, bm25_scores = bm25_index.search(req.query, req.k * 10)
+            print(f"✅ 標準BM25檢索返回 {len(bm25_indices)} 個候選")
+            
+            # 為BM25結果分配rank並合併
+            for rank, (idx, score) in enumerate(zip(bm25_indices, bm25_scores), start=1):
+                chunk_info = bm25_index.get_chunk_by_index(idx)
+                if chunk_info and 'chunk_id' in chunk_info:
+                    chunk_id = chunk_info['chunk_id']
+                    if chunk_id in all_candidates:
+                        all_candidates[chunk_id]['bm25_rank'] = rank
+                        all_candidates[chunk_id]['bm25_score'] = float(score)
+                    else:
+                        all_candidates[chunk_id] = {
+                            'chunk_id': chunk_id,
+                            'doc_id': chunk_info.get('doc_id', 'unknown'),
+                            'content': chunk_info.get('content', ''),
+                            'enhanced_metadata': {},
+                            'chunk_index': idx,
+                            'level': 'standard',
+                            'vector_rank': None,
+                            'vector_score': 0.0,
+                            'bm25_rank': rank,
+                            'bm25_score': float(score)
+                        }
+        else:
+            print("⚠️ BM25索引不可用，跳過BM25檢索")
+        
+        # 3. RRF融合 - 計算RRF分數：1 / (60 + rank)
+        k_rrf = 60
+        for chunk_id, candidate in all_candidates.items():
+            rrf_score = 0.0
+            
+            # 向量排名分數
+            if candidate['vector_rank'] is not None:
+                rrf_score += 1.0 / (k_rrf + candidate['vector_rank'])
+            
+            # BM25排名分數
+            if candidate['bm25_rank'] is not None:
+                rrf_score += 1.0 / (k_rrf + candidate['bm25_rank'])
+            
+            candidate['rrf_score'] = rrf_score
+            candidate['hybrid_score'] = rrf_score
+            
+            # 添加分數分解
+            candidate['score_breakdown'] = {
+                'vector_rank': candidate['vector_rank'],
+                'bm25_rank': candidate['bm25_rank'],
+                'rrf_score': rrf_score
+            }
+        
+        # 檢查是否有候選結果
+        if not all_candidates:
+            print("⚠️ 沒有找到任何候選結果")
+            return {
+                "results": [],
+                "query": req.query,
+                "final_results": 0,
+                "fusion_method": "RRF",
+                "k_rrf": 60,
+                "warning": "No candidates found from vector or BM25 search"
+            }
+        
+        # 按RRF分數排序
+        final_results = sorted(all_candidates.values(), key=lambda x: x['rrf_score'], reverse=True)
+        final_results = final_results[:req.k]
+        
+        # 生成層級描述
+        for result in final_results:
+            if 'doc_id' in result:
+                doc_id = result.get('doc_id', 'unknown')
+                level = result.get('level', 'basic_unit')  # 使用實際層級
+                content = result.get('content', '')
+                original_metadata = result.get('original_metadata', {})
+                
+                # 對於多層級檢索，優先使用content和original_metadata來生成描述
+                if original_metadata:
+                    # 從original_metadata生成描述
+                    hierarchical_desc = generate_hierarchical_description_from_metadata(
+                        doc_id, original_metadata, content, store
+                    )
+                    result['hierarchical_description'] = hierarchical_desc
+                else:
+                    # 回退到舊的方法（標準索引）
+                    chunk_index = result.get('chunk_index', 0)
+                    result['hierarchical_description'] = generate_hierarchical_description(
+                        doc_id, level, chunk_index, store
+                    )
+        
+        print(f"✅ HybridRAG(RRF)檢索完成，返回 {len(final_results)} 個結果")
+        
+        return {
+            "results": final_results,
+            "query": req.query,
+            "final_results": len(final_results),
+            "fusion_method": "RRF",
+            "k_rrf": k_rrf
+        }
+        
+    except Exception as e:
+        print(f"❌ HybridRAG(RRF)檢索失敗: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"HybridRAG(RRF) retrieval failed: {str(e)}"}
+        )
+
+
+@app.post("/api/enhanced-multi-level-hybrid-retrieve")
+def enhanced_multi_level_hybrid_retrieve(req: MultiLevelFusionRequest):
+    """使用增強版HybridRAG進行多層次檢索"""
+    print(f"🚀 增強版多層次HybridRAG檢索請求: {req.query}, k={req.k}")
+    
+    # 檢查是否有多層次索引
+    if not faiss_store.has_multi_level_vectors() and not bm25_index.has_multi_level_index():
+        return JSONResponse(
+            status_code=400,
+            content={"error": "No multi-level indices available. Please run /api/multi-level-embed first."}
+        )
+    
+    try:
+        # 配置增強版HybridRAG
+        config = EnhancedHybridConfig(
+            vector_weight=0.6,
+            bm25_weight=0.25,
+            metadata_weight=0.15,
+            w_law_match=0.15,
+            w_article_match=0.15,
+            w_concept_match=0.1,
+            w_keyword_hit=0.05,
+            w_domain_match=0.05,
+            w_title_match=0.1,
+            w_category_match=0.05,
+            max_bonus=0.4,
+            title_boost_factor=1.5,
+            category_boost_factor=1.3,
+            # Metadata向下繼承配置
+            enable_inheritance_strategy=True,
+            metadata_match_threshold=0.3,
+            inheritance_bonus=0.1,
+            inheritance_boost_factor=1.2
+        )
+        
+        # 執行多層次檢索
+        level_results = {}
+        available_levels = faiss_store.get_available_levels()
+        
+        for level_name in available_levels:
+            try:
+                level_results[level_name] = enhanced_hybrid_rag.retrieve_multi_level(
+                    req.query, level_name, req.k, config
+                )
+                print(f"✅ 層次 '{level_name}' 檢索完成，返回 {len(level_results[level_name])} 個結果")
+            except Exception as e:
+                print(f"⚠️ 層次 '{level_name}' 檢索失敗: {e}")
+                level_results[level_name] = []
+        
+        # 使用融合策略合併結果
+        fusion_config = FusionConfig(
+            strategy=req.fusion_strategy,
+            level_weights=req.level_weights,
+            similarity_threshold=req.similarity_threshold,
+            max_results=req.max_results,
+            normalize_scores=req.normalize_scores
+        )
+        
+        # 轉換為融合器期望的格式
+        formatted_level_results = {}
+        for level_name, results in level_results.items():
+            formatted_level_results[level_name] = []
+            for result in results:
+                formatted_result = {
+                    "content": result.get("content", ""),
+                    "similarity": result.get("hybrid_score", 0.0),
+                    "metadata": result.get("enhanced_metadata", {}),
+                    "hierarchical_description": result.get("hierarchical_description", "")
+                }
+                formatted_level_results[level_name].append(formatted_result)
+        
+        # 執行融合
+        fusion = MultiLevelResultFusion(fusion_config)
+        fused_results = fusion.fuse_results(formatted_level_results)
+        
+        print(f"✅ 增強版多層次HybridRAG檢索完成，融合後返回 {len(fused_results)} 個結果")
+        
+        return {
+            "results": fused_results,
+            "query": req.query,
+            "level_results": {k: len(v) for k, v in level_results.items()},
+            "final_results": len(fused_results),
+            "fusion_config": fusion_config.__dict__,
+            "retrieval_stats": enhanced_hybrid_rag.get_retrieval_stats()
+        }
+        
+    except Exception as e:
+        print(f"❌ 增強版多層次HybridRAG檢索失敗: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Enhanced multi-level HybridRAG retrieval failed: {str(e)}"}
+        )
+
+
 async def gemini_chat(messages: List[Dict[str, str]]) -> str:
     if not httpx:
         raise RuntimeError("httpx not available")
@@ -5033,7 +6307,7 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
             print(f"找到 {len(all_articles)} 個條文")
             
             # 批量處理metadata（如果啟用）
-            if options.include_id or options.include_page_range or options.include_spans:
+            if options.include_id:
                 print("批量處理metadata...")
             
             processed_count = 0
@@ -5048,27 +6322,6 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                         article_metadata = {}
                         if options.include_id:
                             article_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}".replace(" ", "_")
-                        if options.include_page_range:
-                            article_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化的頁面範圍
-                        if options.include_spans:
-                            article_metadata["spans"] = {"start": 0, "end": len(article["content"])}
-                        if options.include_page_range:
-                            # 簡化的頁碼範圍（基於文本位置估算）
-                            article_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化版本
-                        if options.include_spans:
-                            # 簡化的文本定位
-                            start_pos = full_text.find(article["content"][:50])  # 使用前50字符定位
-                            if start_pos >= 0:
-                                article_metadata["spans"] = [{
-                                    "start_char": start_pos,
-                                    "end_char": start_pos + len(article["content"]),
-                                    "text": article["content"][:100] + "..." if len(article["content"]) > 100 else article["content"],
-                                    "page": 1,
-                                    "confidence": 0.8,
-                                    "found": True
-                                }]
-                            else:
-                                article_metadata["spans"] = []
                         
                         article["metadata"] = article_metadata
                         
@@ -5083,10 +6336,6 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                             item_metadata = {}
                             if options.include_id:
                                 item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item_name}".replace(" ", "_")
-                            if options.include_page_range:
-                                item_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化的頁面範圍
-                            if options.include_spans:
-                                item_metadata["spans"] = {"start": 0, "end": len(item["content"])}
                             
                             item["metadata"] = item_metadata
                             
@@ -5101,10 +6350,6 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                                 sub_item_metadata = {}
                                 if options.include_id:
                                     sub_item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item_name}_{sub_item_name}".replace(" ", "_")
-                                if options.include_page_range:
-                                    sub_item_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化的頁面範圍
-                                if options.include_spans:
-                                    sub_item_metadata["spans"] = {"start": 0, "end": len(sub_item["content"])}
                                 
                                 sub_item["metadata"] = sub_item_metadata
                                 
@@ -5115,10 +6360,6 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                                     third_item_metadata = {}
                                     if options.include_id:
                                         third_item_metadata["id"] = f"{structure['law_name']}_{chapter_name}_{section_name}_{article_name}_{item_name}_{sub_item_name}_{third_item_name}".replace(" ", "_")
-                                    if options.include_page_range:
-                                        third_item_metadata["page_range"] = {"start": 1, "end": 1}  # 簡化的頁面範圍
-                                    if options.include_spans:
-                                        third_item_metadata["spans"] = {"start": 0, "end": len(third_item["content"])}
                                     
                                     third_item["metadata"] = third_item_metadata
                         
@@ -5130,7 +6371,7 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
             print(f"Metadata處理完成，耗時: {metadata_time:.2f}秒")
         
         # 添加metadata（使用優化版本）
-        if any([options.include_id, options.include_page_range, options.include_spans]):
+        if options.include_id:
             add_metadata_to_structure_optimized(structure, options, full_text)
         else:
             print("跳過metadata處理（未啟用）")
@@ -6684,6 +7925,150 @@ async def list_embedding_databases():
     return databases
 
 
+@app.post("/api/embedding-databases/{database_id}/activate")
+async def activate_embedding_database(database_id: str):
+    """激活指定的embedding資料庫，加載對應的FAISS和BM25索引"""
+    try:
+        print(f"🔄 激活embedding資料庫: {database_id}")
+        
+        if database_id == "standard_embedding":
+            # 檢查標準embedding是否存在
+            if store.embeddings is None or not store.chunks_flat:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "標準embedding資料不存在，請先執行embedding"}
+                )
+            
+            # 重新加載FAISS和BM25索引
+            print("📊 重新加載FAISS和BM25索引...")
+            faiss_store.load_data()
+            bm25_index.load_data()
+            
+            # 驗證索引是否成功加載
+            faiss_loaded = faiss_store.has_vectors()
+            bm25_loaded = bm25_index.has_index()
+            print(f"📊 索引加載狀態: FAISS={faiss_loaded}, BM25={bm25_loaded}")
+            
+            # 如果任一索引未加載，嘗試從store重建
+            if not faiss_loaded or not bm25_loaded:
+                print("⚠️ 部分或全部索引未找到，嘗試從store重建索引...")
+                vectors = store.embeddings
+                chunks = store.chunks_flat
+                
+                if not vectors or not chunks:
+                    return JSONResponse(
+                        status_code=404,
+                        content={
+                            "error": "無法重建索引：store中沒有embedding數據",
+                            "faiss_available": faiss_loaded,
+                            "bm25_available": bm25_loaded
+                        }
+                    )
+                
+                chunk_ids = [f"{doc_id}_{i}" for i, doc_id in enumerate(store.chunk_doc_ids)]
+                
+                # 重建FAISS索引（如果不存在）
+                if not faiss_loaded:
+                    print("🔄 重建FAISS索引...")
+                    dimension = len(vectors[0]) if vectors else EMBEDDING_DIMENSION
+                    faiss_store.create_index(dimension, "flat")
+                    faiss_store.add_vectors(vectors, chunk_ids, store.chunk_doc_ids, chunks)
+                    print(f"✅ FAISS索引已重建: {len(vectors)} 個向量")
+                
+                # 重建BM25索引（如果不存在）
+                if not bm25_loaded:
+                    print("🔄 重建BM25索引...")
+                    bm25_index.build_index(chunks, chunk_ids, store.chunk_doc_ids)
+                    print(f"✅ BM25索引已重建: {len(chunks)} 個文檔")
+                
+                # 如果有enhanced metadata，也需要恢復
+                if hasattr(store, 'enhanced_metadata') and store.enhanced_metadata:
+                    for chunk_id, metadata in store.enhanced_metadata.items():
+                        faiss_store.set_enhanced_metadata(chunk_id, metadata)
+                    print(f"✅ 已恢復 {len(store.enhanced_metadata)} 個enhanced metadata")
+                
+                # 保存索引
+                faiss_store.save_data()
+                bm25_index.save_data()
+                print("✅ 索引已保存到磁盤")
+                
+                # 再次驗證
+                faiss_loaded = faiss_store.has_vectors()
+                bm25_loaded = bm25_index.has_index()
+                print(f"📊 重建後索引狀態: FAISS={faiss_loaded}, BM25={bm25_loaded}")
+            
+            print(f"✅ 標準embedding資料庫已激活")
+            return {
+                "message": "標準embedding資料庫已激活",
+                "database_id": database_id,
+                "faiss_available": faiss_store.has_vectors(),
+                "bm25_available": bm25_index.has_index(),
+                "num_vectors": len(store.embeddings) if store.embeddings else 0,
+                "success": True
+            }
+            
+        elif database_id == "multi_level_combined":
+            # 檢查多層次embedding是否存在
+            if not store.has_multi_level_embeddings():
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "多層次embedding資料不存在，請先執行multi-level-embed"}
+                )
+            
+            # 重新加載FAISS和BM25索引
+            print("📊 重新加載多層次FAISS和BM25索引...")
+            faiss_store.load_data()
+            bm25_index.load_data()
+            
+            # 驗證多層次索引是否成功加載
+            available_levels = faiss_store.get_available_levels()
+            if not available_levels:
+                # 如果加載失敗，嘗試從store重建索引
+                print("⚠️ 多層次索引未找到，嘗試從store重建索引...")
+                available_levels = store.get_available_levels()
+                
+                for level_name in available_levels:
+                    level_data = store.get_multi_level_embeddings(level_name)
+                    if level_data:
+                        vectors = level_data.get('embeddings', [])
+                        chunks = level_data.get('chunks', [])
+                        doc_ids = level_data.get('doc_ids', [])
+                        chunk_ids = [f"{doc_id}_{i}" for i, doc_id in enumerate(doc_ids)]
+                        
+                        if vectors and chunks:
+                            faiss_store.add_multi_level_vectors(level_name, vectors, chunk_ids, doc_ids, chunks)
+                            bm25_index.build_multi_level_index(level_name, chunks, chunk_ids, doc_ids)
+                
+                # 保存索引
+                faiss_store.save_data()
+                bm25_index.save_data()
+                print("✅ 已從store重建多層次索引並保存")
+            
+            print(f"✅ 多層次embedding資料庫已激活，可用層次: {available_levels}")
+            return {
+                "message": "多層次embedding資料庫已激活",
+                "database_id": database_id,
+                "faiss_available": faiss_store.has_multi_level_vectors(),
+                "bm25_available": bm25_index.has_multi_level_index(),
+                "available_levels": available_levels,
+                "success": True
+            }
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"未知的embedding資料庫ID: {database_id}"}
+            )
+            
+    except Exception as e:
+        print(f"❌ 激活embedding資料庫失敗: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"激活embedding資料庫失敗: {str(e)}"}
+        )
+
+
 @app.delete("/api/embedding-databases/{database_id}")
 async def delete_embedding_database(database_id: str):
     """刪除指定的embedding資料庫"""
@@ -6704,7 +8089,7 @@ async def delete_embedding_database(database_id: str):
                 )
         elif database_id == "multi_level_combined":
             # 刪除整個多層次embedding資料庫
-            if store.has_multi_level_embeddings():
+            if store.has_multi_level_embeddings() or faiss_store.has_multi_level_vectors() or bm25_index.has_multi_level_index():
                 # 清除所有多層次embedding數據
                 store.multi_level_embeddings = {}
                 store.multi_level_chunk_doc_ids = {}
@@ -6712,8 +8097,29 @@ async def delete_embedding_database(database_id: str):
                 store.multi_level_metadata = {}
                 store.save_data()
                 
-                print(f"✅ 已刪除整個多層次embedding資料庫")
-                return {"message": "多層次embedding資料庫已刪除", "success": True}
+                # 清除FAISS和BM25多層次索引
+                faiss_store.reset_vectors()
+                bm25_index.reset_index()
+                
+                # 刪除磁盤上的索引文件
+                import os
+                data_dir = "data"
+                for level_name in ["document", "document_component", "basic_unit_hierarchy", "basic_unit", "basic_unit_component", "enumeration"]:
+                    faiss_file = os.path.join(data_dir, f"faiss_index_{level_name}.bin")
+                    bm25_file = os.path.join(data_dir, f"bm25_index_{level_name}.pkl")
+                    if os.path.exists(faiss_file):
+                        os.remove(faiss_file)
+                        print(f"🗑️ 刪除FAISS文件: {faiss_file}")
+                    if os.path.exists(bm25_file):
+                        os.remove(bm25_file)
+                        print(f"🗑️ 刪除BM25文件: {bm25_file}")
+                
+                # 重新保存空的metadata
+                faiss_store.save_data()
+                bm25_index.save_data()
+                
+                print(f"✅ 已刪除整個多層次embedding資料庫（包括磁盤文件）")
+                return {"message": "多層次embedding資料庫已刪除（包括磁盤文件）", "success": True}
             else:
                 return JSONResponse(
                     status_code=404, 

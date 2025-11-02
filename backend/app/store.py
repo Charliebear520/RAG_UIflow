@@ -25,6 +25,9 @@ class InMemoryStore:
         self.multi_level_chunks_flat: Dict[str, List[str]] = {}
         self.multi_level_metadata: Dict[str, Dict[str, Any]] = {}  # 存儲模型信息等元數據
         
+        # Enhanced metadata存儲（在分塊階段生成）
+        self.enhanced_metadata: Dict[str, Dict[str, Any]] = {}  # chunk_id -> enhanced_metadata
+        
         # E/C/U標註存儲
         self.annotations: Dict[str, ECUAnnotation] = {}  # annotation_id -> annotation
         
@@ -49,6 +52,9 @@ class InMemoryStore:
         self.multi_level_chunk_doc_ids = {}
         self.multi_level_chunks_flat = {}
         self.multi_level_metadata = {}
+        
+        # 清除enhanced metadata
+        self.enhanced_metadata = {}
         
         # 清除標註數據（可選，根據需要）
         # self.annotations = {}
@@ -97,6 +103,7 @@ class InMemoryStore:
                 "multi_level_chunk_doc_ids": self.multi_level_chunk_doc_ids,
                 "multi_level_chunks_flat": self.multi_level_chunks_flat,
                 "multi_level_metadata": self.multi_level_metadata,
+                "enhanced_metadata": self.enhanced_metadata,
                 "demo_data_deleted": self.demo_data_deleted
             }
             
@@ -111,7 +118,9 @@ class InMemoryStore:
                     "overlap": doc.overlap,
                     "json_data": doc.json_data,
                     "structured_chunks": doc.structured_chunks,
-                    "generated_questions": doc.generated_questions
+                    "generated_questions": doc.generated_questions,
+                    "multi_level_chunks": doc.multi_level_chunks if hasattr(doc, 'multi_level_chunks') else None,
+                    "chunking_strategy": doc.chunking_strategy if hasattr(doc, 'chunking_strategy') else None
                 }
             
             # 保存到pickle文件
@@ -146,7 +155,9 @@ class InMemoryStore:
                     overlap=doc_data["overlap"],
                     json_data=doc_data.get("json_data"),
                     structured_chunks=doc_data.get("structured_chunks"),
-                    generated_questions=doc_data.get("generated_questions")
+                    generated_questions=doc_data.get("generated_questions"),
+                    multi_level_chunks=doc_data.get("multi_level_chunks"),
+                    chunking_strategy=doc_data.get("chunking_strategy")
                 )
             
             # 恢復其他數據
@@ -157,6 +168,7 @@ class InMemoryStore:
             self.multi_level_chunk_doc_ids = data.get("multi_level_chunk_doc_ids", {})
             self.multi_level_chunks_flat = data.get("multi_level_chunks_flat", {})
             self.multi_level_metadata = data.get("multi_level_metadata", {})
+            self.enhanced_metadata = data.get("enhanced_metadata", {})
             self.demo_data_deleted = data.get("demo_data_deleted", False)
             
             print(f"✅ 數據已從 {data_file} 載入")

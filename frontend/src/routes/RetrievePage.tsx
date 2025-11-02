@@ -8,11 +8,7 @@ export function RetrievePage() {
   const location = useLocation();
   const {
     canRetrieve,
-    retrieve,
-    hybridRetrieve,
-    hierarchicalRetrieve,
-    multiLevelRetrieve,
-    multiLevelFusionRetrieve,
+    hybridRrfRetrieve,
     retrieval,
     generate,
     answer,
@@ -25,7 +21,7 @@ export function RetrievePage() {
   const [query, setQuery] = useState("");
   const [k, setK] = useState(5);
   const [busy, setBusy] = useState(false);
-  const [retrievalMethod, setRetrievalMethod] = useState("vector");
+  const [retrievalMethod, setRetrievalMethod] = useState("hybrid_rrf");
   const [selectedDatabase, setSelectedDatabase] = useState<any>(null);
   const [databaseMessage, setDatabaseMessage] = useState<string | null>(null);
 
@@ -96,28 +92,45 @@ export function RetrievePage() {
 
   // 處理從embedding資料庫列表跳轉過來的情況
   useEffect(() => {
-    if (location.state?.selectedDatabase) {
-      const database = location.state.selectedDatabase;
-      setSelectedDatabase(database);
-      setDatabaseMessage(
-        location.state.message || `已選擇embedding資料庫: ${database.name}`
-      );
+    const activateDatabase = async () => {
+      if (location.state?.selectedDatabase) {
+        const database = location.state.selectedDatabase;
+        setSelectedDatabase(database);
+        setDatabaseMessage(
+          location.state.message || `已選擇embedding資料庫: ${database.name}`
+        );
 
-      // 設置embedProvider以啟用檢索功能
-      if (database.provider) {
-        setEmbedProvider(database.provider);
-      }
+        // 設置embedProvider以啟用檢索功能
+        if (database.provider) {
+          setEmbedProvider(database.provider);
+        }
 
-      // 根據資料庫類型自動選擇合適的檢索方法
-      if (database.type === "multi_level") {
-        setRetrievalMethod("multi_level_fusion");
-      } else if (database.type === "standard") {
-        setRetrievalMethod("vector");
+        // 統一使用 HybridRAG(RRF)
+        setRetrievalMethod("hybrid_rrf");
+
+        // 確保激活embedding資料庫（以防在EmbeddingDatabaseList中的激活失敗）
+        try {
+          console.log(`🔄 在RetrievePage中確保激活embedding資料庫: ${database.id}`);
+          const result = await api.activateEmbeddingDatabase(database.id);
+          console.log("✅ 激活結果:", result);
+          
+          if (result.success) {
+            setDatabaseMessage(
+              `✅ 已激活embedding資料庫: ${database.name} (FAISS: ${result.faiss_available ? '✓' : '✗'}, BM25: ${result.bm25_available ? '✓' : '✗'})`
+            );
+          }
+        } catch (err) {
+          console.error("激活embedding資料庫失敗:", err);
+          const errorMsg = err instanceof Error ? err.message : "激活資料庫失敗";
+          setDatabaseMessage(
+            `⚠️ ${errorMsg}。請確保已執行embedding。`
+          );
+        }
       }
-    }
+    };
+
+    activateDatabase();
   }, [location.state, setEmbedProvider]);
-
-  // 僅保留：標準、HybridRAG、多層次融合檢索
 
   return (
     <div className="card">
@@ -207,98 +220,32 @@ export function RetrievePage() {
             </div>
           )}
 
-        {/* 檢索方法選擇 */}
+        {/* 檢索方法：HybridRAG(RRF) */}
         <div className="mb-3">
-          <div className="form-check form-check-inline">
-            <input
-              className="form-check-input"
-              type="radio"
-              name="retrievalMethod"
-              id="vectorOnly"
-              value="vector"
-              checked={retrievalMethod === "vector"}
-              onChange={(e) => setRetrievalMethod(e.target.value)}
-            />
-            <label className="form-check-label" htmlFor="vectorOnly">
-              標準檢索 (Standard Retrieval)
-            </label>
+          <div className="alert alert-primary mb-0">
+            <strong>當前檢索方法：</strong> HybridRAG(RRF) - 純RRF融合，支持多層次Embedding
           </div>
-          <div className="form-check form-check-inline">
-            <input
-              className="form-check-input"
-              type="radio"
-              name="retrievalMethod"
-              id="hybridRag"
-              value="hybrid"
-              checked={retrievalMethod === "hybrid"}
-              onChange={(e) => setRetrievalMethod(e.target.value)}
-            />
-            <label className="form-check-label" htmlFor="hybridRag">
-              HybridRAG (向量 + 法律規則)
-            </label>
-          </div>
-          <div className="form-check form-check-inline"></div>
-          {/* <div className="form-check form-check-inline">
-            <input
-              className="form-check-input"
-              type="radio"
-              name="retrievalMethod"
-              id="multiLevelRag"
-              value="multi_level"
-              checked={retrievalMethod === "multi_level"}
-              onChange={(e) => setRetrievalMethod(e.target.value)}
-            />
-            <label className="form-check-label" htmlFor="multiLevelRag">
-              多層次檢索 (Multi-Layered Retrieval) 📚
-            </label>
-          </div> */}
-          <div className="form-check form-check-inline">
-            <input
-              className="form-check-input"
-              type="radio"
-              name="retrievalMethod"
-              id="multiLevelFusionRag"
-              value="multi_level_fusion"
-              checked={retrievalMethod === "multi_level_fusion"}
-              onChange={(e) => setRetrievalMethod(e.target.value)}
-            />
-            <label className="form-check-label" htmlFor="multiLevelFusionRag">
-              多層次融合檢索 (Multi-Layered Fusion) 🔄
-            </label>
-          </div>
-          <div className="form-check form-check-inline"></div>
         </div>
-
-        {/* 保留的方法：Standard / HybridRAG / Multi-Layered Fusion */}
 
         {/* 方法說明 */}
         <div className="alert alert-info mb-3">
-          <h6 className="mb-2">檢索方法說明</h6>
+          <h6 className="mb-2">HybridRAG(RRF) 檢索說明</h6>
           <ul className="mb-0 small">
             <li>
-              <strong>標準檢索</strong>：傳統的單一embedding檢索
+              <strong>RRF（Reciprocal Rank Fusion）</strong>
+              ：結合向量檢索和BM25關鍵字檢索的純融合方法，無需額外的規則配置
             </li>
             <li>
-              <strong>HybridRAG</strong>：結合向量檢索和法律規則的混合檢索
+              <strong>自動多層次支持</strong>
+              ：自動檢測並支持標準embedding和多層次embedding（6個粒度級別）
             </li>
             <li>
-              <strong>HopRAG</strong>
-              ：多跳推理檢索，通過邏輯連接發現間接相關的法律條文
-            </li>
-            <li>
-              <strong>多層次檢索</strong>
-              ：基於六個粒度級別（文件、章、節、條、項、款/目），智能選擇最合適的層次進行檢索
-            </li>
-            <li>
-              <strong>多層次融合檢索</strong>
-              ：從所有六個粒度級別檢索並融合結果，提供最全面的檢索效果
+              <strong>智能層次融合</strong>
+              ：從所有可用層次檢索並智能融合結果，提供全面的檢索效果
             </li>
           </ul>
         </div>
 
-        {/* 移除 HopRAG 使用指導 */}
-
-        {/* 移除 HopRAG 管理面板 */}
 
         <form
           className="row gy-2 gx-2 align-items-end"
@@ -308,15 +255,8 @@ export function RetrievePage() {
             setBusy(true);
 
             try {
-              if (retrievalMethod === "hybrid") {
-                await hybridRetrieve(query, k);
-              } else if (retrievalMethod === "multi_level") {
-                await multiLevelRetrieve(query, k);
-              } else if (retrievalMethod === "multi_level_fusion") {
-                await multiLevelFusionRetrieve(query, k);
-              } else {
-                await retrieve(query, k);
-              }
+              // 只保留 HybridRAG(RRF)
+              await hybridRrfRetrieve(query, k);
             } catch (error) {
               console.error("檢索錯誤:", error);
               alert("檢索失敗，請檢查控制台");
@@ -379,19 +319,7 @@ export function RetrievePage() {
           <div className="mt-3">
             <h3 className="h6">
               Top results{" "}
-              {retrievalMethod === "hybrid" && (
-                <span className="badge bg-primary">HybridRAG</span>
-              )}
-              {retrievalMethod === "multi_level" && (
-                <span className="badge bg-success">
-                  Multi-Layered Retrieval 📚
-                </span>
-              )}
-              {retrievalMethod === "multi_level_fusion" && (
-                <span className="badge bg-warning">
-                  Multi-Layered Fusion 🔄
-                </span>
-              )}
+              <span className="badge bg-info">HybridRAG(RRF)</span>
               {retrieval &&
                 retrieval.length > 0 &&
                 retrieval[0].embedding_provider && (
@@ -656,6 +584,18 @@ export function RetrievePage() {
                               </span>
                               <span className="badge bg-warning me-1">
                                 規則: {r.bonus?.toFixed(3) || "N/A"}
+                              </span>
+                            </>
+                          ) : retrievalMethod === "hybrid_rrf" ? (
+                            <>
+                              <span className="badge bg-success me-1">
+                                RRF分數: {r.rrf_score?.toFixed(5) || "N/A"}
+                              </span>
+                              <span className="badge bg-info me-1">
+                                向量排名: {r.vector_rank || "N/A"}
+                              </span>
+                              <span className="badge bg-warning me-1">
+                                BM25排名: {r.bm25_rank || "N/A"}
                               </span>
                             </>
                           ) : retrievalMethod === "multi_level" ? (

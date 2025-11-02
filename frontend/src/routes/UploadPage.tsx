@@ -7,8 +7,6 @@ import { EmbeddingDatabaseList } from "../components/EmbeddingDatabaseList";
 
 interface MetadataOptions {
   include_id: boolean;
-  include_page_range: boolean;
-  include_spans: boolean;
 }
 
 export function UploadPage() {
@@ -34,8 +32,6 @@ export function UploadPage() {
 
   const [metadataOptions, setMetadataOptions] = useState<MetadataOptions>({
     include_id: true,
-    include_page_range: true,
-    include_spans: true,
   });
 
   const isPDF = (f: File) =>
@@ -235,7 +231,7 @@ export function UploadPage() {
                   }
                 }}
               />
-              <div className="mt-2">
+              {/* <div className="mt-2">
                 <small className="text-muted">
                   <i className="bi bi-info-circle me-1"></i>
                   JSON文件應包含 <code>laws</code> 字段，格式如：
@@ -244,7 +240,7 @@ export function UploadPage() {
                     {'{ "laws": [{ "law_name": "...", "chapters": [...] }] }'}
                   </code>
                 </small>
-              </div>
+              </div> */}
             </div>
 
             {selectedFiles.length > 0 && (
@@ -336,11 +332,11 @@ export function UploadPage() {
               </div>
             )}
 
-            {docId && (
+            {/* {docId && (
               <p className="text-muted small mt-2 mb-0">
                 doc_id: <code>{docId}</code>
               </p>
-            )}
+            )} */}
 
             {/* Metadata Options - 只對PDF文件顯示 */}
             {selectedFiles.length > 0 && selectedFiles.every(isPDF) && (
@@ -363,50 +359,6 @@ export function UploadPage() {
                       />
                       <label className="form-check-label" htmlFor="include_id">
                         ID (唯一識別碼)
-                      </label>
-                    </div>
-                  </div>
-                  <div className="col-6">
-                    <div className="form-check form-check-sm">
-                      <input
-                        className="form-check-input"
-                        type="checkbox"
-                        id="include_page_range"
-                        checked={metadataOptions.include_page_range}
-                        onChange={(e) =>
-                          setMetadataOptions((prev) => ({
-                            ...prev,
-                            include_page_range: e.target.checked,
-                          }))
-                        }
-                      />
-                      <label
-                        className="form-check-label"
-                        htmlFor="include_page_range"
-                      >
-                        頁碼範圍
-                      </label>
-                    </div>
-                  </div>
-                  <div className="col-6">
-                    <div className="form-check form-check-sm">
-                      <input
-                        className="form-check-input"
-                        type="checkbox"
-                        id="include_spans"
-                        checked={metadataOptions.include_spans}
-                        onChange={(e) =>
-                          setMetadataOptions((prev) => ({
-                            ...prev,
-                            include_spans: e.target.checked,
-                          }))
-                        }
-                      />
-                      <label
-                        className="form-check-label"
-                        htmlFor="include_spans"
-                      >
-                        文字片段範圍
                       </label>
                     </div>
                   </div>

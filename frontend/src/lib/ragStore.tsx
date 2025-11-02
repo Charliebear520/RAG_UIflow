@@ -59,6 +59,7 @@ type RagContextType = {
   multiLevelEmbed: (experimentalGroups?: string[]) => Promise<void>;
   retrieve: (query: string, k: number) => Promise<void>;
   hybridRetrieve: (query: string, k: number) => Promise<void>;
+  hybridRrfRetrieve: (query: string, k: number) => Promise<void>;
   hierarchicalRetrieve: (query: string, k: number) => Promise<void>;
   multiLevelRetrieve: (query: string, k: number) => Promise<void>;
   multiLevelFusionRetrieve: (
@@ -361,6 +362,17 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  async function hybridRrfRetrieve(query: string, k: number) {
+    const res = await api.hybridRrfRetrieve({ query, k });
+    // 將results數組和額外信息合併保存到retrieval
+    const retrievalData = res.results.map((result: any) => ({
+      ...result,
+      fusion_method: res.fusion_method,
+      k_rrf: res.k_rrf,
+    }));
+    setRetrieval(retrievalData);
+  }
+
   async function hierarchicalRetrieve(query: string, k: number) {
     const res = await api.hierarchicalRetrieve({ query, k });
     // 將results數組和額外信息合併保存到retrieval
@@ -474,6 +486,7 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     multiLevelEmbed,
     retrieve,
     hybridRetrieve,
+    hybridRrfRetrieve,
     hierarchicalRetrieve,
     multiLevelRetrieve,
     multiLevelFusionRetrieve,

@@ -19,6 +19,7 @@ class DocRecord:
     json_data: Optional[Dict[str, Any]] = None
     structured_chunks: Optional[List[Dict[str, Any]]] = None
     generated_questions: Optional[List[str]] = None
+    multi_level_chunks: Optional[Dict[str, List[Dict[str, Any]]]] = None  # 存儲多層次chunks
     chunking_strategy: Optional[str] = None
 
 
@@ -159,5 +160,3 @@ class MetadataOptions(BaseModel):
     extract_metadata: bool = True
     # 簡化版本 - 移除不必要的metadata
     include_id: bool = True
-    include_page_range: bool = False  # 恢復為False
-    include_spans: bool = False  # 恢復為False

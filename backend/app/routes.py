@@ -3055,6 +3055,19 @@ async def process_multiple_chunking(
                 # 如果有結構化chunks，也保存
                 if "chunks_with_span" in primary_result:
                     doc.structured_chunks = primary_result["chunks_with_span"]
+                    
+                    # 如果是多層級結構化分塊，轉換為六層格式並保存
+                    if primary_result.get("strategy") == "structured_hierarchical":
+                        try:
+                            from .main import convert_structured_to_multi_level
+                            multi_level_chunks = convert_structured_to_multi_level(primary_result["chunks_with_span"])
+                            doc.multi_level_chunks = multi_level_chunks
+                            doc.chunking_strategy = "multi_level_structured"
+                            print(f"✅ 多層級分塊轉換完成，六層統計:")
+                            for level, chunks in multi_level_chunks.items():
+                                print(f"   {level}: {len(chunks)} chunks")
+                        except Exception as e:
+                            print(f"⚠️ 轉換多層級格式失敗: {e}")
                 
                 # 保存文檔
                 store.add_doc(doc)
