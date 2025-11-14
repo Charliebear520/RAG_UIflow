@@ -12,7 +12,7 @@ const EXPERIMENTAL_GROUPS = {
   group_b: {
     name: "B組：條文+章節結構",
     description: "基本單元層級層 + 基本單元層（章、節、編 + 條文）",
-    levels: ["basic_unit_hierarchy", "basic_unit"],
+    levels: ["document_component", "basic_unit_hierarchy", "basic_unit"],
     research_purpose: "評估結構分組的嵌入是否能更好地捕捉廣泛主題",
   },
   group_c: {
@@ -23,9 +23,8 @@ const EXPERIMENTAL_GROUPS = {
   },
   group_d: {
     name: "D組：完整多層次ML-RAG",
-    description: "包含所有六個粒度層次",
+    description: "章、節、條文、項、款、目層級",
     levels: [
-      "document",
       "document_component",
       "basic_unit_hierarchy",
       "basic_unit",
@@ -54,13 +53,8 @@ export function EmbedPage() {
   const handleEmbed = async () => {
     setBusy(true);
     try {
-      if (selectedGroup === "group_a") {
-        // A組使用標準embedding
-        await embed();
-      } else {
-        // B、C、D組使用多層次embedding，只傳遞選定的組
-        await multiLevelEmbed([selectedGroup]);
-      }
+      // 所有實驗組統一使用multiLevelEmbed，確保只處理指定層級的chunks
+      await multiLevelEmbed([selectedGroup]);
     } catch (error) {
       console.error("Embedding failed:", error);
     } finally {

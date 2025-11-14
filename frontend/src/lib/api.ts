@@ -318,6 +318,21 @@ export const api = {
     const res = await fetch(`${base}/chunk/results/${taskId}`);
     return json<any>(res);
   },
+  async getChunkHierarchyTree(docId?: string) {
+    const url = docId
+      ? `/chunk-hierarchy-tree?doc_id=${encodeURIComponent(docId)}`
+      : "/chunk-hierarchy-tree";
+    return this.get(url);
+  },
+  async searchChunkByCitation(params: { query: string; doc_id?: string }) {
+    const searchParams = new URLSearchParams();
+    searchParams.set("query", params.query);
+    if (params.doc_id) {
+      searchParams.set("doc_id", params.doc_id);
+    }
+    const res = await fetch(`${base}/chunk-search?${searchParams.toString()}`);
+    return json<any>(res);
+  },
   // 策略評估相關API
   async startStrategyEvaluation(body: {
     doc_id: string;

@@ -260,6 +260,59 @@ interface EvaluationTask {
   progress: number;
 }
 
+interface ChunkHierarchyChunk {
+  chunk_id: string;
+  level: string;
+  content: string;
+  content_length: number;
+  metadata: Record<string, any>;
+  strategy?: string;
+  path_label: string;
+}
+
+interface ChunkHierarchyNode {
+  level: string;
+  key: string;
+  label: string;
+  path_label: string;
+  chunk?: ChunkHierarchyChunk | null;
+  children: ChunkHierarchyNode[];
+  path?: Record<string, any>;
+  doc_id?: string;
+  doc_name?: string;
+}
+
+interface ChunkHierarchyDocument {
+  doc_id: string;
+  doc_name: string;
+  law_nodes: ChunkHierarchyNode[];
+}
+
+interface ChunkHierarchyResponse {
+  documents: ChunkHierarchyDocument[];
+  timestamp: string;
+}
+
+interface ChunkSearchResult {
+  doc_id: string;
+  doc_name: string;
+  level: string;
+  chunk_id: string;
+  chunk_index: number;
+  path: Record<string, any>;
+  path_label: string;
+  content: string;
+  content_length: number;
+  metadata: Record<string, any>;
+}
+
+interface ChunkSearchResponse {
+  query: string;
+  normalized_filters: Record<string, any>;
+  result_count: number;
+  results: ChunkSearchResult[];
+}
+
 export function ChunkPage() {
   const nav = useNavigate();
   const {
@@ -414,6 +467,20 @@ export function ChunkPage() {
     max: number;
   }>({ min: 0, max: 10000 });
 
+  // 層級視圖與法條搜尋狀態
+  const [hierarchyData, setHierarchyData] = useState<ChunkHierarchyDocument[]>([]);
+  const [hierarchyLoading, setHierarchyLoading] = useState(false);
+  const [hierarchyError, setHierarchyError] = useState<string | null>(null);
+  const [hierarchyTimestamp, setHierarchyTimestamp] = useState<string | null>(null);
+  const [hierarchyView, setHierarchyView] = useState<"tree" | "list">("tree");
+  const [citationQuery, setCitationQuery] = useState("");
+  const [citationLoading, setCitationLoading] = useState(false);
+  const [citationError, setCitationError] = useState<string | null>(null);
+  const [citationResults, setCitationResults] = useState<ChunkSearchResult[]>([]);
+  const [searchFilters, setSearchFilters] = useState<Record<string, any> | null>(null);
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  const [highlightedChunkId, setHighlightedChunkId] = useState<string | null>(null);
+
   // 取得層級中文標籤
   const getLevelLabel = (md: any) => {
     const level = md?.level_en || md?.level || "";
@@ -444,6 +511,77 @@ export function ChunkPage() {
     if (md.item) parts.push(`目: ${md.item}`);
     return parts.join(" | ");
   };
+
+  const makeNodeKey = React.useCallback((node: ChunkHierarchyNode) => {
+    const docPart = node.doc_id ? `${node.doc_id}-` : "";
+    const baseKey = `${docPart}${node.level}-${node.key}`;
+    if (node.chunk?.chunk_id) {
+      return `${baseKey}-${node.chunk.chunk_id}`;
+    }
+    return baseKey;
+  }, []);
+
+  const findNodePathByChunkId = React.useCallback(
+    (
+      nodes: ChunkHierarchyNode[],
+      targetChunkId: string,
+      currentPath: string[] = []
+    ): string[] | null => {
+      for (const node of nodes) {
+        const nodeKey = makeNodeKey(node);
+        const nextPath = [...currentPath, nodeKey];
+        if (node.chunk?.chunk_id === targetChunkId) {
+          return nextPath;
+        }
+        if (node.children && node.children.length > 0) {
+          const childPath = findNodePathByChunkId(
+            node.children,
+            targetChunkId,
+            nextPath
+          );
+          if (childPath) {
+            return childPath;
+          }
+        }
+      }
+      return null;
+    },
+    [makeNodeKey]
+  );
+
+  const toggleNodeExpansion = React.useCallback(
+    (nodeKey: string, forceExpand?: boolean) => {
+      setExpandedNodes((prev) => {
+        const next = new Set(prev);
+        const shouldExpand =
+          forceExpand !== undefined ? forceExpand : !next.has(nodeKey);
+        if (shouldExpand) {
+          next.add(nodeKey);
+        } else {
+          next.delete(nodeKey);
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+  const expandPathForChunk = React.useCallback(
+    (chunkId: string) => {
+      const paths = hierarchyData
+        .map((doc) => findNodePathByChunkId(doc.law_nodes, chunkId))
+        .filter((path): path is string[] => Array.isArray(path) && path.length);
+
+      if (paths.length > 0) {
+        setExpandedNodes((prev) => {
+          const next = new Set(prev);
+          paths[0].forEach((key) => next.add(key));
+          return next;
+        });
+      }
+    },
+    [findNodePathByChunkId, hierarchyData]
+  );
 
   // 確保Bootstrap accordion正確初始化
   useEffect(() => {
@@ -489,6 +627,67 @@ export function ChunkPage() {
   useEffect(() => {
     fetchHierarchyChunks(selectedHierarchyLevel);
   }, [selectedHierarchyLevel]);
+
+  const loadHierarchyData = React.useCallback(
+    async (targetDocId?: string) => {
+      try {
+        setHierarchyLoading(true);
+        setHierarchyError(null);
+        const response: ChunkHierarchyResponse = await api.getChunkHierarchyTree(
+          targetDocId
+        );
+        const documents = response?.documents || [];
+        setHierarchyData(documents);
+        setHierarchyTimestamp(response?.timestamp || null);
+
+        const defaultExpanded = new Set<string>();
+        documents.forEach((doc) => {
+          doc.law_nodes.forEach((lawNode) => {
+            const lawKey = makeNodeKey(lawNode);
+            defaultExpanded.add(lawKey);
+            lawNode.children.forEach((child) => {
+              if (["chapter", "section"].includes(child.level)) {
+                defaultExpanded.add(makeNodeKey(child));
+              }
+            });
+          });
+        });
+        setExpandedNodes(defaultExpanded);
+      } catch (error) {
+        console.error("載入層級樹失敗:", error);
+        setHierarchyError(
+          error instanceof Error ? error.message : "載入層級樹失敗"
+        );
+        setHierarchyData([]);
+      } finally {
+        setHierarchyLoading(false);
+      }
+    },
+    [makeNodeKey]
+  );
+
+  useEffect(() => {
+    if (!docId || chunkingResults.length === 0) {
+      setHierarchyData([]);
+      setHierarchyTimestamp(null);
+      setCitationResults([]);
+      setSearchFilters(null);
+      setHighlightedChunkId(null);
+      return;
+    }
+    loadHierarchyData(docId);
+  }, [docId, chunkingResults, loadHierarchyData]);
+
+  const handleRefreshHierarchy = React.useCallback(() => {
+    if (!docId) return;
+    loadHierarchyData(docId);
+  }, [docId, loadHierarchyData]);
+
+  useEffect(() => {
+    if (hierarchyView === "list" && !showAllChunks) {
+      setShowAllChunks(true);
+    }
+  }, [hierarchyView, showAllChunks]);
 
   // 步驟2: 執行分塊操作
   const handleRunChunking = async () => {
@@ -591,6 +790,177 @@ export function ChunkPage() {
     setChunkFilterLength({ min: 0, max: 10000 });
     setChunkingProgress(0);
     setChunkingTaskId(null);
+  };
+
+  const handleHighlightChunk = React.useCallback(
+    (chunkId: string) => {
+      if (!chunkId) return;
+      setHierarchyView("tree");
+      expandPathForChunk(chunkId);
+      setHighlightedChunkId(chunkId);
+    },
+    [expandPathForChunk]
+  );
+
+  const handleCitationSearch = async (
+    event: React.FormEvent<HTMLFormElement>
+  ) => {
+    event.preventDefault();
+    if (!citationQuery.trim()) {
+      setCitationError("請輸入要搜尋的章、節、條或枚舉項");
+      setCitationResults([]);
+      return;
+    }
+    if (!docId) {
+      setCitationError("請先完成上傳並取得文檔ID");
+      return;
+    }
+    setCitationLoading(true);
+    setCitationError(null);
+    try {
+      const response: ChunkSearchResponse = await api.searchChunkByCitation({
+        query: citationQuery.trim(),
+        doc_id: docId,
+      });
+      setCitationResults(response?.results || []);
+      setSearchFilters(response?.normalized_filters || null);
+      if (response?.results && response.results.length > 0) {
+        handleHighlightChunk(response.results[0].chunk_id);
+      } else {
+        setHighlightedChunkId(null);
+      }
+    } catch (error) {
+      console.error("法條搜尋失敗:", error);
+      setCitationError(error instanceof Error ? error.message : "搜尋失敗");
+      setCitationResults([]);
+    } finally {
+      setCitationLoading(false);
+    }
+  };
+
+  const handleResetCitationSearch = () => {
+    setCitationQuery("");
+    setCitationResults([]);
+    setCitationError(null);
+    setSearchFilters(null);
+    setHighlightedChunkId(null);
+  };
+
+  const renderHierarchyNode = (
+    node: ChunkHierarchyNode,
+    depth: number = 0
+  ): React.ReactNode => {
+    const nodeKey = makeNodeKey(node);
+    const hasChildren = node.children && node.children.length > 0;
+    const isExpanded = expandedNodes.has(nodeKey);
+    const isHighlighted = node.chunk?.chunk_id === highlightedChunkId;
+
+    return (
+      <div key={nodeKey} className={`mb-2 ${depth > 0 ? "ms-3" : ""}`}>
+        <div
+          className={`d-flex align-items-center gap-2 ${
+            isHighlighted ? "bg-warning bg-opacity-25 rounded p-2" : ""
+          }`}
+        >
+          {hasChildren ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-outline-secondary"
+              onClick={() => toggleNodeExpansion(nodeKey)}
+              aria-expanded={isExpanded}
+            >
+              {isExpanded ? (
+                <i className="bi bi-dash-lg"></i>
+              ) : (
+                <i className="bi bi-plus-lg"></i>
+              )}
+            </button>
+          ) : (
+            <span
+              className="d-inline-flex align-items-center justify-content-center btn btn-sm btn-light disabled"
+              style={{ width: "32px" }}
+            >
+              <i className="bi bi-dot"></i>
+            </span>
+          )}
+          <span className="badge bg-secondary text-uppercase">
+            {node.level}
+          </span>
+          <span className="fw-semibold">{node.label}</span>
+          {node.chunk && (
+            <div className="ms-auto d-flex align-items-center gap-2">
+              <span className="text-muted small">
+                {node.chunk.content_length} 字
+              </span>
+              <button
+                type="button"
+                className="btn btn-outline-secondary btn-sm"
+                onClick={() =>
+                  navigator.clipboard.writeText(node.chunk!.chunk_id)
+                }
+              >
+                <i className="bi bi-clipboard"></i> ID
+              </button>
+            </div>
+          )}
+        </div>
+        {node.chunk && (
+          <div className={`mt-2 ${depth > 0 ? "ms-4" : ""}`}>
+            <details open={isHighlighted}>
+              <summary className="small text-muted">
+                Chunk ID: {node.chunk.chunk_id}
+              </summary>
+              <pre
+                className="small mt-2 p-3 bg-light border rounded"
+                style={{ whiteSpace: "pre-wrap" }}
+              >
+                {node.chunk.content}
+              </pre>
+            </details>
+          </div>
+        )}
+        {hasChildren && isExpanded && (
+          <div className="mt-2 ms-4">
+            {node.children.map((child) =>
+              renderHierarchyNode(child, depth + 1)
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSearchFilterSummary = () => {
+    if (!searchFilters) return null;
+    const parts: string[] = [];
+    if (searchFilters.chapter) {
+      parts.push(`第${searchFilters.chapter}章`);
+    }
+    if (searchFilters.section) {
+      parts.push(`第${searchFilters.section}節`);
+    }
+    if (searchFilters.article_canonical) {
+      const articleText = searchFilters.article_suffix
+        ? `第${searchFilters.article}條之${searchFilters.article_suffix}`
+        : `第${searchFilters.article}條`;
+      parts.push(articleText);
+    }
+    if (searchFilters.paragraph) {
+      parts.push(`第${searchFilters.paragraph}項`);
+    }
+    if (searchFilters.subparagraph) {
+      parts.push(`第${searchFilters.subparagraph}款`);
+    }
+    if (searchFilters.item) {
+      parts.push(`第${searchFilters.item}目`);
+    }
+    if (!parts.length) return null;
+    return (
+      <div className="alert alert-info small mt-3 mb-0">
+        <div className="fw-semibold mb-1">套用條件</div>
+        <div>{parts.join(" / ")}</div>
+      </div>
+    );
   };
 
   // 過濾和搜索分塊
@@ -890,530 +1260,632 @@ export function ChunkPage() {
 
                             {/* 分塊內容查看 */}
                             <div className="mb-4">
-                              <div className="d-flex justify-content-between align-items-center mb-3">
+                              <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
                                 <h6 className="mb-0">分塊內容查看</h6>
-                                <button
-                                  className="btn btn-outline-primary btn-sm"
-                                  onClick={() =>
-                                    setShowAllChunks(!showAllChunks)
-                                  }
-                                >
-                                  {showAllChunks ? (
-                                    <>
-                                      <i className="bi bi-eye-slash me-1"></i>
-                                      隱藏所有分塊
-                                    </>
-                                  ) : (
-                                    <>
-                                      <i className="bi bi-eye me-1"></i>
-                                      查看所有分塊
-                                    </>
-                                  )}
-                                </button>
+                                <div className="btn-group btn-group-sm" role="group">
+                                  <button
+                                    type="button"
+                                    className={`btn ${
+                                      hierarchyView === "tree"
+                                        ? "btn-primary"
+                                        : "btn-outline-primary"
+                                    }`}
+                                    onClick={() => setHierarchyView("tree")}
+                                  >
+                                    <i className="bi bi-diagram-3 me-1"></i>
+                                    層級樹
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={`btn ${
+                                      hierarchyView === "list"
+                                        ? "btn-primary"
+                                        : "btn-outline-primary"
+                                    }`}
+                                    onClick={() => setHierarchyView("list")}
+                                  >
+                                    <i className="bi bi-list-ul me-1"></i>
+                                    列表
+                                  </button>
+                                </div>
                               </div>
 
-                              {showAllChunks && (
-                                <div className="mb-3">
-                                  {/* 搜索和過濾控制 */}
-                                  <div className="row g-2 mb-3">
-                                    <div className="col-md-4">
-                                      <input
-                                        type="text"
-                                        className="form-control form-control-sm"
-                                        placeholder="搜索分塊內容..."
-                                        value={chunkSearchTerm}
-                                        onChange={(e) =>
-                                          setChunkSearchTerm(e.target.value)
-                                        }
-                                      />
-                                    </div>
-                                    <div className="col-md-2">
-                                      <select
-                                        className="form-select form-select-sm"
-                                        value={selectedHierarchyLevel}
-                                        onChange={(e) =>
-                                          setSelectedHierarchyLevel(
-                                            e.target.value
-                                          )
-                                        }
-                                      >
-                                        <option value="all">所有層級</option>
-                                        <option value="document">章級</option>
-                                        <option value="document_component">
-                                          節級
-                                        </option>
-                                        <option value="basic_unit_hierarchy">
-                                          條級
-                                        </option>
-                                        <option value="basic_unit">項級</option>
-                                        <option value="basic_unit_component">
-                                          款級
-                                        </option>
-                                        <option value="enumeration">
-                                          目級
-                                        </option>
-                                      </select>
-                                    </div>
-                                    <div className="col-md-3">
-                                      <input
-                                        type="number"
-                                        className="form-control form-control-sm"
-                                        placeholder="最小長度"
-                                        value={chunkFilterLength.min || ""}
-                                        onChange={(e) =>
-                                          setChunkFilterLength((prev) => ({
-                                            ...prev,
-                                            min: parseInt(e.target.value) || 0,
-                                          }))
-                                        }
-                                      />
-                                    </div>
-                                    <div className="col-md-3">
-                                      <input
-                                        type="number"
-                                        className="form-control form-control-sm"
-                                        placeholder="最大長度"
-                                        value={chunkFilterLength.max || ""}
-                                        onChange={(e) =>
-                                          setChunkFilterLength((prev) => ({
-                                            ...prev,
-                                            max:
-                                              parseInt(e.target.value) || 10000,
-                                          }))
-                                        }
-                                      />
-                                    </div>
+                              {hierarchyView === "tree" ? (
+                                <>
+                                  <div className="border rounded p-3 bg-light">
+                                    <form
+                                      className="row g-2 align-items-end"
+                                      onSubmit={handleCitationSearch}
+                                    >
+                                      <div className="col-md-6">
+                                        <label className="form-label fw-semibold mb-1">
+                                          法條搜尋（例：第3條第1項第19款第3目）
+                                        </label>
+                                        <input
+                                          type="text"
+                                          className="form-control"
+                                          placeholder="輸入章、節、條、項、款、目等組合"
+                                          value={citationQuery}
+                                          onChange={(e) =>
+                                            setCitationQuery(e.target.value)
+                                          }
+                                        />
+                                      </div>
+                                      <div className="col-md-3">
+                                        <button
+                                          type="submit"
+                                          className="btn btn-primary w-100"
+                                          disabled={citationLoading}
+                                        >
+                                          {citationLoading ? (
+                                            <>
+                                              <span className="spinner-border spinner-border-sm me-2"></span>
+                                              搜尋中...
+                                            </>
+                                          ) : (
+                                            <>
+                                              <i className="bi bi-search me-1"></i>
+                                              搜尋法條
+                                            </>
+                                          )}
+                                        </button>
+                                      </div>
+                                      <div className="col-md-3 text-md-end">
+                                        <div className="d-flex gap-2">
+                                          <button
+                                            type="button"
+                                            className="btn btn-outline-secondary w-100"
+                                            onClick={handleResetCitationSearch}
+                                          >
+                                            <i className="bi bi-eraser me-1"></i>
+                                            清除
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="btn btn-outline-primary w-100"
+                                            onClick={handleRefreshHierarchy}
+                                            disabled={hierarchyLoading}
+                                          >
+                                            <i className="bi bi-arrow-clockwise me-1"></i>
+                                            重新整理
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </form>
+                                    {renderSearchFilterSummary()}
                                   </div>
 
-                                  {/* 過濾結果統計 */}
-                                  {(() => {
-                                    if (selectedHierarchyLevel === "all") {
-                                      const filteredChunks =
-                                        getFilteredChunks();
-                                      const totalChunks =
-                                        chunkingResults.reduce(
-                                          (sum, result) =>
-                                            sum +
-                                            (
-                                              result.all_chunks ||
-                                              result.chunks ||
-                                              []
-                                            ).length,
-                                          0
-                                        );
-                                      return (
-                                        <div className="alert alert-info py-2">
-                                          <small>
-                                            顯示 {filteredChunks.length} /{" "}
-                                            {totalChunks} 個分塊
-                                            {chunkSearchTerm &&
-                                              ` (搜索: "${chunkSearchTerm}")`}
-                                            {(chunkFilterLength.min > 0 ||
-                                              chunkFilterLength.max < 10000) &&
-                                              ` (長度: ${chunkFilterLength.min}-${chunkFilterLength.max} 字符)`}
-                                          </small>
-                                        </div>
-                                      );
-                                    } else {
-                                      const levelNames: {
-                                        [key: string]: string;
-                                      } = {
-                                        document: "章級",
-                                        document_component: "節級",
-                                        basic_unit_hierarchy: "條級",
-                                        basic_unit: "項級",
-                                        basic_unit_component: "款級",
-                                        enumeration: "目級",
-                                      };
-                                      return (
-                                        <div className="alert alert-info py-2">
-                                          <small>
-                                            {loadingHierarchyChunks ? (
-                                              <>
-                                                <i className="spinner-border spinner-border-sm me-1"></i>
-                                                載入{" "}
-                                                {levelNames[
-                                                  selectedHierarchyLevel
-                                                ] ||
-                                                  selectedHierarchyLevel}{" "}
-                                                分塊中...
-                                              </>
-                                            ) : (
-                                              <>
-                                                顯示 {hierarchyChunks.length} 個{" "}
-                                                {levelNames[
-                                                  selectedHierarchyLevel
-                                                ] ||
-                                                  selectedHierarchyLevel}{" "}
-                                                分塊
-                                                {chunkSearchTerm &&
-                                                  ` (搜索: "${chunkSearchTerm}")`}
-                                              </>
-                                            )}
-                                          </small>
-                                        </div>
-                                      );
-                                    }
-                                  })()}
-                                </div>
-                              )}
+                                  {citationError && (
+                                    <div className="alert alert-danger mt-3">
+                                      <i className="bi bi-exclamation-octagon me-2"></i>
+                                      {citationError}
+                                    </div>
+                                  )}
 
-                              {/* 分塊列表 */}
-                              <div
-                                className="accordion"
-                                id={`chunkPreview-${Date.now()}`}
-                              >
-                                {showAllChunks &&
-                                  selectedHierarchyLevel === "all" &&
-                                  getFilteredChunks().map(
-                                    (chunkInfo, index) => {
-                                      const {
-                                        chunk,
-                                        chunkId,
-                                        span,
-                                        metadata,
-                                        resultIndex,
-                                        chunkIndex,
-                                        strategy,
-                                        config,
-                                      } = chunkInfo;
-                                      const uniqueId = `chunk-${resultIndex}-${chunkIndex}-${Date.now()}`;
-                                      const accordionId = `chunkPreview-${Date.now()}`;
-                                      return (
+                                  {citationResults.length > 0 && (
+                                    <div className="mt-3">
+                                      <h6 className="fw-semibold mb-2">
+                                        <i className="bi bi-search me-1"></i>
+                                        搜尋結果（{citationResults.length}）
+                                      </h6>
+                                      {citationResults.map((result) => (
                                         <div
-                                          key={uniqueId}
-                                          className="accordion-item"
+                                          key={result.chunk_id}
+                                          className={`card mb-2 ${
+                                            result.chunk_id === highlightedChunkId
+                                              ? "border-primary"
+                                              : ""
+                                          }`}
                                         >
-                                          <h2 className="accordion-header">
-                                            <button
-                                              className="accordion-button collapsed"
-                                              type="button"
-                                              data-bs-toggle="collapse"
-                                              data-bs-target={`#${uniqueId}`}
-                                              aria-expanded="false"
-                                              aria-controls={uniqueId}
-                                            >
-                                              <div className="d-flex justify-content-between w-100 me-3">
-                                                <div className="d-flex flex-column">
-                                                  <span>
-                                                    {strategyInfo[
-                                                      strategy as ChunkStrategy
-                                                    ]?.name || strategy}{" "}
-                                                    - 分塊 {chunkIndex + 1}
-                                                  </span>
-                                                  {chunkId && (
-                                                    <small className="text-primary fw-bold">
-                                                      ID: {chunkId}
-                                                    </small>
-                                                  )}
-                                                  {span && (
-                                                    <small className="text-info">
-                                                      Span: [{span.start}-
-                                                      {span.end}]
-                                                    </small>
-                                                  )}
+                                          <div className="card-body">
+                                            <div className="d-flex justify-content-between align-items-center">
+                                              <div>
+                                                <div className="fw-semibold">
+                                                  {result.path_label}
                                                 </div>
-                                                <span className="badge bg-secondary">
-                                                  {getLevelLabel(metadata) ||
-                                                    `${chunk.length} 字符`}
-                                                </span>
+                                                <div className="text-muted small">
+                                                  {result.doc_name} · 分塊 {" "}
+                                                  {result.chunk_index + 1}
+                                                </div>
                                               </div>
-                                            </button>
-                                          </h2>
-                                          <div
-                                            id={uniqueId}
-                                            className="accordion-collapse collapse"
-                                            data-bs-parent={`#${accordionId}`}
-                                            aria-labelledby={`heading-${uniqueId}`}
-                                          >
-                                            <div className="accordion-body">
-                                              <div className="d-flex justify-content-between align-items-center mb-2">
-                                                <div className="d-flex flex-column">
-                                                  <small className="text-muted">
-                                                    {strategyInfo[
-                                                      strategy as ChunkStrategy
-                                                    ]?.name || strategy}{" "}
-                                                    | 分塊 {chunkIndex + 1}
-                                                    {metadata
-                                                      ? ` | ${getLevelPathText(
-                                                          metadata
-                                                        )}`
-                                                      : ` | 大小: ${
-                                                          config.chunk_size
-                                                        } | 重疊: ${(
-                                                          config.overlap_ratio *
-                                                          100
-                                                        ).toFixed(1)}%`}
-                                                  </small>
-                                                  {chunkId && (
-                                                    <small className="text-primary fw-bold">
-                                                      Chunk ID: {chunkId}
-                                                    </small>
-                                                  )}
-                                                  {span && (
-                                                    <small className="text-info">
-                                                      原文位置: [{span.start}-
-                                                      {span.end}] 字符
-                                                    </small>
-                                                  )}
-                                                </div>
+                                              <div className="d-flex gap-2">
                                                 <button
-                                                  className="btn btn-outline-secondary btn-sm"
-                                                  onClick={() => {
-                                                    navigator.clipboard.writeText(
-                                                      chunk
-                                                    );
-                                                  }}
-                                                  title="複製分塊內容"
+                                                  type="button"
+                                                  className="btn btn-sm btn-outline-primary"
+                                                  onClick={() =>
+                                                    handleHighlightChunk(
+                                                      result.chunk_id
+                                                    )
+                                                  }
                                                 >
-                                                  <i className="bi bi-clipboard"></i>
+                                                  <i className="bi bi-diagram-3 me-1"></i>
+                                                  樹狀定位
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  className="btn btn-sm btn-outline-secondary"
+                                                  onClick={() =>
+                                                    navigator.clipboard.writeText(
+                                                      result.chunk_id
+                                                    )
+                                                  }
+                                                >
+                                                  <i className="bi bi-clipboard me-1"></i>
+                                                  複製ID
                                                 </button>
                                               </div>
-
-                                              {/* 顯示法條JSON spans信息 */}
-                                              {metadata?.overlapping_law_spans
-                                                ?.length > 0 && (
-                                                <div className="mb-3">
-                                                  <h6 className="text-success mb-2">
-                                                    <i className="bi bi-file-text me-1"></i>
-                                                    對應法條JSON spans:
-                                                  </h6>
-                                                  <div className="row">
-                                                    {metadata.overlapping_law_spans
-                                                      .slice(0, 3)
-                                                      .map(
-                                                        (
-                                                          lawSpan: any,
-                                                          lawIndex: number
-                                                        ) => (
-                                                          <div
-                                                            key={lawIndex}
-                                                            className="col-md-4 mb-2"
-                                                          >
-                                                            <div className="card bg-success bg-opacity-10 border-success">
-                                                              <div className="card-body p-2">
-                                                                <h6 className="card-title text-success mb-1 small">
-                                                                  {
-                                                                    lawSpan.article_name
-                                                                  }
-                                                                </h6>
-                                                                <p className="card-text small mb-1">
-                                                                  <strong>
-                                                                    ID:
-                                                                  </strong>{" "}
-                                                                  {
-                                                                    lawSpan.article_id
-                                                                  }
-                                                                </p>
-                                                                <p className="card-text small mb-1">
-                                                                  <strong>
-                                                                    位置:
-                                                                  </strong>{" "}
-                                                                  [
-                                                                  {
-                                                                    lawSpan.start_char
-                                                                  }
-                                                                  -
-                                                                  {
-                                                                    lawSpan.end_char
-                                                                  }
-                                                                  ]
-                                                                </p>
-                                                                <p className="card-text small mb-1">
-                                                                  <strong>
-                                                                    重疊:
-                                                                  </strong>{" "}
-                                                                  {(
-                                                                    lawSpan.overlap_ratio *
-                                                                    100
-                                                                  ).toFixed(1)}
-                                                                  %
-                                                                </p>
-                                                                <p className="card-text small mb-0">
-                                                                  <strong>
-                                                                    章節:
-                                                                  </strong>{" "}
-                                                                  {
-                                                                    lawSpan.chapter_name
-                                                                  }{" "}
-                                                                  &gt;{" "}
-                                                                  {
-                                                                    lawSpan.section_name
-                                                                  }
-                                                                </p>
-                                                              </div>
-                                                            </div>
-                                                          </div>
-                                                        )
-                                                      )}
-                                                    {metadata
-                                                      .overlapping_law_spans
-                                                      .length > 3 && (
-                                                      <div className="col-12">
-                                                        <small className="text-muted">
-                                                          還有{" "}
-                                                          {metadata
-                                                            .overlapping_law_spans
-                                                            .length - 3}{" "}
-                                                          個法條spans...
-                                                        </small>
-                                                      </div>
-                                                    )}
-                                                  </div>
-                                                </div>
-                                              )}
-
-                                              <pre
-                                                className="small text-muted mb-0"
-                                                style={{
-                                                  whiteSpace: "pre-wrap",
-                                                  maxHeight: "300px",
-                                                  overflow: "auto",
-                                                  backgroundColor: "#f8f9fa",
-                                                  padding: "10px",
-                                                  borderRadius: "4px",
-                                                  border: "1px solid #dee2e6",
-                                                }}
-                                              >
-                                                {chunk}
-                                              </pre>
                                             </div>
+                                            <pre
+                                              className="small mt-3 p-3 bg-light border rounded"
+                                              style={{ whiteSpace: "pre-wrap" }}
+                                            >
+                                              {result.content}
+                                            </pre>
                                           </div>
                                         </div>
-                                      );
-                                    }
-                                  )}
-                                {showAllChunks &&
-                                selectedHierarchyLevel !== "all" ? (
-                                  // 顯示指定層級的chunks
-                                  loadingHierarchyChunks ? (
-                                    <div className="text-center py-4">
-                                      <div
-                                        className="spinner-border text-primary"
-                                        role="status"
-                                      >
-                                        <span className="visually-hidden">
-                                          載入中...
-                                        </span>
-                                      </div>
-                                      <p className="mt-2 text-muted">
-                                        載入分塊中...
-                                      </p>
+                                      ))}
                                     </div>
-                                  ) : hierarchyChunks.length > 0 ? (
-                                    hierarchyChunks
-                                      .filter((chunk: any) => {
-                                        // 應用搜索過濾
-                                        if (chunkSearchTerm) {
-                                          return chunk.content
-                                            .toLowerCase()
-                                            .includes(
-                                              chunkSearchTerm.toLowerCase()
-                                            );
-                                        }
-                                        return true;
-                                      })
-                                      .map((chunkInfo: any, index: number) => (
+                                  )}
+
+                                  <div className="mt-4">
+                                    {hierarchyLoading ? (
+                                      <div className="text-center py-4">
                                         <div
-                                          key={`hierarchy-${index}`}
-                                          className="accordion-item"
+                                          className="spinner-border text-primary"
+                                          role="status"
                                         >
-                                          <h2 className="accordion-header">
-                                            <button
-                                              className="accordion-button collapsed"
-                                              type="button"
-                                              data-bs-toggle="collapse"
-                                              data-bs-target={`#hierarchy-chunk-${index}`}
-                                              aria-expanded="false"
-                                              aria-controls={`hierarchy-chunk-${index}`}
-                                            >
-                                              <div className="d-flex w-100 justify-content-between align-items-center">
-                                                <span className="fw-bold">
-                                                  {chunkInfo.chunk_id}
-                                                </span>
-                                                <span className="badge bg-info me-2">
-                                                  {chunkInfo.level}
-                                                </span>
-                                                <small className="text-muted">
-                                                  {chunkInfo.content.length}{" "}
-                                                  字符
-                                                </small>
-                                              </div>
-                                            </button>
-                                          </h2>
-                                          <div
-                                            id={`hierarchy-chunk-${index}`}
-                                            className="accordion-collapse collapse"
-                                            data-bs-parent="#chunkPreview"
-                                          >
-                                            <div className="accordion-body">
-                                              <div className="row">
-                                                <div className="col-md-8">
-                                                  <h6>分塊內容：</h6>
-                                                  <div
-                                                    className="bg-light p-3 rounded"
-                                                    style={{
-                                                      maxHeight: "300px",
-                                                      overflowY: "auto",
-                                                    }}
-                                                  >
-                                                    <pre className="mb-0 small">
-                                                      {chunkInfo.content}
-                                                    </pre>
-                                                  </div>
-                                                </div>
-                                                <div className="col-md-4">
-                                                  <h6>元數據：</h6>
-                                                  <div className="bg-light p-3 rounded small">
-                                                    <p className="mb-1">
-                                                      <strong>文檔：</strong>{" "}
-                                                      {chunkInfo.doc_name}
-                                                    </p>
-                                                    <p className="mb-1">
-                                                      <strong>層級：</strong>{" "}
-                                                      {chunkInfo.level}
-                                                    </p>
-                                                    {chunkInfo.metadata &&
-                                                      Object.keys(
-                                                        chunkInfo.metadata
-                                                      ).length > 0 && (
-                                                        <div>
-                                                          <strong>
-                                                            詳細信息：
-                                                          </strong>
-                                                          <pre className="small mt-1">
-                                                            {JSON.stringify(
-                                                              chunkInfo.metadata,
-                                                              null,
-                                                              2
-                                                            )}
-                                                          </pre>
-                                                        </div>
-                                                      )}
-                                                  </div>
-                                                </div>
-                                              </div>
-                                            </div>
+                                          <span className="visually-hidden">
+                                            載入中...
+                                          </span>
+                                        </div>
+                                        <p className="mt-2 text-muted">
+                                          載入層級結構...
+                                        </p>
+                                      </div>
+                                    ) : hierarchyError ? (
+                                      <div className="alert alert-danger">
+                                        <i className="bi bi-exclamation-triangle me-2"></i>
+                                        {hierarchyError}
+                                      </div>
+                                    ) : hierarchyData.length === 0 ? (
+                                      <div className="alert alert-warning">
+                                        <i className="bi bi-info-circle me-2"></i>
+                                        尚無層級資料，請確認已完成多層級分塊
+                                      </div>
+                                    ) : (
+                                      hierarchyData.map((doc) => (
+                                        <div
+                                          key={doc.doc_id}
+                                          className="mb-4 border rounded p-3"
+                                        >
+                                          <div className="d-flex justify-content-between align-items-center mb-2">
+                                            <h6 className="fw-bold mb-0">
+                                              <i className="bi bi-file-earmark-text me-2"></i>
+                                              {doc.doc_name}
+                                            </h6>
+                                            {hierarchyTimestamp && (
+                                              <small className="text-muted">
+                                                更新時間 {hierarchyTimestamp}
+                                              </small>
+                                            )}
                                           </div>
+                                          {doc.law_nodes.map((node) =>
+                                            renderHierarchyNode(node)
+                                          )}
                                         </div>
                                       ))
-                                  ) : (
-                                    <div className="alert alert-warning">
-                                      <i className="bi bi-search me-2"></i>
-                                      該層級沒有找到分塊
-                                    </div>
-                                  )
-                                ) : null}
-                              </div>
-
-                              {showAllChunks &&
-                                selectedHierarchyLevel === "all" &&
-                                getFilteredChunks().length === 0 && (
-                                  <div className="alert alert-warning">
-                                    <i className="bi bi-search me-2"></i>
-                                    沒有找到符合條件的分塊
+                                    )}
                                   </div>
-                                )}
+                                </>
+                              ) : (
+                                <>
+                                  <div className="d-flex justify-content-between align-items-center mb-3">
+                                    <p className="text-muted mb-0">
+                                      使用列表檢視瀏覽原始分塊結果
+                                    </p>
+                                    <button
+                                      className="btn btn-outline-primary btn-sm"
+                                      onClick={() => setShowAllChunks(!showAllChunks)}
+                                    >
+                                      {showAllChunks ? (
+                                        <>
+                                          <i className="bi bi-eye-slash me-1"></i>
+                                          隱藏列表
+                                        </>
+                                      ) : (
+                                        <>
+                                          <i className="bi bi-eye me-1"></i>
+                                          查看列表
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
+
+                                  {showAllChunks && (
+                                    <div className="mb-3">
+                                      <div className="row g-2 mb-3">
+                                        <div className="col-md-4">
+                                          <input
+                                            type="text"
+                                            className="form-control form-control-sm"
+                                            placeholder="搜索分塊內容..."
+                                            value={chunkSearchTerm}
+                                            onChange={(e) =>
+                                              setChunkSearchTerm(e.target.value)
+                                            }
+                                          />
+                                        </div>
+                                        <div className="col-md-2">
+                                          <select
+                                            className="form-select form-select-sm"
+                                            value={selectedHierarchyLevel}
+                                            onChange={(e) =>
+                                              setSelectedHierarchyLevel(
+                                                e.target.value
+                                              )
+                                            }
+                                          >
+                                            <option value="all">所有層級</option>
+                                            <option value="document">章級</option>
+                                            <option value="document_component">
+                                              節級
+                                            </option>
+                                            <option value="basic_unit_hierarchy">
+                                              條級
+                                            </option>
+                                            <option value="basic_unit">項級</option>
+                                            <option value="basic_unit_component">
+                                              款級
+                                            </option>
+                                            <option value="enumeration">目級</option>
+                                          </select>
+                                        </div>
+                                        <div className="col-md-3">
+                                          <input
+                                            type="number"
+                                            className="form-control form-control-sm"
+                                            placeholder="最小長度"
+                                            value={chunkFilterLength.min || ""}
+                                            onChange={(e) =>
+                                              setChunkFilterLength((prev) => ({
+                                                ...prev,
+                                                min: parseInt(e.target.value) || 0,
+                                              }))
+                                            }
+                                          />
+                                        </div>
+                                        <div className="col-md-3">
+                                          <input
+                                            type="number"
+                                            className="form-control form-control-sm"
+                                            placeholder="最大長度"
+                                            value={chunkFilterLength.max || ""}
+                                            onChange={(e) =>
+                                              setChunkFilterLength((prev) => ({
+                                                ...prev,
+                                                max:
+                                                  parseInt(e.target.value) ||
+                                                  10000,
+                                              }))
+                                            }
+                                          />
+                                        </div>
+                                      </div>
+
+                                      {(() => {
+                                        if (selectedHierarchyLevel === "all") {
+                                          const filteredChunks =
+                                            getFilteredChunks();
+                                          const totalChunks =
+                                            chunkingResults.reduce(
+                                              (sum, result) =>
+                                                sum +
+                                                (
+                                                  result.all_chunks ||
+                                                  result.chunks ||
+                                                  []
+                                                ).length,
+                                              0
+                                            );
+                                          return (
+                                            <div className="alert alert-info py-2">
+                                              <small>
+                                                顯示 {filteredChunks.length} / {" "}
+                                                {totalChunks} 個分塊
+                                                {chunkSearchTerm &&
+                                                  ` (搜索: "${chunkSearchTerm}")`}
+                                                {(chunkFilterLength.min > 0 ||
+                                                  chunkFilterLength.max < 10000) &&
+                                                  ` (長度: ${chunkFilterLength.min}-${chunkFilterLength.max} 字符)`}
+                                              </small>
+                                            </div>
+                                          );
+                                        } else {
+                                          const levelNames: Record<string, string> = {
+                                            document: "章級",
+                                            document_component: "節級",
+                                            basic_unit_hierarchy: "條級",
+                                            basic_unit: "項級",
+                                            basic_unit_component: "款級",
+                                            enumeration: "目級",
+                                          };
+                                          return (
+                                            <div className="alert alert-info py-2">
+                                              <small>
+                                                {loadingHierarchyChunks ? (
+                                                  <>
+                                                    <i className="spinner-border spinner-border-sm me-1"></i>
+                                                    載入 {" "}
+                                                    {levelNames[selectedHierarchyLevel] ||
+                                                      selectedHierarchyLevel}{" "}
+                                                    分塊中...
+                                                  </>
+                                                ) : (
+                                                  <>
+                                                    顯示 {hierarchyChunks.length} 個 {" "}
+                                                    {levelNames[selectedHierarchyLevel] ||
+                                                      selectedHierarchyLevel}{" "}
+                                                    分塊
+                                                    {chunkSearchTerm &&
+                                                      ` (搜索: "${chunkSearchTerm}")`}
+                                                  </>
+                                                )}
+                                              </small>
+                                            </div>
+                                          );
+                                        }
+                                      })()}
+                                    </div>
+                                  )}
+
+                                  <div
+                                    className="accordion"
+                                    id={`chunkPreview-${Date.now()}`}
+                                  >
+                                    {showAllChunks &&
+                                      selectedHierarchyLevel === "all" &&
+                                      getFilteredChunks().map(
+                                        (chunkInfo, index) => {
+                                          const {
+                                            chunk,
+                                            chunkId,
+                                            span,
+                                            metadata,
+                                            resultIndex,
+                                            chunkIndex,
+                                            strategy,
+                                            config,
+                                          } = chunkInfo;
+                                          const uniqueId = `chunk-${resultIndex}-${chunkIndex}-${Date.now()}`;
+                                          const accordionId = `chunkPreview-${Date.now()}`;
+                                          return (
+                                            <div
+                                              key={uniqueId}
+                                              className="accordion-item"
+                                            >
+                                              <h2 className="accordion-header">
+                                                <button
+                                                  className="accordion-button collapsed"
+                                                  type="button"
+                                                  data-bs-toggle="collapse"
+                                                  data-bs-target={`#${uniqueId}`}
+                                                  aria-expanded="false"
+                                                  aria-controls={uniqueId}
+                                                >
+                                                  <div className="d-flex justify-content-between w-100 me-3">
+                                                    <div className="d-flex flex-column">
+                                                      <span>
+                                                        {strategyInfo[
+                                                          strategy as ChunkStrategy
+                                                        ]?.name || strategy}{" "}
+                                                        - 分塊 {chunkIndex + 1}
+                                                      </span>
+                                                      {chunkId && (
+                                                        <small className="text-primary fw-bold">
+                                                          ID: {chunkId}
+                                                        </small>
+                                                      )}
+                                                      {span && (
+                                                        <small className="text-info">
+                                                          Span: [{span.start}-{span.end}]
+                                                        </small>
+                                                      )}
+                                                    </div>
+                                                    <span className="badge bg-secondary">
+                                                      {getLevelLabel(metadata) ||
+                                                        `${chunk.length} 字符`}
+                                                    </span>
+                                                  </div>
+                                                </button>
+                                              </h2>
+                                              <div
+                                                id={uniqueId}
+                                                className="accordion-collapse collapse"
+                                                data-bs-parent={`#${accordionId}`}
+                                              >
+                                                <div className="accordion-body">
+                                                  <div className="d-flex justify-content-between align-items-center mb-2">
+                                                    <div className="d-flex flex-column">
+                                                      <small className="text-muted">
+                                                        {strategyInfo[
+                                                          strategy as ChunkStrategy
+                                                        ]?.name || strategy}{" "}
+                                                        | 分塊 {chunkIndex + 1}
+                                                        {metadata
+                                                          ? ` | ${getLevelPathText(metadata)}`
+                                                          : ` | 大小: ${config.chunk_size} | 重疊: ${(
+                                                              config.overlap_ratio * 100
+                                                            ).toFixed(1)}%`}
+                                                      </small>
+                                                      {chunkId && (
+                                                        <small className="text-primary fw-bold">
+                                                          Chunk ID: {chunkId}
+                                                        </small>
+                                                      )}
+                                                      {span && (
+                                                        <small className="text-info">
+                                                          原文位置: [{span.start}-{span.end}] 字符
+                                                        </small>
+                                                      )}
+                                                    </div>
+                                                    <button
+                                                      className="btn btn-outline-secondary btn-sm"
+                                                      onClick={() => {
+                                                        navigator.clipboard.writeText(
+                                                          chunk
+                                                        );
+                                                      }}
+                                                      title="複製分塊內容"
+                                                    >
+                                                      <i className="bi bi-clipboard"></i>
+                                                    </button>
+                                                  </div>
+                                                  <pre
+                                                    className="small text-muted mb-0"
+                                                    style={{
+                                                      whiteSpace: "pre-wrap",
+                                                      maxHeight: "300px",
+                                                      overflow: "auto",
+                                                      backgroundColor: "#f8f9fa",
+                                                      padding: "10px",
+                                                      borderRadius: "4px",
+                                                      border: "1px solid #dee2e6",
+                                                    }}
+                                                  >
+                                                    {chunk}
+                                                  </pre>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          );
+                                        }
+                                      )}
+                                    {showAllChunks &&
+                                    selectedHierarchyLevel !== "all" ? (
+                                      loadingHierarchyChunks ? (
+                                        <div className="text-center py-4">
+                                          <div
+                                            className="spinner-border text-primary"
+                                            role="status"
+                                          >
+                                            <span className="visually-hidden">
+                                              載入中...
+                                            </span>
+                                          </div>
+                                          <p className="mt-2 text-muted">
+                                            載入分塊中...
+                                          </p>
+                                        </div>
+                                      ) : hierarchyChunks.length > 0 ? (
+                                        hierarchyChunks
+                                          .filter((chunk: any) => {
+                                            if (chunkSearchTerm) {
+                                              return chunk.content
+                                                .toLowerCase()
+                                                .includes(
+                                                  chunkSearchTerm.toLowerCase()
+                                                );
+                                            }
+                                            return true;
+                                          })
+                                          .map((chunkInfo: any, index: number) => (
+                                            <div
+                                              key={`hierarchy-${index}`}
+                                              className="accordion-item"
+                                            >
+                                              <h2 className="accordion-header">
+                                                <button
+                                                  className="accordion-button collapsed"
+                                                  type="button"
+                                                  data-bs-toggle="collapse"
+                                                  data-bs-target={`#hierarchy-chunk-${index}`}
+                                                  aria-expanded="false"
+                                                  aria-controls={`hierarchy-chunk-${index}`}
+                                                >
+                                                  <div className="d-flex w-100 justify-content-between align-items-center">
+                                                    <span className="fw-bold">
+                                                      {chunkInfo.chunk_id}
+                                                    </span>
+                                                    <span className="badge bg-info me-2">
+                                                      {chunkInfo.level}
+                                                    </span>
+                                                    <small className="text-muted">
+                                                      {chunkInfo.content.length} 字符
+                                                    </small>
+                                                  </div>
+                                                </button>
+                                              </h2>
+                                              <div
+                                                id={`hierarchy-chunk-${index}`}
+                                                className="accordion-collapse collapse"
+                                                data-bs-parent="#chunkPreview"
+                                              >
+                                                <div className="accordion-body">
+                                                  <div className="row">
+                                                    <div className="col-md-8">
+                                                      <h6>分塊內容：</h6>
+                                                      <div
+                                                        className="bg-light p-3 rounded"
+                                                        style={{
+                                                          maxHeight: "300px",
+                                                          overflowY: "auto",
+                                                        }}
+                                                      >
+                                                        <pre className="mb-0 small">
+                                                          {chunkInfo.content}
+                                                        </pre>
+                                                      </div>
+                                                    </div>
+                                                    <div className="col-md-4">
+                                                      <h6>元數據：</h6>
+                                                      <div className="bg-light p-3 rounded small">
+                                                        <p className="mb-1">
+                                                          <strong>文檔：</strong> {chunkInfo.doc_name}
+                                                        </p>
+                                                        <p className="mb-1">
+                                                          <strong>層級：</strong> {chunkInfo.level}
+                                                        </p>
+                                                        {chunkInfo.metadata &&
+                                                          Object.keys(
+                                                            chunkInfo.metadata
+                                                          ).length > 0 && (
+                                                            <div>
+                                                              <strong>詳細信息：</strong>
+                                                              <pre className="small mt-1">
+                                                                {JSON.stringify(
+                                                                  chunkInfo.metadata,
+                                                                  null,
+                                                                  2
+                                                                )}
+                                                              </pre>
+                                                            </div>
+                                                          )}
+                                                      </div>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          ))
+                                      ) : (
+                                        <div className="alert alert-warning">
+                                          <i className="bi bi-search me-2"></i>
+                                          該層級沒有找到分塊
+                                        </div>
+                                      )
+                                    ) : null}
+                                  </div>
+
+                                  {showAllChunks &&
+                                    selectedHierarchyLevel === "all" &&
+                                    getFilteredChunks().length === 0 && (
+                                      <div className="alert alert-warning">
+                                        <i className="bi bi-search me-2"></i>
+                                        沒有找到符合條件的分塊
+                                      </div>
+                                    )}
+                                </>
+                              )}
                             </div>
 
                             {/* 操作按鈕 */}

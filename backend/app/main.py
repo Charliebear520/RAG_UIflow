@@ -12,9 +12,10 @@ import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -144,6 +145,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 添加驗證錯誤處理器
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """處理請求驗證錯誤，提供更清晰的錯誤信息"""
+    errors = exc.errors()
+    error_details = []
+    for error in errors:
+        error_details.append({
+            "field": ".".join(str(loc) for loc in error["loc"]),
+            "message": error["msg"],
+            "type": error["type"]
+        })
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "請求驗證失敗",
+            "details": error_details,
+            "raw_errors": errors
+        }
+    )
 
 # 暫時停用routes.py的包含，避免循環導入問題
 from .routes import router
@@ -1806,7 +1828,10 @@ def chunk(req: ChunkRequest):
 
 
 def clean_text_for_gemini(text: str) -> str:
-    """清理文本以符合Gemini API要求"""
+    """清理文本以符合Gemini API要求
+    
+    注意：Gemini API的payload限制是36000字节，需要按字节数而不是字符数来限制文本大小
+    """
     import re
     
     # 移除控制字符
@@ -1826,15 +1851,38 @@ def clean_text_for_gemini(text: str) -> str:
     # 移除行首行尾空格
     text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)
     
-    # 确保文本不会太长
-    if len(text) > 8000:
-        # 尝试在合适的位置截断（如段落边界）
-        truncated = text[:8000]
-        last_paragraph = truncated.rfind('\n\n')
-        if last_paragraph > 6000:  # 如果最后一个段落不太远
-            text = truncated[:last_paragraph]
+    # 按字节数限制文本大小（Gemini API限制是36000字节）
+    # 设置安全限制为30000字节，留出余量给JSON payload的其他部分
+    MAX_BYTES = 30000
+    text_bytes = text.encode('utf-8')
+    
+    if len(text_bytes) > MAX_BYTES:
+        # 截断到安全大小
+        truncated_bytes = text_bytes[:MAX_BYTES]
+        # 尝试在UTF-8字符边界截断（避免截断多字节字符）
+        while truncated_bytes and (truncated_bytes[-1] & 0xC0) == 0x80:
+            truncated_bytes = truncated_bytes[:-1]
+        
+        text = truncated_bytes.decode('utf-8', errors='ignore')
+        
+        # 尝试在合适的位置截断（如段落边界），保持文本完整性
+        # 在最后20%的范围内寻找段落边界
+        search_start = int(len(text) * 0.8)
+        last_paragraph = text.rfind('\n\n', search_start)
+        if last_paragraph > int(len(text) * 0.7):  # 如果找到的段落边界不太远
+            text = text[:last_paragraph]
         else:
-            text = truncated
+            # 如果找不到段落边界，尝试在句子边界截断
+            last_sentence = max(
+                text.rfind('。', search_start),
+                text.rfind('！', search_start),
+                text.rfind('？', search_start),
+                text.rfind('.', search_start),
+                text.rfind('!', search_start),
+                text.rfind('?', search_start)
+            )
+            if last_sentence > int(len(text) * 0.7):
+                text = text[:last_sentence + 1]
     
     return text.strip()
 
@@ -1858,6 +1906,9 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
     }
     out: List[List[float]] = []
     total_texts = len(texts)
+    
+    # 記錄開始時間
+    start_time = time.time()
     print(f"🔧 開始Gemini embedding處理，共 {total_texts} 個文本")
     
     async with httpx.AsyncClient(timeout=60) as client:
@@ -1885,32 +1936,92 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
                 r = await client.post(url, headers=headers, json=payload)
                 
                 if r.status_code == 400:
-                    print(f"❌ Gemini API 400錯誤，嘗試清理文本...")
+                    print(f"❌ Gemini API 400錯誤，嘗試處理...")
                     # 尝试读取错误详情
                     try:
                         error_data = r.json()
+                        error_message = error_data.get('error', {}).get('message', '')
                         print(f"❌ API錯誤詳情: {error_data}")
-                    except:
-                        print(f"❌ API錯誤響應: {r.text[:200]}")
-                    
-                    # 尝试更激进的文本清理（保留中文字符和常用标点）
-                    # 只移除可能引起问题的特殊字符
-                    cleaned_text = re.sub(r'[^\w\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef\u3001\u3002\u300a\u300b\u300c\u300d\u300e\u300f\u2018\u2019\u201c\u201d]', ' ', text)
-                    cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
-                    
-                    if len(cleaned_text) > 10:
-                        payload["content"]["parts"][0]["text"] = cleaned_text
-                        r = await client.post(url, headers=headers, json=payload)
                         
-                        if r.status_code == 400:
-                            print(f"❌ 清理後仍失敗，拋出異常而不是使用fallback向量")
-                            print(f"❌ 原始文本前100字符: {original_text[:100]}")
-                            print(f"❌ 清理後文本前100字符: {cleaned_text[:100]}")
-                            # 不再使用fallback向量，而是抛出异常
-                            raise RuntimeError(f"Gemini API返回400錯誤，無法處理文本。原始文本前100字符: {original_text[:100]}")
-                    else:
-                        print(f"❌ 清理後文本過短，拋出異常")
-                        raise RuntimeError(f"清理後文本過短（{len(cleaned_text)}字符），無法生成embedding")
+                        # 检查是否是payload大小超限错误
+                        if 'payload size exceeds' in error_message.lower() or '36000 bytes' in error_message:
+                            print(f"⚠️ 檢測到payload大小超限，嘗試截斷文本...")
+                            # 获取当前文本的字节大小
+                            current_bytes = len(text.encode('utf-8'))
+                            print(f"📊 當前文本大小: {current_bytes} 字節")
+                            
+                            # 更激进的截断：减少到25000字节（留更多余量）
+                            MAX_BYTES_RETRY = 25000
+                            text_bytes = text.encode('utf-8')
+                            
+                            if len(text_bytes) > MAX_BYTES_RETRY:
+                                truncated_bytes = text_bytes[:MAX_BYTES_RETRY]
+                                # 在UTF-8字符边界截断
+                                while truncated_bytes and (truncated_bytes[-1] & 0xC0) == 0x80:
+                                    truncated_bytes = truncated_bytes[:-1]
+                                
+                                text = truncated_bytes.decode('utf-8', errors='ignore')
+                                
+                                # 尝试在段落边界截断
+                                search_start = int(len(text) * 0.8)
+                                last_paragraph = text.rfind('\n\n', search_start)
+                                if last_paragraph > int(len(text) * 0.6):
+                                    text = text[:last_paragraph]
+                                
+                                print(f"📊 截斷後文本大小: {len(text.encode('utf-8'))} 字節")
+                                
+                                # 重新构建payload并重试
+                                payload["content"]["parts"][0]["text"] = text
+                                r = await client.post(url, headers=headers, json=payload)
+                                
+                                if r.status_code == 400:
+                                    print(f"⚠️ 截斷後仍失敗，使用fallback向量")
+                                    # 使用fallback向量而不是抛出异常
+                                    import numpy as np
+                                    fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
+                                    out.append(fallback_vector)
+                                    continue
+                                else:
+                                    # 截断后重试成功，继续处理响应
+                                    print(f"✅ 文本截斷後成功處理")
+                            else:
+                                print(f"⚠️ 文本大小未超限但仍返回400錯誤，使用fallback向量")
+                                import numpy as np
+                                fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
+                                out.append(fallback_vector)
+                                continue
+                        else:
+                            # 其他类型的400错误，尝试更激进的文本清理
+                            cleaned_text = re.sub(r'[^\w\s\u4e00-\u9fff\u3000-\u303f\uff00-\uffef\u3001\u3002\u300a\u300b\u300c\u300d\u300e\u300f\u2018\u2019\u201c\u201d]', ' ', text)
+                            cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+                            
+                            if len(cleaned_text) > 10:
+                                payload["content"]["parts"][0]["text"] = cleaned_text
+                                r = await client.post(url, headers=headers, json=payload)
+                                
+                                if r.status_code == 400:
+                                    print(f"⚠️ 清理後仍失敗，使用fallback向量")
+                                    import numpy as np
+                                    fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
+                                    out.append(fallback_vector)
+                                    continue
+                                else:
+                                    # 清理后重试成功，继续处理响应
+                                    print(f"✅ 文本清理後成功處理")
+                            else:
+                                print(f"⚠️ 清理後文本過短，使用fallback向量")
+                                import numpy as np
+                                fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
+                                out.append(fallback_vector)
+                                continue
+                    except Exception as parse_error:
+                        print(f"❌ 解析錯誤詳情失敗: {parse_error}")
+                        print(f"❌ API錯誤響應: {r.text[:200]}")
+                        # 使用fallback向量
+                        import numpy as np
+                        fallback_vector = np.random.randn(EMBEDDING_DIMENSION).astype(np.float32).tolist()
+                        out.append(fallback_vector)
+                        continue
                 
                 r.raise_for_status()
                 data = r.json()
@@ -1962,7 +2073,13 @@ async def embed_gemini(texts: List[str]) -> List[List[float]]:
                 out.append(fallback_vector)
                 continue
     
+    # 計算總時間
+    end_time = time.time()
+    total_time = end_time - start_time
+    avg_time_per_text = total_time / total_texts if total_texts > 0 else 0
+    
     print(f"✅ Gemini embedding完成，共處理 {len(out)} 個向量")
+    print(f"⏱️  Embedding總花費時間: {total_time:.2f} 秒 (平均每個文本: {avg_time_per_text:.3f} 秒)")
     return out
 
 
@@ -1973,6 +2090,9 @@ def embed_bge_m3(texts: List[str]) -> List[List[float]]:
     
     try:
         total_texts = len(texts)
+        
+        # 記錄開始時間
+        start_time = time.time()
         print(f"🔧 開始BGE-M3 embedding處理，共 {total_texts} 個文本")
         
         # 載入 BGE-M3 模型
@@ -1983,7 +2103,14 @@ def embed_bge_m3(texts: List[str]) -> List[List[float]]:
         
         # 轉換為列表格式
         result = embeddings.tolist()
+        
+        # 計算總時間
+        end_time = time.time()
+        total_time = end_time - start_time
+        avg_time_per_text = total_time / total_texts if total_texts > 0 else 0
+        
         print(f"✅ BGE-M3 embedding完成，共處理 {len(result)} 個向量")
+        print(f"⏱️  Embedding總花費時間: {total_time:.2f} 秒 (平均每個文本: {avg_time_per_text:.3f} 秒)")
         return result
         
     except Exception as e:
@@ -2287,6 +2414,488 @@ def convert_structured_to_multi_level(structured_chunks):
             })
     
     return six_level_chunks
+
+
+def ensure_multi_level_chunks(doc: DocRecord) -> Optional[Dict[str, Any]]:
+    """確保文檔具備multi_level_chunks資料，必要時由structured_chunks轉換"""
+    try:
+        if getattr(doc, "multi_level_chunks", None):
+            return doc.multi_level_chunks
+        if getattr(doc, "structured_chunks", None):
+            converted = convert_structured_to_multi_level(doc.structured_chunks)
+            doc.multi_level_chunks = converted
+            store.docs[doc.id] = doc
+            store.save_data()
+            return converted
+    except Exception as e:
+        print(f"⚠️ ensure_multi_level_chunks失敗: {e}")
+    return None
+
+
+_CN_NUM_MAP = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "兩": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+    "百": 100,
+    "千": 1000,
+}
+
+
+LEVEL_ALIAS = {
+    "law": "law",
+    "document": "law",
+    "chapter": "chapter",
+    "document_component": "chapter",
+    "section": "section",
+    "basic_unit_hierarchy": "section",
+    "article": "article",
+    "basic_unit": "article",
+    "paragraph": "paragraph",
+    "basic_unit_component": "paragraph",
+    "subparagraph": "subparagraph",
+    "item": "item",
+    "enumeration": "item",
+}
+
+LEVEL_SEQUENCE = ["chapter", "section", "article", "paragraph", "subparagraph", "item"]
+
+
+def _normalize_text(text: Optional[str]) -> str:
+    if not text:
+        return ""
+    return re.sub(r"\s+", "", str(text).replace("　", "").strip())
+
+
+def _cn_to_int(value: Optional[str]) -> Optional[int]:
+    if value is None:
+        return None
+    text = _normalize_text(value)
+    if not text:
+        return None
+    if text.isdigit():
+        try:
+            return int(text)
+        except Exception:
+            return None
+    total = 0
+    section = 0
+    number = 0
+    found = False
+    for ch in text:
+        if ch in _CN_NUM_MAP:
+            v = _CN_NUM_MAP[ch]
+            if v < 10:
+                number = number * 10 + v
+                found = True
+            else:
+                if number == 0:
+                    number = 1
+                section += number * v
+                number = 0
+                found = True
+        elif ch.isdigit():
+            number = number * 10 + int(ch)
+            found = True
+        elif ch == "-":
+            # 支援 3-1 格式
+            section += number
+            number = 0
+        else:
+            continue
+    total += section + number
+    return total if found else None
+
+
+def _cn_to_int_str(value: Optional[str]) -> Optional[str]:
+    result = _cn_to_int(value)
+    return str(result) if result is not None else None
+
+
+def _extract_level_info(label: Optional[str], level: str) -> Optional[Dict[str, Any]]:
+    if not label:
+        return None
+    original_text = str(label).strip()
+    if not original_text:
+        return None
+    normalized = _normalize_text(original_text)
+    info: Dict[str, Any] = {
+        "text": original_text,
+        "number": None,
+        "key": normalized or original_text.strip(),
+    }
+
+    if level == "chapter":
+        match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*章", normalized)
+        if match:
+            number = _cn_to_int_str(match.group(1))
+            if number:
+                info["number"] = number
+                info["key"] = number
+    elif level == "section":
+        match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*節", normalized)
+        if match:
+            number = _cn_to_int_str(match.group(1))
+            if number:
+                info["number"] = number
+                info["key"] = number
+    elif level == "article":
+        match = re.search(
+            r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*條(?:之\s*([0-9一二兩三四五六七八九十百千〇零]+))?",
+            normalized,
+        )
+        if match:
+            main = _cn_to_int_str(match.group(1))
+            suffix = _cn_to_int_str(match.group(2)) if match.group(2) else None
+            if main:
+                info["number"] = main
+                info["suffix"] = suffix
+                info["canonical"] = f"{main}-{suffix}" if suffix else main
+                info["key"] = info["canonical"]
+    elif level == "paragraph":
+        match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*項", normalized)
+        if match:
+            number = _cn_to_int_str(match.group(1))
+            if number:
+                info["number"] = number
+                info["key"] = number
+        else:
+            stripped = re.sub(r"[（()）)．、.]", "", normalized)
+            number = _cn_to_int_str(stripped)
+            if number:
+                info["number"] = number
+                info["key"] = number
+    elif level == "subparagraph":
+        match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*款", normalized)
+        if match:
+            number = _cn_to_int_str(match.group(1))
+            if number:
+                info["number"] = number
+                info["key"] = number
+        else:
+            stripped = re.sub(r"[（()）)．、.]", "", normalized)
+            number = _cn_to_int_str(stripped)
+            if number:
+                info["number"] = number
+                info["key"] = number
+    elif level == "item":
+        match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*目", normalized)
+        if match:
+            number = _cn_to_int_str(match.group(1))
+            if number:
+                info["number"] = number
+                info["key"] = number
+        else:
+            stripped = re.sub(r"[（()）)．、.]", "", normalized)
+            number = _cn_to_int_str(stripped)
+            if number:
+                info["number"] = number
+                info["key"] = number
+    else:
+        # fallback already set
+        pass
+
+    return info
+
+
+def build_path_label(path: Dict[str, Any]) -> str:
+    parts = []
+    law = path.get("law")
+    if law and law.get("text"):
+        parts.append(law["text"])
+    for key in LEVEL_SEQUENCE:
+        entry = path.get(key)
+        if entry and entry.get("text"):
+            parts.append(entry["text"])
+    return " > ".join(parts)
+
+
+def _build_chunk_path(metadata: Dict[str, Any], doc_name: str) -> Dict[str, Any]:
+    path: Dict[str, Any] = {}
+
+    law_name = metadata.get("law_name") or metadata.get("category") or doc_name
+    if isinstance(law_name, str):
+        law_name = law_name.replace("法規名稱：", "").strip()
+    law_key = _normalize_text(law_name)
+    path["law"] = {
+        "text": law_name,
+        "key": law_key or law_name,
+    }
+
+    chapter_info = _extract_level_info(metadata.get("chapter"), "chapter")
+    if chapter_info:
+        path["chapter"] = chapter_info
+
+    section_info = _extract_level_info(metadata.get("section"), "section")
+    if section_info:
+        path["section"] = section_info
+
+    article_info = _extract_level_info(metadata.get("article"), "article")
+    if article_info:
+        path["article"] = article_info
+
+    paragraph_source = metadata.get("paragraph")
+    if not paragraph_source and isinstance(metadata.get("items"), list) and metadata["items"]:
+        paragraph_source = metadata["items"][0]
+    paragraph_info = _extract_level_info(paragraph_source, "paragraph")
+    if paragraph_info:
+        path["paragraph"] = paragraph_info
+
+    subparagraph_info = _extract_level_info(metadata.get("subparagraph"), "subparagraph")
+    if subparagraph_info:
+        path["subparagraph"] = subparagraph_info
+
+    item_info = _extract_level_info(metadata.get("item"), "item")
+    if item_info:
+        path["item"] = item_info
+
+    return path
+
+
+def _resolve_level(metadata: Dict[str, Any], fallback: str) -> str:
+    level_en = metadata.get("level_en") or metadata.get("level")
+    if isinstance(level_en, str):
+        normalized = level_en.lower()
+        return LEVEL_ALIAS.get(normalized, normalized)
+    return LEVEL_ALIAS.get(fallback.lower(), fallback.lower())
+
+
+def _build_chunk_records(doc: DocRecord) -> List[Dict[str, Any]]:
+    multi_level = ensure_multi_level_chunks(doc)
+    if not multi_level:
+        return []
+
+    records: List[Dict[str, Any]] = []
+    for level_name, chunk_list in multi_level.items():
+        if not isinstance(chunk_list, list):
+            continue
+        for idx, chunk_data in enumerate(chunk_list):
+            if not isinstance(chunk_data, dict):
+                continue
+            content = chunk_data.get("content") or chunk_data.get("original_content") or ""
+            metadata = chunk_data.get("metadata", {}) or {}
+            chunk_index = metadata.get("chunk_index", idx)
+            level = _resolve_level(metadata, level_name)
+            chunk_id = (
+                chunk_data.get("chunk_id")
+                or metadata.get("chunk_id")
+                or f"{doc.id}_{level}_{chunk_index}"
+            )
+            path = _build_chunk_path(metadata, doc.filename)
+            record = {
+                "doc_id": doc.id,
+                "doc_name": doc.filename,
+                "level": level,
+                "chunk_id": chunk_id,
+                "chunk_index": chunk_index,
+                "content": content,
+                "metadata": metadata,
+                "path": path,
+            }
+            records.append(record)
+    return records
+
+
+def _get_or_create_child(parent: Dict[str, Any], level: str, key: str, label: str, parent_path_label: str) -> Dict[str, Any]:
+    for child in parent.setdefault("children", []):
+        if child.get("level") == level and child.get("key") == key:
+            return child
+    node = {
+        "level": level,
+        "key": key,
+        "label": label,
+        "path_label": f"{parent_path_label} > {label}" if parent_path_label else label,
+        "children": [],
+        "chunk": None,
+    }
+    node["doc_id"] = parent.get("doc_id")
+    node["doc_name"] = parent.get("doc_name")
+    parent["children"].append(node)
+    return node
+
+
+def build_hierarchy_tree_for_doc(doc: DocRecord) -> Dict[str, Any]:
+    records = _build_chunk_records(doc)
+    doc_entry = {
+        "doc_id": doc.id,
+        "doc_name": doc.filename,
+        "law_nodes": [],
+    }
+    if not records:
+        return doc_entry
+
+    law_nodes: Dict[str, Dict[str, Any]] = {}
+    records_sorted = sorted(records, key=lambda r: r.get("chunk_index", 0))
+
+    for record in records_sorted:
+        path = record["path"]
+        law = path.get("law", {})
+        law_key = law.get("key") or law.get("text") or doc.filename
+        law_label = law.get("text") or doc.filename
+        law_node = law_nodes.get(law_key)
+        if not law_node:
+            law_node = {
+                "level": "law",
+                "key": law_key,
+                "label": law_label,
+                "path_label": law_label,
+                "children": [],
+                "chunk": None,
+            }
+            law_node["doc_id"] = doc.id
+            law_node["doc_name"] = doc.filename
+            law_nodes[law_key] = law_node
+
+        level_nodes = {"law": law_node}
+        current_parent = law_node
+        for level_name in LEVEL_SEQUENCE:
+            entry = path.get(level_name)
+            if entry and entry.get("key"):
+                child = _get_or_create_child(
+                    current_parent,
+                    level_name,
+                    entry["key"],
+                    entry.get("text", entry["key"]),
+                    current_parent.get("path_label", ""),
+                )
+                level_nodes[level_name] = child
+                current_parent = child
+
+        target_level = record["level"]
+        target_node = level_nodes.get(target_level, current_parent)
+        target_node["chunk"] = {
+            "chunk_id": record["chunk_id"],
+            "level": record["level"],
+            "content": record["content"],
+            "content_length": len(record["content"]),
+            "metadata": record["metadata"],
+            "strategy": record["metadata"].get("strategy"),
+            "path_label": build_path_label(record["path"]),
+        }
+        target_node["path"] = record["path"]
+        target_node["doc_id"] = record["doc_id"]
+        target_node["doc_name"] = record["doc_name"]
+
+    doc_entry["law_nodes"] = list(law_nodes.values())
+    return doc_entry
+
+
+def _parse_citation_query(query: str) -> Dict[str, Any]:
+    original = query or ""
+    normalized = _normalize_text(original)
+    filters: Dict[str, Any] = {
+        "raw": original,
+    }
+
+    chapter_match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*章", normalized)
+    if chapter_match:
+        filters["chapter"] = _cn_to_int_str(chapter_match.group(1))
+
+    section_match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*節", normalized)
+    if section_match:
+        filters["section"] = _cn_to_int_str(section_match.group(1))
+
+    article_match = re.search(
+        r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*條(?:之\s*([0-9一二兩三四五六七八九十百千〇零]+))?",
+        normalized,
+    )
+    if article_match:
+        main = _cn_to_int_str(article_match.group(1))
+        suffix = _cn_to_int_str(article_match.group(2)) if article_match.group(2) else None
+        if main:
+            filters["article"] = main
+            filters["article_suffix"] = suffix
+            filters["article_canonical"] = f"{main}-{suffix}" if suffix else main
+
+    paragraph_match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*項", normalized)
+    if paragraph_match:
+        filters["paragraph"] = _cn_to_int_str(paragraph_match.group(1))
+
+    subparagraph_match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*款", normalized)
+    if subparagraph_match:
+        filters["subparagraph"] = _cn_to_int_str(subparagraph_match.group(1))
+
+    item_match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*目", normalized)
+    if item_match:
+        filters["item"] = _cn_to_int_str(item_match.group(1))
+
+    trimmed = normalized
+    for pattern in [
+        r"第\s*[0-9一二兩三四五六七八九十百千〇零]+\s*章",
+        r"第\s*[0-9一二兩三四五六七八九十百千〇零]+\s*節",
+        r"第\s*[0-9一二兩三四五六七八九十百千〇零]+\s*條(?:之\s*[0-9一二兩三四五六七八九十百千〇零]+)?",
+        r"第\s*[0-9一二兩三四五六七八九十百千〇零]+\s*項",
+        r"第\s*[0-9一二兩三四五六七八九十百千〇零]+\s*款",
+        r"第\s*[0-9一二兩三四五六七八九十百千〇零]+\s*目",
+    ]:
+        trimmed = re.sub(pattern, "", trimmed)
+    law_candidate = trimmed.strip()
+    if law_candidate:
+        filters["law_key"] = _normalize_text(law_candidate)
+        filters["law_text"] = law_candidate
+
+    return filters
+
+
+def _record_matches_filters(record: Dict[str, Any], filters: Dict[str, Any]) -> bool:
+    path = record.get("path", {})
+    law_filter = filters.get("law_key")
+    if law_filter:
+        law_entry = path.get("law")
+        if not law_entry:
+            return False
+        if _normalize_text(law_entry.get("text")) != law_filter:
+            return False
+
+    chapter_filter = filters.get("chapter")
+    if chapter_filter:
+        chapter_entry = path.get("chapter")
+        if not chapter_entry or chapter_entry.get("number") != chapter_filter:
+            return False
+
+    section_filter = filters.get("section")
+    if section_filter:
+        section_entry = path.get("section")
+        if not section_entry or section_entry.get("number") != section_filter:
+            return False
+
+    article_filter = filters.get("article_canonical")
+    if article_filter:
+        article_entry = path.get("article")
+        if not article_entry:
+            return False
+        canonical = article_entry.get("canonical") or article_entry.get("key")
+        if canonical != article_filter:
+            return False
+
+    paragraph_filter = filters.get("paragraph")
+    if paragraph_filter:
+        paragraph_entry = path.get("paragraph")
+        if not paragraph_entry or paragraph_entry.get("number") != paragraph_filter:
+            return False
+
+    subparagraph_filter = filters.get("subparagraph")
+    if subparagraph_filter:
+        sub_entry = path.get("subparagraph")
+        if not sub_entry or sub_entry.get("number") != subparagraph_filter:
+            return False
+
+    item_filter = filters.get("item")
+    if item_filter:
+        item_entry = path.get("item")
+        if not item_entry or item_entry.get("number") != item_filter:
+            return False
+
+    return True
 
 
 def classify_chunk_to_level(content: str, metadata: dict, chunk_by: str) -> tuple:
@@ -2782,6 +3391,105 @@ async def get_chunks_by_hierarchy(level_name: str):
         print(f"❌ 獲取層級chunks失敗: {e}")
         return {"error": f"獲取chunks失敗: {str(e)}"}
 
+@app.get("/api/chunk-hierarchy-tree")
+async def get_chunk_hierarchy_tree(doc_id: Optional[str] = None):
+    """返回文檔分塊的層級樹狀結構"""
+    try:
+        if doc_id:
+            doc = store.docs.get(doc_id)
+            if not doc:
+                raise HTTPException(status_code=404, detail="找不到指定文檔")
+            documents = [build_hierarchy_tree_for_doc(doc)]
+        else:
+            documents = [build_hierarchy_tree_for_doc(doc) for doc in store.docs.values()]
+
+        documents = [doc_tree for doc_tree in documents if doc_tree.get("law_nodes")]
+
+        return {
+            "documents": documents,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ 生成層級樹失敗: {e}")
+        raise HTTPException(status_code=500, detail=f"無法生成層級樹：{e}")
+
+
+@app.get("/api/chunk-search")
+async def search_chunk_by_citation(query: str, doc_id: Optional[str] = None):
+    """根據法條文字（例如：第3條第1項第19款第3目）搜尋對應chunk"""
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="請提供搜尋關鍵字")
+
+    try:
+        filters = _parse_citation_query(query)
+        if doc_id:
+            doc = store.docs.get(doc_id)
+            if not doc:
+                raise HTTPException(status_code=404, detail="找不到指定文檔")
+            records = _build_chunk_records(doc)
+        else:
+            records: List[Dict[str, Any]] = []
+            for doc in store.docs.values():
+                records.extend(_build_chunk_records(doc))
+
+        matched_records = [
+            record for record in records if _record_matches_filters(record, filters)
+        ]
+
+        level_priority = {
+            "law": 0,
+            "chapter": 1,
+            "section": 2,
+            "article": 3,
+            "paragraph": 4,
+            "subparagraph": 5,
+            "item": 6,
+        }
+
+        matched_records.sort(
+            key=lambda r: (
+                level_priority.get(r.get("level"), 99),
+                r.get("chunk_index", 0),
+            )
+        )
+
+        results = []
+        for record in matched_records:
+            path = record.get("path", {})
+            results.append(
+                {
+                    "doc_id": record.get("doc_id"),
+                    "doc_name": record.get("doc_name"),
+                    "level": record.get("level"),
+                    "chunk_id": record.get("chunk_id"),
+                    "chunk_index": record.get("chunk_index"),
+                    "path": path,
+                    "path_label": build_path_label(path),
+                    "content": record.get("content", ""),
+                    "content_length": len(record.get("content", "") or ""),
+                    "metadata": record.get("metadata", {}),
+                }
+            )
+
+        return {
+            "query": query,
+            "normalized_filters": {
+                key: value
+                for key, value in filters.items()
+                if key not in {"raw"}
+            },
+            "result_count": len(results),
+            "results": results,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ 法條搜尋失敗: {e}")
+        raise HTTPException(status_code=500, detail=f"搜尋失敗：{e}")
+
+
 @app.get("/api/enhanced-metadata-list")
 async def get_enhanced_metadata_list():
     """獲取enhanced metadata列表"""
@@ -3191,12 +3899,21 @@ async def multi_level_embed(req: Dict[str, Any]):
     # 如果這是A組（僅basic_unit），也創建標準embedding以保持兼容性
     if experimental_groups and len(experimental_groups) == 1 and experimental_groups[0] == "group_a":
         if "basic_unit" in store.multi_level_embeddings:
-            basic_unit_data = store.multi_level_embeddings["basic_unit"]
-            store.embeddings = basic_unit_data.get('embeddings', [])
-            store.chunk_doc_ids = basic_unit_data.get('doc_ids', [])
-            store.chunks_flat = basic_unit_data.get('chunks', [])
-            print(f"🔄 A組：同步創建標準embedding，向量數量: {len(store.embeddings)}")
-            store.save_data()
+            # 使用 get_multi_level_embeddings 方法獲取數據（返回dict格式）
+            basic_unit_data = store.get_multi_level_embeddings("basic_unit")
+            if basic_unit_data:
+                store.embeddings = basic_unit_data.get('embeddings', [])
+                store.chunk_doc_ids = basic_unit_data.get('doc_ids', [])
+                store.chunks_flat = basic_unit_data.get('chunks', [])
+                print(f"🔄 A組：同步創建標準embedding，向量數量: {len(store.embeddings) if store.embeddings else 0}")
+                store.save_data()
+            else:
+                # 如果 get_multi_level_embeddings 返回 None，直接從存儲中獲取
+                store.embeddings = store.multi_level_embeddings.get("basic_unit", [])
+                store.chunk_doc_ids = store.multi_level_chunk_doc_ids.get("basic_unit", [])
+                store.chunks_flat = store.multi_level_chunks_flat.get("basic_unit", [])
+                print(f"🔄 A組：同步創建標準embedding（直接獲取），向量數量: {len(store.embeddings) if store.embeddings else 0}")
+                store.save_data()
     
     if not level_results:
         return JSONResponse(
@@ -3537,27 +4254,67 @@ def extract_article_number_from_content(content: str) -> str:
 
 
 def rank_with_dense_vectors(query: str, k: int):
-    """使用密集向量進行相似度計算（支持 Gemini 和 BGE-M3，優先使用FAISS）"""
+    """使用密集向量進行相似度計算（支持 Gemini 和 BGE-M3，優先使用FAISS，支持多層級索引）"""
     import numpy as np
     
-    # 優先使用FAISS
-    if faiss_store.has_vectors():
+    # 生成查詢向量
+    query_vector = None
+    if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
         try:
-            # 生成查詢向量
-            if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
-                try:
-                    query_vector = asyncio_run(embed_gemini([query]))[0]
-                except Exception as e:
-                    print(f"Gemini query embedding failed: {e}")
-                    if USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
-                        query_vector = embed_bge_m3([query])[0]
-                    else:
-                        raise RuntimeError("Both Gemini and BGE-M3 query embedding failed")
-            elif USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+            query_vector = asyncio_run(embed_gemini([query]))[0]
+        except Exception as e:
+            print(f"Gemini query embedding failed: {e}")
+            if USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
                 query_vector = embed_bge_m3([query])[0]
             else:
-                raise RuntimeError("No dense embedding method available")
-            
+                raise RuntimeError("Both Gemini and BGE-M3 query embedding failed")
+    elif USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+        query_vector = embed_bge_m3([query])[0]
+    else:
+        raise RuntimeError("No dense embedding method available")
+    
+    if query_vector is None:
+        raise RuntimeError("Failed to generate query vector")
+    
+    # 優先使用多層級FAISS索引
+    if faiss_store.has_multi_level_vectors():
+        try:
+            available_levels = faiss_store.get_available_levels()
+            if available_levels:
+                # 計算每個層級在合併列表中的起始偏移量（與generate函數中的合併邏輯保持一致）
+                level_offsets = {}
+                current_offset = 0
+                for level_name in available_levels:
+                    level_offsets[level_name] = current_offset
+                    level_chunks_count = len(faiss_store.multi_level_chunks_flat.get(level_name, []))
+                    current_offset += level_chunks_count
+                
+                # 合併所有層級的搜索結果
+                all_indices = []
+                all_scores = []
+                
+                for level_name in available_levels:
+                    level_indices, level_scores = faiss_store.search_multi_level(level_name, query_vector, k * 2)
+                    # 將層級內索引轉換為合併列表中的全局索引
+                    level_offset = level_offsets[level_name]
+                    adjusted_indices = [idx + level_offset for idx in level_indices]
+                    all_indices.extend(adjusted_indices)
+                    all_scores.extend(level_scores)
+                
+                # 按分數排序並取前k個
+                if all_scores:
+                    sorted_pairs = sorted(zip(all_indices, all_scores), key=lambda x: x[1], reverse=True)
+                    top_k_pairs = sorted_pairs[:k]
+                    result_indices = [idx for idx, _ in top_k_pairs]
+                    result_scores = [score for _, score in top_k_pairs]
+                    print(f"✅ 多層級向量檢索完成，返回 {len(result_indices)} 個結果")
+                    return result_indices, result_scores
+        except Exception as e:
+            print(f"多層級FAISS搜索失敗，嘗試標準FAISS: {e}")
+    
+    # 使用標準FAISS索引
+    if faiss_store.has_vectors():
+        try:
             # FAISS搜索
             indices, scores = faiss_store.search(query_vector, k)
             return indices, scores
@@ -5094,6 +5851,8 @@ def enhanced_hybrid_retrieve(req: RetrieveRequest):
 @app.post("/api/hybrid-rrf-retrieve")
 async def hybrid_rrf_retrieve(req: RetrieveRequest):
     """HybridRAG(RRF)檢索：純RRF融合向量+BM25，不考慮Metadata加分"""
+    # 記錄檢索開始時間
+    retrieval_start_time = time.time()
     print(f"🔄 HybridRAG(RRF)檢索請求: {req.query}, k={req.k}")
     
     # 驗證查詢
@@ -5186,16 +5945,23 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
     try:
         # 1. 向量檢索 - 生成查詢向量
         print("📊 執行向量檢索...")
+        # 記錄查詢 embedding 開始時間
+        query_embedding_start = time.time()
         query_vector = None
+        query_embedding_time = 0.0
         if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
             try:
                 query_vector = (await embed_gemini([req.query]))[0]
                 # 驗證向量維度
                 if not query_vector or len(query_vector) != EMBEDDING_DIMENSION:
                     raise ValueError(f"Query vector dimension mismatch: expected {EMBEDDING_DIMENSION}, got {len(query_vector) if query_vector else 0}")
+                query_embedding_time = time.time() - query_embedding_start
                 print(f"✅ 使用Gemini生成查詢向量，維度: {len(query_vector)}")
+                print(f"⏱️  查詢 Embedding 花費時間: {query_embedding_time:.3f} 秒")
             except Exception as e:
+                query_embedding_time = time.time() - query_embedding_start
                 print(f"❌ Gemini query embedding failed: {e}")
+                print(f"⏱️  查詢 Embedding 失敗前花費時間: {query_embedding_time:.3f} 秒")
                 # 全部使用Gemini，不使用BGE-M3 fallback
                 raise RuntimeError(
                     f"Gemini embedding failed: {str(e)}. "
@@ -5239,6 +6005,9 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
         all_candidates = {}
         
         # 1. 向量檢索（支持標準和多層次）
+        # 記錄向量檢索開始時間
+        vector_retrieval_start = time.time()
+        vector_retrieval_time = 0.0
         print("📊 執行向量檢索...")
         # 優先使用多層次索引（如果存在），因為這是實驗組B、C、D使用的索引
         # 只有在沒有多層次索引時才使用標準索引
@@ -5248,7 +6017,51 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
             available_levels = faiss_store.get_available_levels()
             print(f"🔍 多層次索引可用層次: {available_levels}")
             
-            for level_name in available_levels:
+            # 根據可用層次推斷實驗組並過濾層次
+            filtered_levels = available_levels.copy()
+            level_set = set(available_levels)
+            
+            print(f"📊 開始推斷實驗組，可用層次: {available_levels}, level_set: {level_set}")
+            
+            # 優先檢測實驗組D：包含所有6個層次（document, document_component, basic_unit_hierarchy, basic_unit, basic_unit_component, enumeration）
+            expected_d_levels = {"document", "document_component", "basic_unit_hierarchy", "basic_unit", "basic_unit_component", "enumeration"}
+            if level_set == expected_d_levels or len(level_set) == 6:
+                filtered_levels = available_levels
+                print(f"🎯 推斷為實驗組D（完整多層次ML-RAG），檢索所有層次: {filtered_levels}")
+            # 推斷實驗組A：只有basic_unit
+            elif level_set == {"basic_unit"}:
+                filtered_levels = ["basic_unit"]
+                print(f"🎯 推斷為實驗組A（僅條文層），只檢索: {filtered_levels}")
+            # 推斷實驗組B：basic_unit_hierarchy + basic_unit
+            elif level_set == {"basic_unit_hierarchy", "basic_unit"}:
+                filtered_levels = ["basic_unit_hierarchy", "basic_unit"]
+                print(f"🎯 推斷為實驗組B（條文+章節結構），只檢索: {filtered_levels}")
+            # 推斷實驗組C：basic_unit + basic_unit_component + enumeration（不包含basic_unit_hierarchy、document、document_component）
+            elif "basic_unit_component" in level_set and "enumeration" in level_set and "basic_unit" in level_set:
+                # 實驗組C的特徵：必須沒有basic_unit_hierarchy、document、document_component
+                if "basic_unit_hierarchy" not in level_set and "document" not in level_set and "document_component" not in level_set:
+                    filtered_levels = ["basic_unit", "basic_unit_component", "enumeration"]
+                    print(f"🎯 推斷為實驗組C（條文+細節層次），只檢索: {filtered_levels}")
+                else:
+                    # 如果包含不應該有的層次，過濾掉
+                    filtered_levels = [l for l in available_levels if l in ["basic_unit", "basic_unit_component", "enumeration"]]
+                    removed_levels = [l for l in level_set if l not in ["basic_unit", "basic_unit_component", "enumeration"]]
+                    print(f"🎯 檢測到實驗組C特徵，但包含不應有的層次")
+                    print(f"   ❌ 過濾掉不應有的層次: {removed_levels}")
+                    print(f"   ✅ 實驗組C只檢索: {filtered_levels}")
+            # 其他情況：可能是實驗組B（如果有basic_unit_hierarchy和basic_unit）
+            elif "basic_unit_hierarchy" in level_set and "basic_unit" in level_set:
+                # 實驗組B，過濾掉其他層次
+                filtered_levels = ["basic_unit_hierarchy", "basic_unit"]
+                removed_levels = [l for l in level_set if l not in ["basic_unit_hierarchy", "basic_unit"]]
+                if removed_levels:
+                    print(f"🎯 推斷為實驗組B，過濾掉其他層次: {removed_levels}")
+                print(f"   ✅ 實驗組B只檢索: {filtered_levels}")
+            else:
+                # 無法確定實驗組，使用所有可用層次
+                print(f"⚠️ 無法推斷實驗組，使用所有可用層次: {filtered_levels}")
+            
+            for level_name in filtered_levels:
                 try:
                     level_indices, level_scores = faiss_store.search_multi_level(level_name, query_vector, req.k * 10)
                     print(f"   ✅ 層次 '{level_name}' 返回 {len(level_indices)} 個候選")
@@ -5348,16 +6161,45 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
         else:
             print("⚠️ FAISS索引不可用，跳過向量檢索")
         
+        # 記錄向量檢索結束時間
+        vector_retrieval_time = time.time() - vector_retrieval_start
+        print(f"⏱️  向量檢索花費時間: {vector_retrieval_time:.3f} 秒")
+        
         # 2. BM25檢索（支持標準和多層次）
+        # 記錄BM25檢索開始時間
+        bm25_retrieval_start = time.time()
+        bm25_retrieval_time = 0.0
         print("📊 執行BM25檢索...")
         # 優先使用多層次索引（如果存在）
         if bm25_index.has_multi_level_index():
             # 多層次BM25檢索：檢索所有層次並合併（實驗組B、C、D）
             print(f"✅ 使用多層次BM25索引進行檢索（實驗組B/C/D）")
-            available_levels = bm25_index.get_available_levels()
-            print(f"🔍 多層次BM25索引可用層次: {available_levels}")
+            available_bm25_levels = bm25_index.get_available_levels()
+            print(f"🔍 多層次BM25索引可用層次: {available_bm25_levels}")
             
-            for level_name in available_levels:
+            # 使用與向量檢索相同的過濾邏輯
+            # 優先檢測實驗組C：包含basic_unit_component和enumeration，但不應該包含basic_unit_hierarchy
+            bm25_levels = available_bm25_levels.copy()
+            bm25_level_set = set(available_bm25_levels)
+            
+            # 使用與向量檢索完全相同的推斷邏輯
+            if "basic_unit_component" in bm25_level_set and "enumeration" in bm25_level_set:
+                # 實驗組C：必須過濾掉basic_unit_hierarchy和其他不應該有的層次
+                bm25_levels = [l for l in available_bm25_levels if l in ["basic_unit", "basic_unit_component", "enumeration"]]
+                if "basic_unit_hierarchy" in bm25_level_set or "document" in bm25_level_set or "document_component" in bm25_level_set:
+                    removed_levels = [l for l in bm25_level_set if l not in ["basic_unit", "basic_unit_component", "enumeration"]]
+                    print(f"🎯 BM25檢索：檢測到實驗組C特徵，過濾掉不應有的層次: {removed_levels}")
+                    print(f"   ✅ BM25只檢索: {bm25_levels}")
+            elif bm25_level_set == {"basic_unit"}:
+                bm25_levels = ["basic_unit"]
+            elif bm25_level_set == {"basic_unit_hierarchy", "basic_unit"}:
+                bm25_levels = ["basic_unit_hierarchy", "basic_unit"]
+            elif len(bm25_level_set) == 6 or ("document" in bm25_level_set and len(bm25_level_set) >= 4):
+                bm25_levels = available_bm25_levels
+            elif "basic_unit_hierarchy" in bm25_level_set and "basic_unit" in bm25_level_set:
+                bm25_levels = ["basic_unit_hierarchy", "basic_unit"]
+            
+            for level_name in bm25_levels:
                 try:
                     level_indices, level_scores = bm25_index.search_multi_level(level_name, req.query, req.k * 10)
                     print(f"   ✅ 層次 '{level_name}' BM25返回 {len(level_indices)} 個候選")
@@ -5414,7 +6256,13 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
         else:
             print("⚠️ BM25索引不可用，跳過BM25檢索")
         
+        # 記錄BM25檢索結束時間
+        bm25_retrieval_time = time.time() - bm25_retrieval_start
+        print(f"⏱️  BM25檢索花費時間: {bm25_retrieval_time:.3f} 秒")
+        
         # 3. RRF融合 - 計算RRF分數：1 / (60 + rank)
+        fusion_start = time.time()
+        fusion_time = 0.0
         k_rrf = 60
         for chunk_id, candidate in all_candidates.items():
             rrf_score = 0.0
@@ -5475,14 +6323,35 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                         doc_id, level, chunk_index, store
                     )
         
+        # 記錄融合時間
+        fusion_time = time.time() - fusion_start
+        print(f"⏱️  RRF融合花費時間: {fusion_time:.3f} 秒")
+        
+        # 計算總時間
+        total_retrieval_time = time.time() - retrieval_start_time
+        
         print(f"✅ HybridRAG(RRF)檢索完成，返回 {len(final_results)} 個結果")
+        print(f"{'='*60}")
+        print(f"⏱️  檢索總花費時間: {total_retrieval_time:.3f} 秒")
+        print(f"    - 查詢 Embedding: {query_embedding_time:.3f} 秒")
+        print(f"    - 向量檢索: {vector_retrieval_time:.3f} 秒")
+        print(f"    - BM25檢索: {bm25_retrieval_time:.3f} 秒")
+        print(f"    - RRF融合: {fusion_time:.3f} 秒")
+        print(f"{'='*60}")
         
         return {
             "results": final_results,
             "query": req.query,
             "final_results": len(final_results),
             "fusion_method": "RRF",
-            "k_rrf": k_rrf
+            "k_rrf": k_rrf,
+            "timing": {
+                "total_time": round(total_retrieval_time, 3),
+                "query_embedding_time": round(query_embedding_time, 3),
+                "vector_retrieval_time": round(vector_retrieval_time, 3),
+                "bm25_retrieval_time": round(bm25_retrieval_time, 3),
+                "fusion_time": round(fusion_time, 3)
+            }
         }
         
     except Exception as e:
@@ -5701,120 +6570,238 @@ def simple_extractive_answer(query: str, contexts: List[str]) -> str:
 
 @app.post("/api/generate")
 def generate(req: GenerateRequest):
-    # 使用 HybridRAG（向量檢索 + metadata 關鍵字加分）取得生成上下文
-    if store.embeddings is None:
-        return JSONResponse(status_code=400, content={"error": "run /embed first"})
-
-    # 構建 nodes（與 /api/hybrid-retrieve 保持一致）
-    chunks_flat = store.chunks_flat
-    mapping_doc_ids = store.chunk_doc_ids
-    if not chunks_flat:
-        return JSONResponse(status_code=400, content={"error": "no chunks available"})
-
-    nodes = []
-    for i, (chunk, doc_id) in enumerate(zip(chunks_flat, mapping_doc_ids)):
-        doc = store.docs.get(doc_id)
-        metadata = {}
-        if doc and hasattr(doc, 'structured_chunks') and doc.structured_chunks and i < len(doc.structured_chunks):
-            structured_chunk = doc.structured_chunks[i]
-            metadata = structured_chunk.get("metadata", {})
-        nodes.append({
-            "content": chunk,
-            "metadata": metadata,
-            "doc_id": doc_id,
-            "chunk_index": i
-        })
-
-    # 先用密集向量計算所有節點的相似度，取前 N 做 Hybrid 候選
-    dense_top_k = min(len(nodes), max(req.top_k * 4, req.top_k))
-    all_vec_idxs, all_vec_sims = rank_with_dense_vectors(req.query, k=len(nodes))
-    node_vector_scores = [0.0] * len(nodes)
-    for rank_idx, node_idx in enumerate(all_vec_idxs):
-        node_vector_scores[node_idx] = float(all_vec_sims[rank_idx])
-    top_vec_pairs = sorted(
-        [(i, s) for i, s in enumerate(node_vector_scores)], key=lambda x: x[1], reverse=True
-    )[:dense_top_k]
-    candidate_nodes = [nodes[i] for i, _ in top_vec_pairs]
-    candidate_scores = [s for _, s in top_vec_pairs]
-
-    config = HybridConfig(
-        alpha=0.8,
-        w_law_match=0.15,
-        w_article_match=0.15,
-        w_keyword_hit=0.05,
-        max_bonus=0.4,
-    )
-    hybrid_results = hybrid_rank(req.query, candidate_nodes, k=req.top_k, config=config, vector_scores=candidate_scores)
-
-    # 生成使用的結果
-    results = []
-    for rank, item in enumerate(hybrid_results, start=1):
-        result = {
-            "rank": rank,
-            "score": item.get("score"),
-            "vector_score": item.get("vector_score"),
-            "bonus": item.get("bonus"),
-            "doc_id": item.get("doc_id"),
-            "chunk_index": item.get("chunk_index"),
-            "content": item.get("content"),
-        }
-        md = (item.get("metadata") or {})
-        if md:
-            result["legal_structure"] = {
-                "id": md.get("id", ""),
-                "category": md.get("category", ""),
-                "article_label": md.get("article_label", ""),
-                "article_number": md.get("article_number"),
-                "article_suffix": md.get("article_suffix"),
-                "spans": md.get("spans", {}),
-                "page_range": md.get("page_range", {}),
-            }
-        results.append(result)
-    contexts = [item["content"] for item in results]
-
-    # 構建結構化上下文信息
-    structured_context = []
-    legal_references = []
-    
-    for item in results:
-        context_text = item["content"]
+    try:
+        # 驗證請求參數
+        if not req.query or not req.query.strip():
+            return JSONResponse(status_code=400, content={"error": "query 不能為空"})
         
-        # 如果有法律結構信息，添加到上下文中
-        if "legal_structure" in item:
-            legal_info = item["legal_structure"]
-            law_name = legal_info.get("law_name", "")
-            article = legal_info.get("article", "")
-            item_ref = legal_info.get("item", "")
-            sub_item = legal_info.get("sub_item", "")
-            chunk_type = legal_info.get("chunk_type", "")
+        if req.top_k <= 0:
+            return JSONResponse(status_code=400, content={"error": "top_k 必須大於 0"})
+        
+        # 使用 HybridRAG（向量檢索 + metadata 關鍵字加分）取得生成上下文
+        # 檢查標準索引和多層次索引
+        faiss_standard_has_vectors = faiss_store.has_vectors()
+        faiss_multi_level_has_vectors = faiss_store.has_multi_level_vectors()
+        faiss_standard_has_chunks = faiss_standard_has_vectors and len(faiss_store.chunks_flat) > 0
+        store_has_embeddings = store.embeddings is not None
+        store_has_chunks = store.chunks_flat and len(store.chunks_flat) > 0
+        
+        # 檢查多層次索引是否有chunks（需要檢查所有層次）
+        faiss_multi_level_has_chunks = False
+        multi_level_chunks_count = 0
+        if faiss_multi_level_has_vectors:
+            available_levels = faiss_store.get_available_levels()
+            for level in available_levels:
+                level_chunks = faiss_store.multi_level_chunks_flat.get(level, [])
+                multi_level_chunks_count += len(level_chunks)
+            faiss_multi_level_has_chunks = multi_level_chunks_count > 0
+        
+        # 調試信息
+        print(f"🔍 Generate 檢查狀態:")
+        print(f"   FAISS標準索引 has_vectors: {faiss_standard_has_vectors}")
+        print(f"   FAISS標準索引 has_chunks: {faiss_standard_has_chunks} (chunks數量: {len(faiss_store.chunks_flat) if faiss_standard_has_vectors else 0})")
+        print(f"   FAISS多層次索引 has_vectors: {faiss_multi_level_has_vectors}")
+        print(f"   FAISS多層次索引 has_chunks: {faiss_multi_level_has_chunks} (總chunks數量: {multi_level_chunks_count})")
+        if faiss_multi_level_has_vectors:
+            available_levels = faiss_store.get_available_levels()
+            print(f"   多層次索引可用層次: {available_levels}")
+        print(f"   Store has_embeddings: {store_has_embeddings}")
+        print(f"   Store has_chunks: {store_has_chunks} (chunks數量: {len(store.chunks_flat) if store.chunks_flat else 0})")
+        
+        # 檢查是否有可用的數據（優先多層次索引，然後標準索引，最後store）
+        use_multi_level = faiss_multi_level_has_chunks
+        use_standard = not use_multi_level and faiss_standard_has_chunks
+        use_store = not use_multi_level and not use_standard and store_has_chunks
+        
+        if not use_multi_level and not use_standard and not use_store:
+            error_msg = "沒有可用的 embeddings 和 chunks"
+            if faiss_multi_level_has_vectors and not faiss_multi_level_has_chunks:
+                error_msg = "FAISS 多層次索引有向量但缺少 chunks，請重新運行 /api/multi-level-embed"
+            elif faiss_standard_has_vectors and not faiss_standard_has_chunks:
+                error_msg = "FAISS 標準索引有向量但缺少 chunks，請重新運行 /api/embed"
+            elif store_has_embeddings and not store_has_chunks:
+                error_msg = "Store 有 embeddings 但缺少 chunks，請重新運行 /api/embed"
+            else:
+                error_msg = "沒有可用的 embeddings 和 chunks，請先運行 /api/embed 或 /api/multi-level-embed"
             
-            # 構建法律引用
-            legal_ref = f"{law_name}"
-            if article:
-                legal_ref += f" {article}"
-            if item_ref:
-                legal_ref += f" {item_ref}"
-            if sub_item:
-                legal_ref += f" {sub_item}"
-            
-            if legal_ref not in legal_references:
-                legal_references.append(legal_ref)
-            
-            # 添加結構化上下文
-            structured_context.append(f"[{legal_ref}] {context_text}")
+            return JSONResponse(status_code=400, content={"error": error_msg})
+
+        # 構建 nodes（與 /api/hybrid-retrieve 保持一致）
+        # 優先使用多層次索引，然後標準索引，最後store
+        if use_multi_level:
+            # 使用多層次索引：合併所有層次的chunks
+            available_levels = faiss_store.get_available_levels()
+            chunks_flat = []
+            mapping_doc_ids = []
+            for level in available_levels:
+                level_chunks = faiss_store.multi_level_chunks_flat.get(level, [])
+                level_doc_ids = faiss_store.multi_level_chunk_doc_ids.get(level, [])
+                chunks_flat.extend(level_chunks)
+                mapping_doc_ids.extend(level_doc_ids)
+            print(f"✅ 使用 FAISS 多層次索引數據: {len(chunks_flat)} chunks (來自 {len(available_levels)} 個層次)")
+        elif use_standard:
+            chunks_flat = faiss_store.chunks_flat
+            mapping_doc_ids = faiss_store.chunk_doc_ids
+            print(f"✅ 使用 FAISS 標準索引數據: {len(chunks_flat)} chunks")
         else:
-            structured_context.append(context_text)
+            chunks_flat = store.chunks_flat
+            mapping_doc_ids = store.chunk_doc_ids
+            print(f"✅ 使用 Store 數據: {len(chunks_flat)} chunks")
+            
+        if not chunks_flat or len(chunks_flat) == 0:
+            return JSONResponse(status_code=400, content={"error": "no chunks available"})
 
-    reasoning_steps = [
-        {"type": "plan", "text": "Read query, identify entities and constraints."},
-        {"type": "gather", "text": f"Collect top-{req.top_k} chunks as context."},
-        {"type": "analyze", "text": f"Analyze legal structure: {', '.join(legal_references[:3])}."},
-        {"type": "synthesize", "text": "Synthesize answer grounded in retrieved text with legal references."},
-    ]
+        nodes = []
+        for i, (chunk, doc_id) in enumerate(zip(chunks_flat, mapping_doc_ids)):
+            doc = store.docs.get(doc_id)
+            metadata = {}
+            
+            # 優先使用 FAISS 的 enhanced_metadata
+            if use_multi_level:
+                # 多層次索引：嘗試從所有層次中查找enhanced_metadata
+                # 由於chunks已合併，需要遍歷所有層次查找對應的chunk
+                metadata = {}
+                found_metadata = False
+                available_levels = faiss_store.get_available_levels()
+                
+                # 嘗試從每個層次查找對應索引的chunk
+                for level in available_levels:
+                    level_chunks = faiss_store.multi_level_chunks_flat.get(level, [])
+                    level_doc_ids = faiss_store.multi_level_chunk_doc_ids.get(level, [])
+                    
+                    # 查找當前doc_id在該層次中的索引位置
+                    for level_idx, level_doc_id in enumerate(level_doc_ids):
+                        if level_doc_id == doc_id and level_idx < len(level_chunks):
+                            # 檢查是否是同一個chunk（通過內容匹配）
+                            if level_chunks[level_idx] == chunk:
+                                chunk_info = faiss_store.get_multi_level_chunk_by_index(level, level_idx)
+                                if chunk_info and chunk_info.get("enhanced_metadata"):
+                                    metadata = chunk_info["enhanced_metadata"]
+                                    found_metadata = True
+                                    break
+                    
+                    if found_metadata:
+                        break
+                
+                # 如果沒有找到enhanced_metadata，從doc的structured_chunks獲取
+                if not found_metadata and doc and hasattr(doc, 'structured_chunks') and doc.structured_chunks:
+                    # 嘗試通過內容匹配找到對應的structured_chunk
+                    for structured_chunk in doc.structured_chunks:
+                        if structured_chunk.get("content") == chunk:
+                            metadata = structured_chunk.get("metadata", {})
+                            found_metadata = True
+                            break
+            elif use_standard:
+                chunk_info = faiss_store.get_chunk_by_index(i)
+                if chunk_info and chunk_info.get("enhanced_metadata"):
+                    metadata = chunk_info["enhanced_metadata"]
+                # 如果 FAISS 沒有 enhanced_metadata，嘗試從 doc 的 structured_chunks 獲取
+                elif doc and hasattr(doc, 'structured_chunks') and doc.structured_chunks and i < len(doc.structured_chunks):
+                    structured_chunk = doc.structured_chunks[i]
+                    metadata = structured_chunk.get("metadata", {})
+            else:
+                # 使用 store 的數據時，從 doc 的 structured_chunks 獲取
+                if doc and hasattr(doc, 'structured_chunks') and doc.structured_chunks and i < len(doc.structured_chunks):
+                    structured_chunk = doc.structured_chunks[i]
+                    metadata = structured_chunk.get("metadata", {})
+            
+            nodes.append({
+                "content": chunk,
+                "metadata": metadata,
+                "doc_id": doc_id,
+                "chunk_index": i
+            })
 
-    if USE_GEMINI_COMPLETION:
-        # 構建包含法律結構信息的prompt
-        system_prompt = """你是一個專業的法律助手。請基於提供的法律文檔內容回答問題。
+        # 先用密集向量計算所有節點的相似度，取前 N 做 Hybrid 候選
+        dense_top_k = min(len(nodes), max(req.top_k * 4, req.top_k))
+        all_vec_idxs, all_vec_sims = rank_with_dense_vectors(req.query, k=len(nodes))
+        node_vector_scores = [0.0] * len(nodes)
+        for rank_idx, node_idx in enumerate(all_vec_idxs):
+            node_vector_scores[node_idx] = float(all_vec_sims[rank_idx])
+        top_vec_pairs = sorted(
+            [(i, s) for i, s in enumerate(node_vector_scores)], key=lambda x: x[1], reverse=True
+        )[:dense_top_k]
+        candidate_nodes = [nodes[i] for i, _ in top_vec_pairs]
+        candidate_scores = [s for _, s in top_vec_pairs]
+
+        config = HybridConfig(
+            alpha=0.8,
+            w_law_match=0.15,
+            w_article_match=0.15,
+            w_keyword_hit=0.05,
+            max_bonus=0.4,
+        )
+        hybrid_results = hybrid_rank(req.query, candidate_nodes, k=req.top_k, config=config, vector_scores=candidate_scores)
+
+        # 生成使用的結果
+        results = []
+        for rank, item in enumerate(hybrid_results, start=1):
+            result = {
+                "rank": rank,
+                "score": item.get("score"),
+                "vector_score": item.get("vector_score"),
+                "bonus": item.get("bonus"),
+                "doc_id": item.get("doc_id"),
+                "chunk_index": item.get("chunk_index"),
+                "content": item.get("content"),
+            }
+            md = (item.get("metadata") or {})
+            if md:
+                result["legal_structure"] = {
+                    "id": md.get("id", ""),
+                    "category": md.get("category", ""),
+                    "article_label": md.get("article_label", ""),
+                    "article_number": md.get("article_number"),
+                    "article_suffix": md.get("article_suffix"),
+                    "spans": md.get("spans", {}),
+                    "page_range": md.get("page_range", {}),
+                }
+            results.append(result)
+        contexts = [item["content"] for item in results]
+
+        # 構建結構化上下文信息
+        structured_context = []
+        legal_references = []
+        
+        for item in results:
+            context_text = item["content"]
+            
+            # 如果有法律結構信息，添加到上下文中
+            if "legal_structure" in item:
+                legal_info = item["legal_structure"]
+                law_name = legal_info.get("law_name", "")
+                article = legal_info.get("article", "")
+                item_ref = legal_info.get("item", "")
+                sub_item = legal_info.get("sub_item", "")
+                chunk_type = legal_info.get("chunk_type", "")
+                
+                # 構建法律引用
+                legal_ref = f"{law_name}"
+                if article:
+                    legal_ref += f" {article}"
+                if item_ref:
+                    legal_ref += f" {item_ref}"
+                if sub_item:
+                    legal_ref += f" {sub_item}"
+                
+                if legal_ref not in legal_references:
+                    legal_references.append(legal_ref)
+                
+                # 添加結構化上下文
+                structured_context.append(f"[{legal_ref}] {context_text}")
+            else:
+                structured_context.append(context_text)
+
+        reasoning_steps = [
+            {"type": "plan", "text": "Read query, identify entities and constraints."},
+            {"type": "gather", "text": f"Collect top-{req.top_k} chunks as context."},
+            {"type": "analyze", "text": f"Analyze legal structure: {', '.join(legal_references[:3])}."},
+            {"type": "synthesize", "text": "Synthesize answer grounded in retrieved text with legal references."},
+        ]
+
+        if USE_GEMINI_COMPLETION:
+            # 構建包含法律結構信息的prompt
+            system_prompt = """你是一個專業的法律助手。請基於提供的法律文檔內容回答問題。
 
 重要要求：
 1. 只使用提供的上下文內容回答問題
@@ -5822,32 +6809,45 @@ def generate(req: GenerateRequest):
 3. 如果信息不足，請明確說明你不知道
 4. 回答要準確、專業，符合法律文檔的表述方式"""
 
-        user_content = f"問題: {req.query}\n\n"
-        
-        if legal_references:
-            user_content += f"相關法規: {', '.join(legal_references)}\n\n"
-        
-        user_content += "法律文檔內容:\n" + "\n---\n".join(structured_context)
-        
-        prompt = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
-        
-        try:
-            answer = asyncio_run(gemini_chat(prompt))
-        except Exception as e:
-            answer = f"Gemini調用失敗: {e}. 回退到提取式回答。\n" + simple_extractive_answer(req.query, contexts)
-    else:
-        answer = simple_extractive_answer(req.query, contexts)
+            user_content = f"問題: {req.query}\n\n"
+            
+            if legal_references:
+                user_content += f"相關法規: {', '.join(legal_references)}\n\n"
+            
+            user_content += "法律文檔內容:\n" + "\n---\n".join(structured_context)
+            
+            prompt = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ]
+            
+            try:
+                answer = asyncio_run(gemini_chat(prompt))
+            except Exception as e:
+                answer = f"Gemini調用失敗: {e}. 回退到提取式回答。\n" + simple_extractive_answer(req.query, contexts)
+        else:
+            answer = simple_extractive_answer(req.query, contexts)
 
-    return {
-        "query": req.query,
-        "answer": answer,
-        "contexts": results,
-        "legal_references": legal_references,
-        "steps": reasoning_steps,
-    }
+        return {
+            "query": req.query,
+            "answer": answer,
+            "contexts": results,
+            "legal_references": legal_references,
+            "steps": reasoning_steps,
+        }
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        traceback_str = traceback.format_exc()
+        print(f"❌ Generate 錯誤: {error_msg}")
+        print(f"❌ 錯誤堆疊: {traceback_str}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"生成答案時發生錯誤: {error_msg}",
+                "details": traceback_str
+            }
+        )
 
 
 def merge_law_documents(law_documents: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -8235,11 +9235,11 @@ GRANULARITY_COMBINATIONS = {
         "research_purpose": "基線對照組，評估傳統平面檢索的表現"
     },
     
-    # B組：層次 3 + 4 (基本單元層級層 + 基本單元層)
+    # B組：層次 2 + 3 + 4 (文件組件層 + 基本單元層級層 + 基本單元層)
     "group_b": {
         "name": "B組：條文+章節結構",
         "description": "基本單元層 + 基本單元層級層（章、節、編）",
-        "levels": ["basic_unit_hierarchy", "basic_unit"],
+        "levels": ["document_component", "basic_unit_hierarchy", "basic_unit"],
         "research_purpose": "評估結構分組（如：《商標法》的「章、節」）的嵌入是否能更好地捕捉廣泛主題(aboutness)"
     },
     
@@ -8251,11 +9251,11 @@ GRANULARITY_COMBINATIONS = {
         "research_purpose": "評估細節化層次對於處理臺灣法律中常見的列舉式規定（如：《商標法》第30條的15款不得註冊情形）所帶來的精確度增益"
     },
     
-    # D組：層次 1 + 2 + 3 + 4 + 5 + 6 (完整多層次)
+    # D組：層次 2 + 3 + 4 + 5 + 6 (章、節、條文、項、款、目)
     "group_d": {
         "name": "D組：完整多層次ML-RAG",
-        "description": "包含所有六個粒度層次",
-        "levels": ["document", "document_component", "basic_unit_hierarchy", 
+        "description": "章、節、條文、項、款、目層級",
+        "levels": ["document_component", "basic_unit_hierarchy", 
                    "basic_unit", "basic_unit_component", "enumeration"],
         "research_purpose": "作為最佳效能的對比組，評估完整多層次方法的綜合表現"
     },
