@@ -7337,6 +7337,9 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
         # 修改章節正則表達式，支持「第X章之一」格式
         chapter_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)\s*章(?:[之\-]([一二三四五六七八九十百千0-9]+))?[\u3000\s]*(.*)$")
         section_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)\s*節[\u3000\s]*(.*)$")
+        # 識別「節下的款」（在節和條之間的層級，用來細分節）
+        # 格式：第X款（中文數字），例如「第 一 款」、「第 二 款」
+        subsection_re = re.compile(r"^第\s*([一二三四五六七八九十百千]+)\s*款[\u3000\s]*(.*)$")
         # 修改條文正則表達式，只匹配阿拉伯數字的條文號碼（避免將中文數字的條文引用誤識別為新條文）
         # 例如：「第四十二條」不應該被識別為新條文，而是條文內容的一部分
         article_re = re.compile(r"^第\s*([0-9]+)(?:[之\-]([0-9]+))?\s*條[\u3000\s]*(.*)$")
@@ -7369,6 +7372,7 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
         structure: Dict[str, Any] = {"law_name": law_name, "chapters": []}
         current_chapter: Optional[Dict[str, Any]] = None
         current_section: Optional[Dict[str, Any]] = None
+        current_subsection: Optional[Dict[str, Any]] = None  # 節下的款（在節和條之間的層級）
         current_article: Optional[Dict[str, Any]] = None
         # 依據台灣法律層次：條 → 項(Paragraph) → 款(Subparagraph) → 目(Item)
         current_paragraph: Optional[Dict[str, Any]] = None
@@ -7385,8 +7389,17 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
             nonlocal current_section
             ensure_chapter()
             if current_section is None:
-                current_section = {"section": "未分類節", "articles": []}
+                current_section = {"section": "未分類節", "subsections": [], "articles": []}
                 current_chapter["sections"].append(current_section)
+        
+        def ensure_subsection():
+            """確保有節下的款（如果節下沒有款，則直接使用節）"""
+            nonlocal current_subsection
+            ensure_section()
+            if current_subsection is None:
+                # 如果節下沒有款，則創建一個默認的款（用於直接包含條文的情況）
+                # 但這裡我們不創建，而是讓條文直接歸屬於節
+                pass
 
         # 使用清理後的文本進行結構化解析
         lines = [normalize_digits((ln or "").strip()) for ln in full_text.splitlines()]
@@ -7416,6 +7429,7 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                     current_chapter["chapter_suffix"] = normalize_digits(suffix_raw)
                 structure["chapters"].append(current_chapter)
                 current_section = None
+                current_subsection = None  # 重置節下的款
                 current_article = None
                 current_paragraph = None
                 current_subparagraph = None
@@ -7427,8 +7441,31 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                 ensure_chapter()
                 num_raw = m.group(1)
                 title = f"第{num_raw}節" + (f" {m.group(2).strip()}" if m.group(2) else "")
-                current_section = {"section": title, "section_no": normalize_digits(num_raw), "type_en": "Section", "articles": []}
+                current_section = {"section": title, "section_no": normalize_digits(num_raw), "type_en": "Section", "subsections": [], "articles": []}
                 current_chapter["sections"].append(current_section)
+                current_subsection = None  # 重置節下的款
+                current_article = None
+                current_paragraph = None
+                current_subparagraph = None
+                current_item_lvl3 = None
+                continue
+
+            # 識別「節下的款」（在節和條之間的層級）
+            m = subsection_re.match(ln)
+            if m:
+                ensure_section()
+                num_raw = m.group(1)  # 中文數字
+                title_suffix = m.group(2).strip() if m.group(2) else ""  # 標題後綴（如「著作財產權之種類」）
+                title = f"第{num_raw}款" + (f" {title_suffix}" if title_suffix else "")
+                
+                # 創建節下的款
+                current_subsection = {
+                    "subsection": title,
+                    "subsection_no": normalize_digits(num_raw),
+                    "type_en": "Subsection",
+                    "articles": []
+                }
+                current_section["subsections"].append(current_subsection)
                 current_article = None
                 current_paragraph = None
                 current_subparagraph = None
@@ -7457,7 +7494,15 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
                     current_article["article_suffix"] = normalize_digits(suffix_raw)
                 # 相容舊欄位（將指向同一個列表）
                 current_article["items"] = current_article["paragraphs"]
-                current_section["articles"].append(current_article)
+                
+                # 將條文歸屬於「節下的款」或直接歸屬於「節」
+                if current_subsection is not None:
+                    # 如果有節下的款，則歸屬於款
+                    current_subsection["articles"].append(current_article)
+                else:
+                    # 如果沒有節下的款，則直接歸屬於節
+                    current_section["articles"].append(current_article)
+                
                 current_paragraph = None
                 current_subparagraph = None
                 current_item_lvl3 = None
