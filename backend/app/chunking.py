@@ -1359,6 +1359,440 @@ class StructuredHierarchicalChunking(ChunkingStrategy):
 class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
     """多層級結構化分割：一次性生成所有六個粒度級別的分塊"""
     
+    def _generate_provision_id(self, metadata: Dict[str, Any]) -> str:
+        """
+        生成規範的 provision_id (chunk_id)
+        格式：Chap_6, Art_87, Art_87_P1, Art_87_P1_C8, Art_87_P1_C8_I1 等
+        
+        Args:
+            metadata: chunk 的 metadata，包含 level, chapter, section, article, paragraph, subparagraph, item 等信息
+        
+        Returns:
+            str: 規範的 provision_id
+        """
+        level = metadata.get('level', '').lower()
+        parts = []
+        
+        # 輔助函數：從標題中提取編號
+        def extract_number(text: str, pattern: str) -> Optional[str]:
+            if not text:
+                return None
+            match = re.search(pattern, text)
+            if match:
+                num_str = match.group(1).strip()
+                if not num_str:
+                    return None
+                
+                # 嘗試轉換中文數字
+                try:
+                    from .main import _cn_to_int_str
+                    result = _cn_to_int_str(num_str)
+                    if result:
+                        return result
+                except Exception as e:
+                    # 如果導入失敗，使用 fallback
+                    pass
+                
+                # Fallback：處理阿拉伯數字
+                if num_str.isdigit():
+                    return num_str
+                
+                # Fallback：簡單的中文數字映射（擴展版）
+                cn_map = {
+                    '一': '1', '二': '2', '三': '3', '四': '4', '五': '5',
+                    '六': '6', '七': '7', '八': '8', '九': '9', '十': '10',
+                    '十一': '11', '十二': '12', '十三': '13', '十四': '14', '十五': '15',
+                    '十六': '16', '十七': '17', '十八': '18', '十九': '19', '二十': '20',
+                    '廿': '20', '卅': '30', '卌': '40'
+                }
+                if num_str in cn_map:
+                    return cn_map[num_str]
+                
+                # 如果包含中文數字，嘗試提取
+                # 例如「第一項」中的「一」
+                cn_digits = re.findall(r'[一二三四五六七八九十百千]', num_str)
+                if cn_digits:
+                    # 嘗試組合轉換
+                    try:
+                        from .main import _cn_to_int_str
+                        combined = ''.join(cn_digits)
+                        result = _cn_to_int_str(combined)
+                        if result:
+                            return result
+                    except:
+                        pass
+                
+                # 最後嘗試：如果整個字符串就是一個中文數字
+                if re.match(r'^[一二三四五六七八九十百千〇零]+$', num_str):
+                    # 使用簡單映射
+                    if num_str in cn_map:
+                        return cn_map[num_str]
+                    # 嘗試逐字符映射
+                    if len(num_str) == 1 and num_str in cn_map:
+                        return cn_map[num_str]
+                
+                return num_str  # 返回原始字符串作為最後的 fallback
+            return None
+        
+        # 根據層級構建 ID
+        if level == 'law':
+            # Law 層級：使用法規名稱的簡化版本
+            law_name = metadata.get('law_name', '')
+            if law_name:
+                # 簡化法規名稱作為 ID
+                law_id = re.sub(r'[^\w]', '', law_name)[:20]  # 取前20個字符，移除特殊字符
+                return f"Law_{law_id}" if law_id else "Law_unknown"
+            return "Law_unknown"
+        
+        elif level == 'chapter':
+            # 章：Chap_6 或 Chap_6_1（第六章之一）
+            chapter = metadata.get('chapter', '')
+            # 匹配「第X章」或「第X章之一」格式
+            chap_match = re.search(r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*章(?:[之\-]([0-9一二三四五六七八九十百千〇零]+))?', chapter)
+            if chap_match:
+                main_num = extract_number(chap_match.group(1), r'(.+)')
+                suffix_num = extract_number(chap_match.group(2), r'(.+)') if chap_match.group(2) else None
+                if main_num:
+                    if suffix_num:
+                        return f"Chap_{main_num}_{suffix_num}"
+                    return f"Chap_{main_num}"
+            # 處理特殊章節（如「總則」）
+            if '總則' in chapter or '通則' in chapter:
+                return "Chap_0"
+            return "Chap_unknown"
+        
+        elif level == 'section':
+            # 節：Chap_6_Sec_1 或 Chap_6_1_Sec_1（第六章之一的節）
+            chapter = metadata.get('chapter', '')
+            section = metadata.get('section', '')
+            # 匹配「第X章」或「第X章之一」格式
+            chap_match = re.search(r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*章(?:[之\-]([0-9一二三四五六七八九十百千〇零]+))?', chapter)
+            if chap_match:
+                main_num = extract_number(chap_match.group(1), r'(.+)')
+                suffix_num = extract_number(chap_match.group(2), r'(.+)') if chap_match.group(2) else None
+                if main_num:
+                    if suffix_num:
+                        chap_num = f"{main_num}_{suffix_num}"
+                    else:
+                        chap_num = main_num
+                else:
+                    chap_num = "unknown"
+            elif '總則' in chapter or '通則' in chapter:
+                chap_num = "0"
+            else:
+                chap_num = "unknown"
+            
+            if section in ("未分類節", "未分類"):
+                return f"Chap_{chap_num}_Sec_unclassified"
+            
+            sec_num = extract_number(section, r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*節')
+            if sec_num:
+                return f"Chap_{chap_num}_Sec_{sec_num}"
+            return f"Chap_{chap_num}_Sec_unknown"
+        
+        elif level == 'article':
+            # 條：Art_87 或 Art_87_1（第87-1條）或 Art_87_1（第87條之1）
+            article = metadata.get('article', '')
+            # 匹配「第X條」或「第X條之Y」或「第X-Y條」格式
+            # 優先匹配「第X-Y條」格式（用「-」代表「之」）
+            art_match = re.search(r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*[-]\s*([0-9一二三四五六七八九十百千〇零]+)\s*條', article)
+            if art_match:
+                main_num = extract_number(art_match.group(1), r'(.+)')
+                suffix_num = extract_number(art_match.group(2), r'(.+)')
+                if main_num and suffix_num:
+                    return f"Art_{main_num}_{suffix_num}"
+            # 如果沒有匹配到「第X-Y條」格式，嘗試匹配「第X條之Y」格式
+            art_match = re.search(r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*條(?:之\s*([0-9一二三四五六七八九十百千〇零]+))?', article)
+            if art_match:
+                main_num = extract_number(art_match.group(1), r'(.+)')
+                suffix_num = extract_number(art_match.group(2), r'(.+)') if art_match.group(2) else None
+                if main_num:
+                    if suffix_num:
+                        return f"Art_{main_num}_{suffix_num}"
+                    return f"Art_{main_num}"
+            return "Art_unknown"
+        
+        elif level == 'paragraph':
+            # 項：Art_87_P1
+            article = metadata.get('article', '')
+            paragraph = metadata.get('paragraph', '')
+            
+            # 提取條文編號 - 支持「第X-Y條」和「第X條之Y」格式
+            art_id = "Art_unknown"
+            # 優先匹配「第X-Y條」格式（用「-」代表「之」）
+            art_match = re.search(r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*[-]\s*([0-9一二三四五六七八九十百千〇零]+)\s*條', article)
+            if art_match:
+                main_num = extract_number(art_match.group(1), r'(.+)')
+                suffix_num = extract_number(art_match.group(2), r'(.+)')
+                if main_num and suffix_num:
+                    art_id = f"Art_{main_num}_{suffix_num}"
+            else:
+                # 如果沒有匹配到「第X-Y條」格式，嘗試匹配「第X條之Y」格式
+                art_match = re.search(r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*條(?:之\s*([0-9一二三四五六七八九十百千〇零]+))?', article)
+                if art_match:
+                    main_num = extract_number(art_match.group(1), r'(.+)')
+                    suffix_num = extract_number(art_match.group(2), r'(.+)') if art_match.group(2) else None
+                    if main_num:
+                        art_id = f"Art_{main_num}_{suffix_num}" if suffix_num else f"Art_{main_num}"
+            
+            # 提取項編號 - 改進的匹配邏輯
+            para_num = None
+            
+            # 1. 優先匹配開頭的「第X項」格式（避免匹配到內容中的其他引用）
+            para_num = extract_number(paragraph, r'^第\s*([0-9一二三四五六七八九十百千〇零]+)\s*項')
+            
+            # 2. 如果沒有，嘗試匹配任何位置的「第X項」格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*項')
+            
+            # 3. 如果沒有，嘗試匹配開頭的項目標記（如「一、」「1.」「（一）」等）
+            if not para_num:
+                # 匹配開頭的「一、」「二、」等格式
+                para_num = extract_number(paragraph, r'^([0-9一二三四五六七八九十百千〇零]+)[、．\.]')
+            
+            # 4. 如果還沒有，嘗試匹配開頭的「（一）」「（1）」等格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'^[（(]([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            
+            # 5. 如果還沒有，嘗試匹配開頭的「1)」「一)」等格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'^([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            
+            # 6. 如果還沒有，嘗試匹配開頭的「1.」「一.」等格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'^([0-9一二三四五六七八九十百千〇零]+)[\.．]')
+            
+            # 7. 如果還沒有，嘗試從段落開頭提取數字（可能是簡化格式）
+            if not para_num:
+                # 匹配開頭的純數字或中文數字
+                match = re.match(r'^([0-9一二三四五六七八九十百千〇零]+)', paragraph.strip())
+                if match:
+                    para_num = extract_number(match.group(1), r'(.+)')
+            
+            # 8. 最後嘗試：如果 paragraph 本身就是一個簡單的數字或中文數字
+            if not para_num and paragraph.strip():
+                stripped = paragraph.strip()
+                # 檢查是否整個 paragraph 就是一個數字
+                if re.match(r'^[0-9一二三四五六七八九十百千〇零]+$', stripped):
+                    para_num = extract_number(stripped, r'(.+)')
+            
+            if para_num:
+                return f"{art_id}_P{para_num}"
+            return f"{art_id}_Punknown"
+        
+        elif level == 'subparagraph':
+            # 款：Art_87_P1_C8
+            article = metadata.get('article', '')
+            paragraph = metadata.get('paragraph', '')
+            subparagraph = metadata.get('subparagraph', '')
+            
+            # 提取條文編號 - 支持「第X-Y條」和「第X條之Y」格式
+            art_id = "Art_unknown"
+            # 優先匹配「第X-Y條」格式（用「-」代表「之」）
+            art_match = re.search(r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*[-]\s*([0-9一二三四五六七八九十百千〇零]+)\s*條', article)
+            if art_match:
+                main_num = extract_number(art_match.group(1), r'(.+)')
+                suffix_num = extract_number(art_match.group(2), r'(.+)')
+                if main_num and suffix_num:
+                    art_id = f"Art_{main_num}_{suffix_num}"
+            else:
+                # 如果沒有匹配到「第X-Y條」格式，嘗試匹配「第X條之Y」格式
+                art_match = re.search(r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*條(?:之\s*([0-9一二三四五六七八九十百千〇零]+))?', article)
+                if art_match:
+                    main_num = extract_number(art_match.group(1), r'(.+)')
+                    suffix_num = extract_number(art_match.group(2), r'(.+)') if art_match.group(2) else None
+                    if main_num:
+                        art_id = f"Art_{main_num}_{suffix_num}" if suffix_num else f"Art_{main_num}"
+            
+            # 提取項編號 - 使用完整的匹配邏輯
+            para_num = None
+            # 1. 優先匹配開頭的「第X項」格式
+            para_num = extract_number(paragraph, r'^第\s*([0-9一二三四五六七八九十百千〇零]+)\s*項')
+            # 2. 如果沒有，嘗試匹配任何位置的「第X項」格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*項')
+            # 3. 如果沒有，嘗試匹配開頭的項目標記
+            if not para_num:
+                para_num = extract_number(paragraph, r'^([0-9一二三四五六七八九十百千〇零]+)[、．\.]')
+            # 4. 如果還沒有，嘗試匹配開頭的「（一）」「（1）」等格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'^[（(]([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            # 5. 如果還沒有，嘗試匹配開頭的「1)」「一)」等格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'^([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            # 6. 如果還沒有，嘗試匹配開頭的「1.」「一.」等格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'^([0-9一二三四五六七八九十百千〇零]+)[\.．]')
+            # 7. 如果還沒有，嘗試從段落開頭提取數字
+            if not para_num:
+                match = re.match(r'^([0-9一二三四五六七八九十百千〇零]+)', paragraph.strip())
+                if match:
+                    para_num = extract_number(match.group(1), r'(.+)')
+            # 8. 最後嘗試：如果 paragraph 本身就是一個簡單的數字
+            if not para_num and paragraph.strip():
+                stripped = paragraph.strip()
+                if re.match(r'^[0-9一二三四五六七八九十百千〇零]+$', stripped):
+                    para_num = extract_number(stripped, r'(.+)')
+            para_id = f"P{para_num}" if para_num else "Punknown"
+            
+            # 提取款編號 - 使用完整的匹配邏輯
+            clause_num = None
+            # 1. 優先匹配開頭的「第X款」格式
+            clause_num = extract_number(subparagraph, r'^第\s*([0-9一二三四五六七八九十百千〇零]+)\s*款')
+            # 2. 如果沒有，嘗試匹配任何位置的「第X款」格式
+            if not clause_num:
+                clause_num = extract_number(subparagraph, r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*款')
+            # 3. 如果沒有，嘗試匹配開頭的款標記（如「一、」「1.」「（一）」等）
+            if not clause_num:
+                clause_num = extract_number(subparagraph, r'^([0-9一二三四五六七八九十百千〇零]+)[、．\.]')
+            # 4. 如果還沒有，嘗試匹配開頭的「（一）」「（1）」等格式
+            if not clause_num:
+                clause_num = extract_number(subparagraph, r'^[（(]([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            # 5. 如果還沒有，嘗試匹配開頭的「1)」「一)」等格式
+            if not clause_num:
+                clause_num = extract_number(subparagraph, r'^([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            # 6. 如果還沒有，嘗試匹配開頭的「1.」「一.」等格式
+            if not clause_num:
+                clause_num = extract_number(subparagraph, r'^([0-9一二三四五六七八九十百千〇零]+)[\.．]')
+            # 7. 如果還沒有，嘗試從段落開頭提取數字
+            if not clause_num:
+                match = re.match(r'^([0-9一二三四五六七八九十百千〇零]+)', subparagraph.strip())
+                if match:
+                    clause_num = extract_number(match.group(1), r'(.+)')
+            # 8. 最後嘗試：如果 subparagraph 本身就是一個簡單的數字
+            if not clause_num and subparagraph.strip():
+                stripped = subparagraph.strip()
+                if re.match(r'^[0-9一二三四五六七八九十百千〇零]+$', stripped):
+                    clause_num = extract_number(stripped, r'(.+)')
+            
+            if clause_num:
+                return f"{art_id}_{para_id}_C{clause_num}"
+            return f"{art_id}_{para_id}_Cunknown"
+        
+        elif level == 'item':
+            # 目：Art_87_P1_C8_I1
+            article = metadata.get('article', '')
+            paragraph = metadata.get('paragraph', '')
+            subparagraph = metadata.get('subparagraph', '')
+            item = metadata.get('item', '')
+            
+            # 提取條文編號 - 支持「第X-Y條」和「第X條之Y」格式
+            art_id = "Art_unknown"
+            # 優先匹配「第X-Y條」格式（用「-」代表「之」）
+            art_match = re.search(r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*[-]\s*([0-9一二三四五六七八九十百千〇零]+)\s*條', article)
+            if art_match:
+                main_num = extract_number(art_match.group(1), r'(.+)')
+                suffix_num = extract_number(art_match.group(2), r'(.+)')
+                if main_num and suffix_num:
+                    art_id = f"Art_{main_num}_{suffix_num}"
+            else:
+                # 如果沒有匹配到「第X-Y條」格式，嘗試匹配「第X條之Y」格式
+                art_match = re.search(r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*條(?:之\s*([0-9一二三四五六七八九十百千〇零]+))?', article)
+                if art_match:
+                    main_num = extract_number(art_match.group(1), r'(.+)')
+                    suffix_num = extract_number(art_match.group(2), r'(.+)') if art_match.group(2) else None
+                    if main_num:
+                        art_id = f"Art_{main_num}_{suffix_num}" if suffix_num else f"Art_{main_num}"
+            
+            # 提取項編號 - 使用完整的匹配邏輯
+            para_num = None
+            # 1. 優先匹配開頭的「第X項」格式
+            para_num = extract_number(paragraph, r'^第\s*([0-9一二三四五六七八九十百千〇零]+)\s*項')
+            # 2. 如果沒有，嘗試匹配任何位置的「第X項」格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*項')
+            # 3. 如果沒有，嘗試匹配開頭的項目標記
+            if not para_num:
+                para_num = extract_number(paragraph, r'^([0-9一二三四五六七八九十百千〇零]+)[、．\.]')
+            # 4. 如果還沒有，嘗試匹配開頭的「（一）」「（1）」等格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'^[（(]([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            # 5. 如果還沒有，嘗試匹配開頭的「1)」「一)」等格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'^([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            # 6. 如果還沒有，嘗試匹配開頭的「1.」「一.」等格式
+            if not para_num:
+                para_num = extract_number(paragraph, r'^([0-9一二三四五六七八九十百千〇零]+)[\.．]')
+            # 7. 如果還沒有，嘗試從段落開頭提取數字
+            if not para_num:
+                match = re.match(r'^([0-9一二三四五六七八九十百千〇零]+)', paragraph.strip())
+                if match:
+                    para_num = extract_number(match.group(1), r'(.+)')
+            # 8. 最後嘗試：如果 paragraph 本身就是一個簡單的數字
+            if not para_num and paragraph.strip():
+                stripped = paragraph.strip()
+                if re.match(r'^[0-9一二三四五六七八九十百千〇零]+$', stripped):
+                    para_num = extract_number(stripped, r'(.+)')
+            para_id = f"P{para_num}" if para_num else "Punknown"
+            
+            # 提取款編號 - 使用完整的匹配邏輯
+            clause_num = None
+            # 1. 優先匹配開頭的「第X款」格式
+            clause_num = extract_number(subparagraph, r'^第\s*([0-9一二三四五六七八九十百千〇零]+)\s*款')
+            # 2. 如果沒有，嘗試匹配任何位置的「第X款」格式
+            if not clause_num:
+                clause_num = extract_number(subparagraph, r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*款')
+            # 3. 如果沒有，嘗試匹配開頭的款標記（如「一、」「1.」「（一）」等）
+            if not clause_num:
+                clause_num = extract_number(subparagraph, r'^([0-9一二三四五六七八九十百千〇零]+)[、．\.]')
+            # 4. 如果還沒有，嘗試匹配開頭的「（一）」「（1）」等格式
+            if not clause_num:
+                clause_num = extract_number(subparagraph, r'^[（(]([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            # 5. 如果還沒有，嘗試匹配開頭的「1)」「一)」等格式
+            if not clause_num:
+                clause_num = extract_number(subparagraph, r'^([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            # 6. 如果還沒有，嘗試匹配開頭的「1.」「一.」等格式
+            if not clause_num:
+                clause_num = extract_number(subparagraph, r'^([0-9一二三四五六七八九十百千〇零]+)[\.．]')
+            # 7. 如果還沒有，嘗試從段落開頭提取數字
+            if not clause_num:
+                match = re.match(r'^([0-9一二三四五六七八九十百千〇零]+)', subparagraph.strip())
+                if match:
+                    clause_num = extract_number(match.group(1), r'(.+)')
+            # 8. 最後嘗試：如果 subparagraph 本身就是一個簡單的數字
+            if not clause_num and subparagraph.strip():
+                stripped = subparagraph.strip()
+                if re.match(r'^[0-9一二三四五六七八九十百千〇零]+$', stripped):
+                    clause_num = extract_number(stripped, r'(.+)')
+            clause_id = f"C{clause_num}" if clause_num else "Cunknown"
+            
+            # 提取目編號 - 使用完整的匹配邏輯
+            item_num = None
+            # 1. 優先匹配開頭的「第X目」格式
+            item_num = extract_number(item, r'^第\s*([0-9一二三四五六七八九十百千〇零]+)\s*目')
+            # 2. 如果沒有，嘗試匹配任何位置的「第X目」格式
+            if not item_num:
+                item_num = extract_number(item, r'第\s*([0-9一二三四五六七八九十百千〇零]+)\s*目')
+            # 3. 如果沒有，嘗試匹配開頭的目標記（如「一、」「1.」「（一）」等）
+            if not item_num:
+                item_num = extract_number(item, r'^([0-9一二三四五六七八九十百千〇零]+)[、．\.]')
+            # 4. 如果還沒有，嘗試匹配開頭的「（一）」「（1）」等格式
+            if not item_num:
+                item_num = extract_number(item, r'^[（(]([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            # 5. 如果還沒有，嘗試匹配開頭的「1)」「一)」等格式
+            if not item_num:
+                item_num = extract_number(item, r'^([0-9一二三四五六七八九十百千〇零]+)[）)]')
+            # 6. 如果還沒有，嘗試匹配開頭的「1.」「一.」等格式
+            if not item_num:
+                item_num = extract_number(item, r'^([0-9一二三四五六七八九十百千〇零]+)[\.．]')
+            # 7. 如果還沒有，嘗試從段落開頭提取數字
+            if not item_num:
+                match = re.match(r'^([0-9一二三四五六七八九十百千〇零]+)', item.strip())
+                if match:
+                    item_num = extract_number(match.group(1), r'(.+)')
+            # 8. 最後嘗試：如果 item 本身就是一個簡單的數字
+            if not item_num and item.strip():
+                stripped = item.strip()
+                if re.match(r'^[0-9一二三四五六七八九十百千〇零]+$', stripped):
+                    item_num = extract_number(stripped, r'(.+)')
+            
+            if item_num:
+                return f"{art_id}_{para_id}_{clause_id}_I{item_num}"
+            return f"{art_id}_{para_id}_{clause_id}_Iunknown"
+        
+        # 默認情況
+        return f"{level}_unknown"
+    
     def chunk_with_span(self, text: str, json_data: Dict[str, Any] | None = None, **kwargs) -> List[Dict[str, Any]]:
         """
         多層級結構化分割，一次性生成所有六個粒度級別的分塊
@@ -1400,20 +1834,23 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
             
             # 額外：Law 層（保持向後相容）
             law_chunk = self._build_law_chunk(law_data)
+            law_metadata = {
+                "strategy": "multi_level_structured",
+                "level": "Law",
+                "level_en": "Law",
+                "law_name": law_name,
+                "chapter": "",
+                "section": "",
+                "article": "",
+                "chunk_index": len(all_chunks),
+                "length": len(law_chunk)
+            }
+            law_chunk_id = self._generate_provision_id(law_metadata)
             all_chunks.append({
                 "content": law_chunk,
                 "span": {"start": 0, "end": len(law_chunk)},
-                "metadata": {
-                    "strategy": "multi_level_structured",
-                    "level": "Law",
-                    "level_en": "Law",
-                    "law_name": law_name,
-                    "chapter": "",
-                    "section": "",
-                    "article": "",
-                    "chunk_index": len(all_chunks),
-                    "length": len(law_chunk)
-                }
+                "chunk_id": law_chunk_id,
+                "metadata": law_metadata
             })
             
             # 處理章節
@@ -1422,20 +1859,23 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                 
                 # 1. 章 Chapter
                 chapter_chunk = self._build_chapter_chunk(chapter_data, law_name)
+                chapter_metadata = {
+                    "strategy": "multi_level_structured",
+                    "level": "Chapter",
+                    "level_en": "Chapter",
+                    "law_name": law_name,
+                    "chapter": chapter_title,
+                    "section": "",
+                    "article": "",
+                    "chunk_index": len(all_chunks),
+                    "length": len(chapter_chunk)
+                }
+                chapter_chunk_id = self._generate_provision_id(chapter_metadata)
                 all_chunks.append({
                     "content": chapter_chunk,
                     "span": {"start": 0, "end": len(chapter_chunk)},
-                    "metadata": {
-                        "strategy": "multi_level_structured",
-                        "level": "Chapter",
-                        "level_en": "Chapter",
-                        "law_name": law_name,
-                        "chapter": chapter_title,
-                        "section": "",
-                        "article": "",
-                        "chunk_index": len(all_chunks),
-                        "length": len(chapter_chunk)
-                    }
+                    "chunk_id": chapter_chunk_id,
+                    "metadata": chapter_metadata
                 })
                 
                 # 處理節
@@ -1445,20 +1885,23 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                 # 2. 節 Section（未分類節/未分類 不產生節級chunk）
                     if section_title not in ("未分類節", "未分類"):
                         section_chunk = self._build_section_chunk(section_data, law_name, chapter_title)
+                        section_metadata = {
+                            "strategy": "multi_level_structured",
+                            "level": "Section",
+                            "level_en": "Section",
+                            "law_name": law_name,
+                            "chapter": chapter_title,
+                            "section": section_title,
+                            "article": "",
+                            "chunk_index": len(all_chunks),
+                            "length": len(section_chunk)
+                        }
+                        section_chunk_id = self._generate_provision_id(section_metadata)
                         all_chunks.append({
                             "content": section_chunk,
                             "span": {"start": 0, "end": len(section_chunk)},
-                            "metadata": {
-                                "strategy": "multi_level_structured",
-                                "level": "Section",
-                                "level_en": "Section",
-                                "law_name": law_name,
-                                "chapter": chapter_title,
-                                "section": section_title,
-                                "article": "",
-                                "chunk_index": len(all_chunks),
-                                "length": len(section_chunk)
-                            }
+                            "chunk_id": section_chunk_id,
+                            "metadata": section_metadata
                         })
                     
                     # 處理條文
@@ -1476,21 +1919,24 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                                 # 其他實驗組：包含完整內容
                                 article_chunk = self._build_article_chunk(article_data, law_name, chapter_title, section_title)
                             
+                            article_metadata = {
+                                "strategy": "multi_level_structured",
+                                "level": "Article",
+                                "level_en": "Article",
+                                "law_name": law_name,
+                                "chapter": chapter_title,
+                                "section": section_title,
+                                "article": article_title,
+                                "chunk_index": len(all_chunks),
+                                "length": len(article_chunk),
+                                "experimental_group": experimental_group
+                            }
+                            article_chunk_id = self._generate_provision_id(article_metadata)
                             all_chunks.append({
                                 "content": article_chunk,
                                 "span": {"start": 0, "end": len(article_chunk)},
-                                "metadata": {
-                                    "strategy": "multi_level_structured",
-                                    "level": "Article",
-                                    "level_en": "Article",
-                                    "law_name": law_name,
-                                    "chapter": chapter_title,
-                                    "section": section_title,
-                                    "article": article_title,
-                                    "chunk_index": len(all_chunks),
-                                    "length": len(article_chunk),
-                                    "experimental_group": experimental_group
-                                }
+                                "chunk_id": article_chunk_id,
+                                "metadata": article_metadata
                             })
                         else:
                             # 刪除條不再生成後續層級
@@ -1513,22 +1959,25 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                                 else:
                                     item_chunk = self._build_item_chunk(item_data, law_name, chapter_title, section_title, article_title, article_content)
                                 
+                                item_metadata = {
+                                    "strategy": "multi_level_structured",
+                                    "level": "Paragraph",
+                                    "level_en": "Paragraph",
+                                    "law_name": law_name,
+                                    "chapter": chapter_title,
+                                    "section": section_title,
+                                    "article": article_title,
+                                    "paragraph": item_title,
+                                    "chunk_index": len(all_chunks),
+                                    "length": len(item_chunk),
+                                    "experimental_group": experimental_group
+                                }
+                                item_chunk_id = self._generate_provision_id(item_metadata)
                                 all_chunks.append({
                                     "content": item_chunk,
                                     "span": {"start": 0, "end": len(item_chunk)},
-                                    "metadata": {
-                                        "strategy": "multi_level_structured",
-                                        "level": "Paragraph",
-                                        "level_en": "Paragraph",
-                                        "law_name": law_name,
-                                        "chapter": chapter_title,
-                                        "section": section_title,
-                                        "article": article_title,
-                                        "paragraph": item_title,
-                                        "chunk_index": len(all_chunks),
-                                        "length": len(item_chunk),
-                                        "experimental_group": experimental_group
-                                    }
+                                    "chunk_id": item_chunk_id,
+                                    "metadata": item_metadata
                                 })
                                 
                                 # 處理款/目（僅使用新結構 subparagraphs → items）
@@ -1547,23 +1996,26 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                                     else:
                                         sub_item_chunk = self._build_sub_item_chunk(sub_item_data, law_name, chapter_title, section_title, article_title, item_title, article_content)
                                     
+                                    sub_item_metadata = {
+                                        "strategy": "multi_level_structured",
+                                        "level": "Subparagraph",
+                                        "level_en": "Subparagraph",
+                                        "law_name": law_name,
+                                        "chapter": chapter_title,
+                                        "section": section_title,
+                                        "article": article_title,
+                                        "paragraph": item_title,
+                                        "subparagraph": subparagraph_name,
+                                        "chunk_index": len(all_chunks),
+                                        "length": len(sub_item_chunk),
+                                        "experimental_group": experimental_group
+                                    }
+                                    sub_item_chunk_id = self._generate_provision_id(sub_item_metadata)
                                     all_chunks.append({
                                         "content": sub_item_chunk,
                                         "span": {"start": 0, "end": len(sub_item_chunk)},
-                                        "metadata": {
-                                            "strategy": "multi_level_structured",
-                                            "level": "Subparagraph",
-                                            "level_en": "Subparagraph",
-                                            "law_name": law_name,
-                                            "chapter": chapter_title,
-                                            "section": section_title,
-                                            "article": article_title,
-                                            "paragraph": item_title,
-                                            "subparagraph": subparagraph_name,
-                                            "chunk_index": len(all_chunks),
-                                            "length": len(sub_item_chunk),
-                                            "experimental_group": experimental_group
-                                        }
+                                        "chunk_id": sub_item_chunk_id,
+                                        "metadata": sub_item_metadata
                                     })
 
                                     # 6. 目 Item（第三層枚舉）
@@ -1585,24 +2037,27 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                                         else:
                                             third_chunk = third_content
                                         
+                                        third_item_metadata = {
+                                            "strategy": "multi_level_structured",
+                                            "level": "Item",
+                                            "level_en": "Item",
+                                            "law_name": law_name,
+                                            "chapter": chapter_title,
+                                            "section": section_title,
+                                            "article": article_title,
+                                            "paragraph": item_title,
+                                            "subparagraph": subparagraph_name,
+                                            "item": third_name,
+                                            "chunk_index": len(all_chunks),
+                                            "length": len(third_chunk),
+                                            "experimental_group": experimental_group
+                                        }
+                                        third_item_chunk_id = self._generate_provision_id(third_item_metadata)
                                         all_chunks.append({
                                             "content": third_chunk,
                                             "span": {"start": 0, "end": len(third_chunk)},
-                                            "metadata": {
-                                                "strategy": "multi_level_structured",
-                                                "level": "Item",
-                                                "level_en": "Item",
-                                                "law_name": law_name,
-                                                "chapter": chapter_title,
-                                                "section": section_title,
-                                                "article": article_title,
-                                                "paragraph": item_title,
-                                                "subparagraph": subparagraph_name,
-                                                "item": third_name,
-                                                "chunk_index": len(all_chunks),
-                                                "length": len(third_chunk),
-                                                "experimental_group": experimental_group
-                                            }
+                                            "chunk_id": third_item_chunk_id,
+                                            "metadata": third_item_metadata
                                         })
         
         return all_chunks

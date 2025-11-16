@@ -13,16 +13,22 @@ declare global {
 }
 
 // 法律層級統計顯示組件
-const HierarchyStatsDisplay: React.FC = () => {
+const HierarchyStatsDisplay: React.FC<{ docId?: string }> = ({ docId }) => {
   const [hierarchyStats, setHierarchyStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchHierarchyStats = async () => {
+      if (!docId) {
+        setHierarchyStats(null);
+        setLoading(false);
+        return;
+      }
       try {
         setLoading(true);
-        const response = await api.get("/chunking-hierarchy-stats");
+        const url = `/chunking-hierarchy-stats?doc_id=${encodeURIComponent(docId)}`;
+        const response = await api.get(url);
         setHierarchyStats(response);
         setError(null);
       } catch (err) {
@@ -34,7 +40,7 @@ const HierarchyStatsDisplay: React.FC = () => {
     };
 
     fetchHierarchyStats();
-  }, []);
+  }, [docId]);
 
   if (loading) {
     return (
@@ -354,6 +360,7 @@ export function ChunkPage() {
     useState<string>("all");
   const [hierarchyChunks, setHierarchyChunks] = useState<any[]>([]);
   const [loadingHierarchyChunks, setLoadingHierarchyChunks] = useState(false);
+  const [hierarchyStats, setHierarchyStats] = useState<any>(null);
 
   // 步驟4: 評測狀態
   const [evaluationConfig, setEvaluationConfig] = useState({
@@ -605,16 +612,26 @@ export function ChunkPage() {
   }, [chunkingResults, showAllChunks]);
 
   // 獲取指定層級的chunks
-  const fetchHierarchyChunks = async (levelName: string) => {
+  const fetchHierarchyChunks = async (levelName: string, targetDocId?: string) => {
     if (levelName === "all") {
+      setHierarchyChunks([]);
+      return;
+    }
+
+    // 如果沒有 doc_id，無法獲取分塊
+    if (!targetDocId && !docId) {
       setHierarchyChunks([]);
       return;
     }
 
     try {
       setLoadingHierarchyChunks(true);
-      const response = await api.get(`/api/chunks-by-hierarchy/${levelName}`);
-      setHierarchyChunks(response.data.chunks || []);
+      const effectiveDocId = targetDocId || docId;
+      const url = effectiveDocId 
+        ? `/chunks-by-hierarchy/${levelName}?doc_id=${encodeURIComponent(effectiveDocId)}`
+        : `/chunks-by-hierarchy/${levelName}`;
+      const response = await api.get(url);
+      setHierarchyChunks(response.data?.chunks || response.chunks || []);
     } catch (err) {
       console.error("獲取層級chunks失敗:", err);
       setHierarchyChunks([]);
@@ -623,10 +640,33 @@ export function ChunkPage() {
     }
   };
 
-  // 當選擇的層級改變時，獲取對應的chunks
+  // 當選擇的層級或文檔ID改變時，獲取對應的chunks
   useEffect(() => {
-    fetchHierarchyChunks(selectedHierarchyLevel);
-  }, [selectedHierarchyLevel]);
+    if (docId) {
+      fetchHierarchyChunks(selectedHierarchyLevel, docId);
+    } else {
+      setHierarchyChunks([]);
+    }
+  }, [selectedHierarchyLevel, docId]);
+
+  // 獲取層級統計信息
+  useEffect(() => {
+    const fetchStats = async () => {
+      if (!chunkingResults.length || !docId) {
+        setHierarchyStats(null);
+        return;
+      }
+      try {
+        const url = `/chunking-hierarchy-stats?doc_id=${encodeURIComponent(docId)}`;
+        const response = await api.get(url);
+        setHierarchyStats(response);
+      } catch (err) {
+        console.error("獲取層級統計失敗:", err);
+        setHierarchyStats(null);
+      }
+    };
+    fetchStats();
+  }, [chunkingResults, docId]);
 
   const loadHierarchyData = React.useCallback(
     async (targetDocId?: string) => {
@@ -1206,7 +1246,7 @@ export function ChunkPage() {
                             </div>
 
                             {/* 分塊結果統計 - 按法律層級分類 */}
-                            <HierarchyStatsDisplay />
+                            <HierarchyStatsDisplay docId={docId} />
 
                             {/* 分塊配置信息 */}
                             <div className="mb-4">
@@ -1503,6 +1543,69 @@ export function ChunkPage() {
 
                                   {showAllChunks && (
                                     <div className="mb-3">
+                                      {/* 各層級統計信息 */}
+                                      {hierarchyStats && (
+                                        <div className="mb-3">
+                                          <h6 className="mb-2">
+                                            <i className="bi bi-bar-chart me-2"></i>
+                                            各層級分塊統計
+                                          </h6>
+                                          <div className="row g-2">
+                                            {[
+                                              { key: "document", label: "章級" },
+                                              { key: "document_component", label: "節級" },
+                                              { key: "basic_unit_hierarchy", label: "條級" },
+                                              { key: "basic_unit", label: "項級" },
+                                              { key: "basic_unit_component", label: "款級" },
+                                              { key: "enumeration", label: "目級" },
+                                            ].map(({ key, label }) => {
+                                              const count = hierarchyStats.hierarchy_stats?.[key] || 0;
+                                              const isSelected = selectedHierarchyLevel === key;
+                                              return (
+                                                <div key={key} className="col-md-2 col-sm-4 col-6">
+                                                  <div
+                                                    className={`card ${
+                                                      isSelected
+                                                        ? "border-primary bg-primary text-white"
+                                                        : "border-secondary"
+                                                    }`}
+                                                    style={{ cursor: "pointer" }}
+                                                    onClick={() =>
+                                                      setSelectedHierarchyLevel(key)
+                                                    }
+                                                  >
+                                                    <div className="card-body text-center p-2">
+                                                      <div className="h5 mb-0">{count}</div>
+                                                      <small>{label}</small>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              );
+                                            })}
+                                            <div className="col-md-2 col-sm-4 col-6">
+                                              <div
+                                                className={`card ${
+                                                  selectedHierarchyLevel === "all"
+                                                    ? "border-primary bg-primary text-white"
+                                                    : "border-info"
+                                                }`}
+                                                style={{ cursor: "pointer" }}
+                                                onClick={() =>
+                                                  setSelectedHierarchyLevel("all")
+                                                }
+                                              >
+                                                <div className="card-body text-center p-2">
+                                                  <div className="h5 mb-0">
+                                                    {hierarchyStats.total_chunks || 0}
+                                                  </div>
+                                                  <small>總計</small>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      )}
+
                                       <div className="row g-2 mb-3">
                                         <div className="col-md-4">
                                           <input

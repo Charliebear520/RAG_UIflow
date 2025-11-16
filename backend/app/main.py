@@ -390,7 +390,7 @@ def extract_keywords_with_gemini(text: str, top_k: int = 5) -> List[str]:
         ModelCls = getattr(genai, "GenerativeModel", None)
         if ModelCls is None:
             return extract_keywords_fallback(text, top_k)
-        model = ModelCls('gemini-2.0-flash-exp')
+        model = ModelCls('gemini-2.0-flash')
         
         prompt = f"""
         請從以下法律條文內容中提取{top_k}個最重要的關鍵詞。
@@ -2401,9 +2401,30 @@ def convert_structured_to_multi_level(structured_chunks):
                     semantic_features['parent_content_length'] = len(parent_content)
         
         if level_name in six_level_chunks:
+            # 保留原始的 chunk_id（如果存在）
+            original_chunk_id = chunk.get('chunk_id') or metadata.get('chunk_id')
+            
+            # 如果沒有 chunk_id，嘗試生成一個（使用 MultiLevelStructuredChunking 的邏輯）
+            if not original_chunk_id:
+                try:
+                    from .chunking import MultiLevelStructuredChunking
+                    chunker = MultiLevelStructuredChunking()
+                    # 構建完整的 metadata 用於生成 chunk_id
+                    full_metadata = {
+                        **metadata,
+                        'level': chunk_by,  # 使用原始的 level/chunk_by
+                        'level_en': chunk_by.capitalize() if chunk_by else 'Article',
+                    }
+                    original_chunk_id = chunker._generate_provision_id(full_metadata)
+                except Exception as e:
+                    print(f"⚠️ 生成 chunk_id 失敗: {e}，使用後備 ID")
+                    # 後備方案：使用索引生成 ID
+                    original_chunk_id = f"{level_name}_{len(six_level_chunks[level_name])}"
+            
             six_level_chunks[level_name].append({
                 'content': final_content,
                 'original_content': content,  # 保留原始內容
+                'chunk_id': original_chunk_id,  # 保留或生成 chunk_id
                 'metadata': {
                     **metadata,
                     'semantic_level': level_name,
@@ -2535,12 +2556,19 @@ def _extract_level_info(label: Optional[str], level: str) -> Optional[Dict[str, 
     }
 
     if level == "chapter":
-        match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*章", normalized)
+        # 匹配「第X章」或「第X章之一」格式
+        match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*章(?:[之\-]([0-9一二兩三四五六七八九十百千〇零]+))?", normalized)
         if match:
-            number = _cn_to_int_str(match.group(1))
-            if number:
-                info["number"] = number
-                info["key"] = number
+            main = _cn_to_int_str(match.group(1))
+            suffix = _cn_to_int_str(match.group(2)) if match.group(2) else None
+            if main:
+                info["number"] = main
+                if suffix:
+                    info["suffix"] = suffix
+                    info["canonical"] = f"{main}-{suffix}"
+                    info["key"] = info["canonical"]
+                else:
+                    info["key"] = main
     elif level == "section":
         match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*節", normalized)
         if match:
@@ -2549,18 +2577,33 @@ def _extract_level_info(label: Optional[str], level: str) -> Optional[Dict[str, 
                 info["number"] = number
                 info["key"] = number
     elif level == "article":
+        # 優先匹配「第X-Y條」格式（用「-」代表「之」）
         match = re.search(
-            r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*條(?:之\s*([0-9一二兩三四五六七八九十百千〇零]+))?",
+            r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*[-]\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*條",
             normalized,
         )
         if match:
             main = _cn_to_int_str(match.group(1))
-            suffix = _cn_to_int_str(match.group(2)) if match.group(2) else None
-            if main:
+            suffix = _cn_to_int_str(match.group(2))
+            if main and suffix:
                 info["number"] = main
                 info["suffix"] = suffix
-                info["canonical"] = f"{main}-{suffix}" if suffix else main
+                info["canonical"] = f"{main}-{suffix}"
                 info["key"] = info["canonical"]
+        else:
+            # 如果沒有匹配到「第X-Y條」格式，嘗試匹配「第X條之Y」格式
+            match = re.search(
+                r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*條(?:之\s*([0-9一二兩三四五六七八九十百千〇零]+))?",
+                normalized,
+            )
+            if match:
+                main = _cn_to_int_str(match.group(1))
+                suffix = _cn_to_int_str(match.group(2)) if match.group(2) else None
+                if main:
+                    info["number"] = main
+                    info["suffix"] = suffix
+                    info["canonical"] = f"{main}-{suffix}" if suffix else main
+                    info["key"] = info["canonical"]
     elif level == "paragraph":
         match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*項", normalized)
         if match:
@@ -2796,25 +2839,52 @@ def _parse_citation_query(query: str) -> Dict[str, Any]:
         "raw": original,
     }
 
-    chapter_match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*章", normalized)
+    # 檢查是否為 ID 搜尋（例如：Art_11, Chap_4_1, Art_87_P1_C8_I1）
+    id_match = re.match(r'^(Art|Chap|Sec|Law)_([A-Za-z0-9_]+)$', query.strip())
+    if id_match:
+        filters["chunk_id"] = query.strip()
+        return filters
+
+    # 匹配「第X章」或「第X章之一」格式
+    chapter_match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*章(?:[之\-]([0-9一二兩三四五六七八九十百千〇零]+))?", normalized)
     if chapter_match:
-        filters["chapter"] = _cn_to_int_str(chapter_match.group(1))
+        main = _cn_to_int_str(chapter_match.group(1))
+        suffix = _cn_to_int_str(chapter_match.group(2)) if chapter_match.group(2) else None
+        if main:
+            filters["chapter"] = main
+            if suffix:
+                filters["chapter_suffix"] = suffix
+                filters["chapter_canonical"] = f"{main}-{suffix}"
 
     section_match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*節", normalized)
     if section_match:
         filters["section"] = _cn_to_int_str(section_match.group(1))
 
+    # 優先匹配「第X-Y條」格式（用「-」代表「之」）
     article_match = re.search(
-        r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*條(?:之\s*([0-9一二兩三四五六七八九十百千〇零]+))?",
+        r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*[-]\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*條",
         normalized,
     )
     if article_match:
         main = _cn_to_int_str(article_match.group(1))
-        suffix = _cn_to_int_str(article_match.group(2)) if article_match.group(2) else None
-        if main:
+        suffix = _cn_to_int_str(article_match.group(2))
+        if main and suffix:
             filters["article"] = main
             filters["article_suffix"] = suffix
-            filters["article_canonical"] = f"{main}-{suffix}" if suffix else main
+            filters["article_canonical"] = f"{main}-{suffix}"
+    else:
+        # 如果沒有匹配到「第X-Y條」格式，嘗試匹配「第X條之Y」格式
+        article_match = re.search(
+            r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*條(?:之\s*([0-9一二兩三四五六七八九十百千〇零]+))?",
+            normalized,
+        )
+        if article_match:
+            main = _cn_to_int_str(article_match.group(1))
+            suffix = _cn_to_int_str(article_match.group(2)) if article_match.group(2) else None
+            if main:
+                filters["article"] = main
+                filters["article_suffix"] = suffix
+                filters["article_canonical"] = f"{main}-{suffix}" if suffix else main
 
     paragraph_match = re.search(r"第\s*([0-9一二兩三四五六七八九十百千〇零]+)\s*項", normalized)
     if paragraph_match:
@@ -2847,6 +2917,15 @@ def _parse_citation_query(query: str) -> Dict[str, Any]:
 
 
 def _record_matches_filters(record: Dict[str, Any], filters: Dict[str, Any]) -> bool:
+    # 如果提供了 chunk_id 過濾器，直接匹配 chunk_id
+    chunk_id_filter = filters.get("chunk_id")
+    if chunk_id_filter:
+        record_chunk_id = record.get("chunk_id", "")
+        # 支持完全匹配或部分匹配（例如：Art_11 可以匹配 Art_11_P1）
+        if record_chunk_id == chunk_id_filter or record_chunk_id.startswith(chunk_id_filter + "_"):
+            return True
+        return False
+    
     path = record.get("path", {})
     law_filter = filters.get("law_key")
     if law_filter:
@@ -2859,8 +2938,19 @@ def _record_matches_filters(record: Dict[str, Any], filters: Dict[str, Any]) -> 
     chapter_filter = filters.get("chapter")
     if chapter_filter:
         chapter_entry = path.get("chapter")
-        if not chapter_entry or chapter_entry.get("number") != chapter_filter:
+        if not chapter_entry:
             return False
+        # 檢查是否有章節後綴（「之一」）
+        chapter_canonical = filters.get("chapter_canonical")
+        if chapter_canonical:
+            # 如果有 canonical 格式（例如：4-1），需要匹配 canonical
+            entry_canonical = chapter_entry.get("canonical") or chapter_entry.get("key")
+            if entry_canonical != chapter_canonical:
+                return False
+        else:
+            # 如果沒有後綴，只匹配主編號
+            if chapter_entry.get("number") != chapter_filter:
+                return False
 
     section_filter = filters.get("section")
     if section_filter:
@@ -3194,7 +3284,7 @@ async def get_enhanced_metadata_stats():
         return {"error": f"獲取統計失敗: {str(e)}"}
 
 @app.get("/api/chunking-hierarchy-stats")
-async def get_chunking_hierarchy_stats():
+async def get_chunking_hierarchy_stats(doc_id: Optional[str] = None):
     """獲取分塊結果的法律層級統計信息 - 統計實際顯示的分塊列表（428個分塊）"""
     try:
         # 獲取所有文檔的多層級分塊數據
@@ -3252,51 +3342,61 @@ async def get_chunking_hierarchy_stats():
             # 默認歸類到項級（basic_unit）
             return 'basic_unit'
         
-        # 遍歷所有文檔
-        # 只統計使用structured_hierarchical策略的文檔（避免統計所有文檔導致數字過大）
-        # 按文件名去重，只統計每個文件名的第一個符合條件的文檔（避免重複統計）
-        # 如果有同名文檔，優先選擇有structured_chunks且chunks數量最多的
-        filename_to_doc = {}  # {filename: (doc_id, doc, chunk_count)}
-        
-        # 第一次遍歷：找出每個文件名的最佳文檔（有structured_chunks且chunks最多的）
-        for doc_id, doc in store.docs.items():
-            # 只統計structured_hierarchical策略的文檔
-            chunking_strategy = getattr(doc, 'chunking_strategy', None)
-            if chunking_strategy not in ['structured_hierarchical', 'multi_level_structured']:
-                continue
+        # 確定要處理的文檔列表
+        if doc_id:
+            # 如果指定了 doc_id，只處理該文檔
+            doc = store.docs.get(doc_id)
+            if not doc:
+                raise HTTPException(status_code=404, detail="找不到指定文檔")
+            docs_to_process = [(doc_id, doc)]
+        else:
+            # 否則，只統計使用structured_hierarchical策略的文檔（避免統計所有文檔導致數字過大）
+            # 按文件名去重，只統計每個文件名的第一個符合條件的文檔（避免重複統計）
+            # 如果有同名文檔，優先選擇有structured_chunks且chunks數量最多的
+            filename_to_doc = {}  # {filename: (doc_id, doc, chunk_count)}
             
-            # 優先統計structured_chunks（實際顯示的428個chunks）
-            if doc.structured_chunks:
-                chunk_count = len(doc.structured_chunks)
+            # 第一次遍歷：找出每個文件名的最佳文檔（有structured_chunks且chunks最多的）
+            for current_doc_id, doc in store.docs.items():
+                # 只統計structured_hierarchical策略的文檔
+                chunking_strategy = getattr(doc, 'chunking_strategy', None)
+                if chunking_strategy not in ['structured_hierarchical', 'multi_level_structured']:
+                    continue
                 
-                # 如果這個文件名還沒有記錄，或者這個文檔有更多的chunks，則更新
-                if doc.filename not in filename_to_doc:
-                    filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
-                else:
-                    existing_count = filename_to_doc[doc.filename][2]
-                    if chunk_count > existing_count:
-                        print(f"🔄 發現更新的文檔 {doc.filename}: {chunk_count} > {existing_count} chunks")
-                        filename_to_doc[doc.filename] = (doc_id, doc, chunk_count)
+                # 優先統計structured_chunks（實際顯示的428個chunks）
+                if doc.structured_chunks:
+                    chunk_count = len(doc.structured_chunks)
+                    
+                    # 如果這個文件名還沒有記錄，或者這個文檔有更多的chunks，則更新
+                    if doc.filename not in filename_to_doc:
+                        filename_to_doc[doc.filename] = (current_doc_id, doc, chunk_count)
+                    else:
+                        existing_count = filename_to_doc[doc.filename][2]
+                        if chunk_count > existing_count:
+                            print(f"🔄 發現更新的文檔 {doc.filename}: {chunk_count} > {existing_count} chunks")
+                            filename_to_doc[doc.filename] = (current_doc_id, doc, chunk_count)
+            
+            docs_to_process = [(doc_id, doc) for doc_id, doc, _ in filename_to_doc.values()]
         
-        # 第二次遍歷：只統計選中的文檔
-        for filename, (doc_id, doc, chunk_count) in filename_to_doc.items():
+        # 遍歷要處理的文檔
+        for current_doc_id, doc in docs_to_process:
             doc_chunk_count = 0
-            # 統計每個chunk的層級
-            for chunk in doc.structured_chunks:
-                metadata = chunk.get('metadata', {})
-                level_en = metadata.get('level_en') or metadata.get('level')
-                chunk_by = metadata.get('chunk_by')
-                
-                # 映射到六層分類
-                hierarchy_level = map_level_to_hierarchy(level_en, chunk_by)
-                
-                if hierarchy_level in hierarchy_stats:
-                    hierarchy_stats[hierarchy_level] += 1
-                    total_chunks += 1
-                    doc_chunk_count += 1
+            # 優先統計structured_chunks（實際顯示的分塊）
+            if doc.structured_chunks:
+                for chunk in doc.structured_chunks:
+                    metadata = chunk.get('metadata', {})
+                    level_en = metadata.get('level_en') or metadata.get('level')
+                    chunk_by = metadata.get('chunk_by')
+                    
+                    # 映射到六層分類
+                    hierarchy_level = map_level_to_hierarchy(level_en, chunk_by)
+                    
+                    if hierarchy_level in hierarchy_stats:
+                        hierarchy_stats[hierarchy_level] += 1
+                        total_chunks += 1
+                        doc_chunk_count += 1
             
             chunking_strategy = getattr(doc, 'chunking_strategy', None)
-            print(f"📊 統計文檔 {doc.filename} (策略: {chunking_strategy}, doc_id: {doc_id}): {doc_chunk_count} 個分塊")
+            print(f"📊 統計文檔 {doc.filename} (策略: {chunking_strategy}, doc_id: {current_doc_id}): {doc_chunk_count} 個分塊")
         
         # 添加中文層級名稱映射
         level_names = {
@@ -3322,64 +3422,106 @@ async def get_chunking_hierarchy_stats():
         return {"error": f"獲取統計失敗: {str(e)}"}
 
 @app.get("/api/chunks-by-hierarchy/{level_name}")
-async def get_chunks_by_hierarchy(level_name: str):
+async def get_chunks_by_hierarchy(level_name: str, doc_id: Optional[str] = None):
     """根據法律層級獲取chunks列表"""
     try:
         chunks_by_level = []
         
-        # 遍歷所有文檔
-        for doc_id, doc in store.docs.items():
-            # 優先使用multi_level_chunks
-            if doc.multi_level_chunks and isinstance(doc.multi_level_chunks, dict):
-                # 從多層級chunks中獲取指定層級的chunks
-                if level_name in doc.multi_level_chunks:
-                    chunks = doc.multi_level_chunks[level_name]
-                    if chunks:
-                        for i, chunk_data in enumerate(chunks):
-                            chunk_info = {
-                                'chunk_id': f"{doc_id}_{level_name}_{i}",
-                                'doc_id': doc_id,
-                                'doc_name': doc.filename,
-                                'level': level_name,
-                                'content': chunk_data.get('content', ''),
-                                'metadata': chunk_data.get('metadata', {}),
-                                'span': chunk_data.get('span', {}),
-                                'chunk_index': i
-                            }
-                            chunks_by_level.append(chunk_info)
-            elif doc.structured_chunks:
-                # 從結構化chunks中篩選指定層級
+        # 確定要處理的文檔列表
+        if doc_id:
+            # 如果指定了 doc_id，只處理該文檔
+            doc = store.docs.get(doc_id)
+            if not doc:
+                raise HTTPException(status_code=404, detail="找不到指定文檔")
+            docs_to_process = [(doc_id, doc)]
+        else:
+            # 否則處理所有文檔
+            docs_to_process = list(store.docs.items())
+        
+        # 層級映射：將 level_en 映射到六層分類
+        def map_level_to_hierarchy(level_en: str = None, chunk_by: str = None) -> Optional[str]:
+            """將level_en或chunk_by映射到六層分類"""
+            if level_en:
+                level_en_lower = level_en.lower()
+                if level_en_lower in ['law', 'chapter']:
+                    return 'document'
+                elif level_en_lower == 'section':
+                    return 'document_component'
+                elif level_en_lower == 'article':
+                    return 'basic_unit_hierarchy'
+                elif level_en_lower == 'paragraph':
+                    return 'basic_unit'
+                elif level_en_lower == 'subparagraph':
+                    return 'basic_unit_component'
+                elif level_en_lower == 'item':
+                    return 'enumeration'
+            
+            if chunk_by:
+                chunk_by_lower = chunk_by.lower()
+                if chunk_by_lower in ['law', 'chapter']:
+                    return 'document'
+                elif chunk_by_lower == 'section':
+                    return 'document_component'
+                elif chunk_by_lower == 'article':
+                    return 'basic_unit_hierarchy'
+                elif chunk_by_lower == 'paragraph':
+                    return 'basic_unit'
+                elif chunk_by_lower == 'subparagraph':
+                    return 'basic_unit_component'
+                elif chunk_by_lower == 'item':
+                    return 'enumeration'
+            
+            return None
+        
+        # 遍歷要處理的文檔
+        for current_doc_id, doc in docs_to_process:
+            # 優先使用 structured_chunks（這是實際顯示的分塊）
+            if doc.structured_chunks:
                 for i, chunk in enumerate(doc.structured_chunks):
                     metadata = chunk.get('metadata', {})
-                    chunk_by = metadata.get('chunk_by', 'article')
+                    level_en = metadata.get('level_en') or metadata.get('level')
+                    chunk_by = metadata.get('chunk_by')
+                    
+                    # 映射到六層分類
+                    mapped_level = map_level_to_hierarchy(level_en, chunk_by)
                     
                     # 檢查是否匹配指定的層級
-                    level_matches = False
-                    if level_name == 'document' and chunk_by == 'law':
-                        level_matches = True
-                    elif level_name == 'document_component' and chunk_by == 'chapter':
-                        level_matches = True
-                    elif level_name == 'basic_unit_hierarchy' and chunk_by == 'section':
-                        level_matches = True
-                    elif level_name == 'basic_unit' and chunk_by == 'article':
-                        level_matches = True
-                    elif level_name == 'basic_unit_component' and chunk_by == 'paragraph':
-                        level_matches = True
-                    elif level_name == 'enumeration' and chunk_by in ['subparagraph', 'item']:
-                        level_matches = True
-                    
-                    if level_matches:
+                    if mapped_level == level_name:
+                        # 使用 chunk 中的 chunk_id（如果存在），否則生成
+                        chunk_id = chunk.get('chunk_id') or metadata.get('chunk_id') or f"{current_doc_id}_structured_{i}"
+                        
                         chunk_info = {
-                            'chunk_id': f"{doc_id}_structured_{i}",
-                            'doc_id': doc_id,
+                            'chunk_id': chunk_id,
+                            'doc_id': current_doc_id,
                             'doc_name': doc.filename,
                             'level': level_name,
                             'content': chunk.get('content', ''),
                             'metadata': metadata,
                             'span': chunk.get('span', {}),
-                            'chunk_index': i
+                            'chunk_index': metadata.get('chunk_index', i)
                         }
                         chunks_by_level.append(chunk_info)
+            # 如果沒有 structured_chunks，嘗試使用 multi_level_chunks
+            elif doc.multi_level_chunks and isinstance(doc.multi_level_chunks, dict):
+                # 從多層級chunks中獲取指定層級的chunks
+                if level_name in doc.multi_level_chunks:
+                    chunks = doc.multi_level_chunks[level_name]
+                    if chunks:
+                        for i, chunk_data in enumerate(chunks):
+                            # 使用 chunk 中的 chunk_id（如果存在）
+                            chunk_id = chunk_data.get('chunk_id') or f"{current_doc_id}_{level_name}_{i}"
+                            
+                            chunk_info = {
+                                'chunk_id': chunk_id,
+                                'doc_id': current_doc_id,
+                                'doc_name': doc.filename,
+                                'level': level_name,
+                                'content': chunk_data.get('content', ''),
+                                'metadata': chunk_data.get('metadata', {}),
+                                'span': chunk_data.get('span', {}),
+                                'chunk_index': chunk_data.get('metadata', {}).get('chunk_index', i)
+                            }
+                            chunks_by_level.append(chunk_info)
         
         return {
             "level_name": level_name,
@@ -3387,8 +3529,12 @@ async def get_chunks_by_hierarchy(level_name: str):
             "total_count": len(chunks_by_level)
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ 獲取層級chunks失敗: {e}")
+        import traceback
+        traceback.print_exc()
         return {"error": f"獲取chunks失敗: {str(e)}"}
 
 @app.get("/api/chunk-hierarchy-tree")
@@ -3886,15 +4032,31 @@ async def multi_level_embed(req: Dict[str, Any]):
     
     print(f"🎉 多層次embedding處理完成！總共處理了 {total_vectors} 個向量，成功完成 {completed_levels}/{total_levels} 個層次")
     
-    # 自動保存多層次embedding數據
-    store.save_data()
-    faiss_store.save_data()
-    bm25_index.save_data()
-    
     # 確保多層次embedding狀態正確設置
     print(f"🎉 多層次embedding完成，保存的層次: {list(store.multi_level_embeddings.keys())}")
     print(f"🔍 store.has_multi_level_embeddings(): {store.has_multi_level_embeddings()}")
     print(f"🔍 可用層次: {store.get_available_levels()}")
+    
+    # 如果指定了實驗組，保存到實驗組存儲中（支持多個實驗組同時存在）
+    if experimental_groups and len(experimental_groups) == 1:
+        group_id = experimental_groups[0]
+        print(f"💾 準備保存實驗組 {group_id} 的embedding數據...")
+        print(f"   當前multi_level_embeddings層次: {list(store.multi_level_embeddings.keys())}")
+        print(f"   當前已保存的實驗組: {store.list_experimental_groups()}")
+        
+        store.save_experimental_group_embeddings(group_id)
+        
+        # 驗證保存是否成功
+        if group_id in store.experimental_group_embeddings:
+            saved_levels = list(store.experimental_group_embeddings[group_id].get("multi_level_embeddings", {}).keys())
+            print(f"✅ 已將實驗組 {group_id} 的embedding保存到獨立存儲，包含層次: {saved_levels}")
+        else:
+            print(f"❌ 警告：實驗組 {group_id} 保存後未在存儲中找到！")
+    
+    # 自動保存多層次embedding數據
+    store.save_data()
+    faiss_store.save_data()
+    bm25_index.save_data()
     
     # 如果這是A組（僅basic_unit），也創建標準embedding以保持兼容性
     if experimental_groups and len(experimental_groups) == 1 and experimental_groups[0] == "group_a":
@@ -6458,6 +6620,46 @@ def enhanced_multi_level_hybrid_retrieve(req: MultiLevelFusionRequest):
         )
 
 
+def clean_markdown_from_answer(answer: str) -> str:
+    """清理答案中的 Markdown 格式，转换为纯文本"""
+    import re
+    
+    if not answer:
+        return answer
+    
+    # 移除 Markdown 标题符号 (# ## ###)
+    answer = re.sub(r'^#{1,6}\s+', '', answer, flags=re.MULTILINE)
+    
+    # 移除粗体 (**text** 或 __text__)
+    answer = re.sub(r'\*\*(.+?)\*\*', r'\1', answer)
+    answer = re.sub(r'__(.+?)__', r'\1', answer)
+    
+    # 移除斜体 (*text* 或 _text_)
+    answer = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'\1', answer)
+    answer = re.sub(r'(?<!_)_(?!_)(.+?)(?<!_)_(?!_)', r'\1', answer)
+    
+    # 移除代码块 (```code```)
+    answer = re.sub(r'```[\s\S]*?```', '', answer)
+    
+    # 移除行内代码 (`code`)
+    answer = re.sub(r'`([^`]+)`', r'\1', answer)
+    
+    # 移除 Markdown 列表符号，保留内容
+    # 处理 - * + 开头的列表项
+    answer = re.sub(r'^[\s]*[-*+]\s+', '', answer, flags=re.MULTILINE)
+    
+    # 处理数字列表，保留数字但移除 Markdown 格式
+    # 将 1. 2. 3. 转换为 1. 2. 3. (已经是纯文本格式)
+    
+    # 移除多余的空白行
+    answer = re.sub(r'\n\s*\n\s*\n+', '\n\n', answer)
+    
+    # 清理行首行尾空格
+    answer = '\n'.join(line.strip() for line in answer.split('\n'))
+    
+    return answer.strip()
+
+
 async def gemini_chat(messages: List[Dict[str, str]]) -> str:
     if not httpx:
         raise RuntimeError("httpx not available")
@@ -6467,7 +6669,7 @@ async def gemini_chat(messages: List[Dict[str, str]]) -> str:
     if not api_key:
         raise RuntimeError("GOOGLE_API_KEY or GEMINI_API_KEY not set")
     
-    model = os.getenv("GOOGLE_CHAT_MODEL", "gemini-1.5-flash")
+    model = os.getenv("GOOGLE_CHAT_MODEL", "gemini-2.0-flash")
     # Use Generative Language API: models/{model}:generateContent
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     # Convert messages to Gemini format
@@ -6482,7 +6684,9 @@ async def gemini_chat(messages: List[Dict[str, str]]) -> str:
         "contents": contents,
         "generationConfig": {
             "temperature": 0.2,
-            "maxOutputTokens": 2048
+            "maxOutputTokens": 4096,  # 增加token限制，避免答案被截断
+            "topP": 0.95,
+            "topK": 40
         }
     }
     
@@ -6491,15 +6695,27 @@ async def gemini_chat(messages: List[Dict[str, str]]) -> str:
         "Content-Type": "application/json"
     }
     
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=120) as client:  # 增加超时时间
         r = await client.post(url, headers=headers, json=payload)
         r.raise_for_status()
         data = r.json()
         # Extract response from new format
         if "candidates" in data and data["candidates"]:
             candidate = data["candidates"][0]
+            
+            # 检查是否因为token限制而截断
+            finish_reason = candidate.get("finishReason", "")
+            if finish_reason == "MAX_TOKENS":
+                print("⚠️ 警告：答案可能因token限制而被截断")
+            
             if "content" in candidate and "parts" in candidate["content"]:
-                return candidate["content"]["parts"][0].get("text", "").strip()
+                answer_text = candidate["content"]["parts"][0].get("text", "").strip()
+                
+                # 如果答案被截断，添加提示
+                if finish_reason == "MAX_TOKENS" and answer_text:
+                    answer_text += "\n\n（注意：答案可能因长度限制而被截断，如需完整答案请重新提问或分段询问）"
+                
+                return answer_text
         return "No response generated"
 
 
@@ -6807,7 +7023,11 @@ def generate(req: GenerateRequest):
 1. 只使用提供的上下文內容回答問題
 2. 如果答案涉及具體法律條文，請引用相關的法規名稱和條文號碼
 3. 如果信息不足，請明確說明你不知道
-4. 回答要準確、專業，符合法律文檔的表述方式"""
+4. 回答要準確、專業，符合法律文檔的表述方式
+5. 使用純文本格式回答，不要使用 Markdown 格式（如 **粗體**、*斜體*、# 標題等）
+6. 使用簡單的列表格式（如：1. 2. 3. 或 • • •），不要使用 Markdown 列表語法
+7. 確保答案完整，不要在中途截斷
+8. 如果答案較長，請確保所有要點都完整表達"""
 
             user_content = f"問題: {req.query}\n\n"
             
@@ -6823,6 +7043,8 @@ def generate(req: GenerateRequest):
             
             try:
                 answer = asyncio_run(gemini_chat(prompt))
+                # 清理可能的 Markdown 格式
+                answer = clean_markdown_from_answer(answer)
             except Exception as e:
                 answer = f"Gemini調用失敗: {e}. 回退到提取式回答。\n" + simple_extractive_answer(req.query, contexts)
         else:
@@ -7112,9 +7334,11 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
             base = os.path.splitext(filename or "document")[0]
             law_name = base or "未命名法規"
 
-        chapter_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)\s*章[\u3000\s]*(.*)$")
+        # 修改章節正則表達式，支持「第X章之一」格式
+        chapter_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)\s*章(?:[之\-]([一二三四五六七八九十百千0-9]+))?[\u3000\s]*(.*)$")
         section_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)\s*節[\u3000\s]*(.*)$")
-        article_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+(?:之[一二三四五六七八九十0-9]+)?)\s*條[\u3000\s]*(.*)$")
+        # 修改條文正則表達式，分別捕獲主編號和後綴
+        article_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)(?:[之\-]([一二三四五六七八九十0-9]+))?\s*條[\u3000\s]*(.*)$")
 
         def parse_item_line(ln: str):
             # Match common item markers like 「一、」「1.」「（一）」「(1)」「1）」 etc.
@@ -7175,8 +7399,20 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
             m = chapter_re.match(ln)
             if m:
                 num_raw = m.group(1)
-                title = f"第{num_raw}章" + (f" {m.group(2).strip()}" if m.group(2) else "")
+                suffix_raw = m.group(2)  # 「之一」的後綴
+                title_suffix = m.group(3).strip() if m.group(3) else ""  # 標題後綴（如「總則」）
+                
+                # 構建章節標題
+                if suffix_raw:
+                    # 有「之一」後綴：第四章之一
+                    title = f"第{num_raw}章之{suffix_raw}" + (f" {title_suffix}" if title_suffix else "")
+                else:
+                    # 沒有「之一」後綴：第四章
+                    title = f"第{num_raw}章" + (f" {title_suffix}" if title_suffix else "")
+                
                 current_chapter = {"chapter": title, "chapter_no": normalize_digits(num_raw), "type_en": "Chapter", "sections": []}
+                if suffix_raw:
+                    current_chapter["chapter_suffix"] = normalize_digits(suffix_raw)
                 structure["chapters"].append(current_chapter)
                 current_section = None
                 current_article = None
@@ -7201,11 +7437,23 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
             m = article_re.match(ln)
             if m:
                 ensure_section()
-                num_raw = m.group(1)
-                title = f"第{num_raw}條"
-                rest = m.group(2).strip() if m.group(2) else ""
+                num_raw = m.group(1)  # 主編號
+                suffix_raw = m.group(2)  # 「之一」或「-1」的後綴
+                rest = m.group(3).strip() if m.group(3) else ""  # 條文內容
+                
+                # 構建條文標題
+                if suffix_raw:
+                    # 有「之一」或「-1」後綴：第4-1條 或 第4條之1
+                    # 統一使用「之」格式存儲
+                    title = f"第{num_raw}條之{suffix_raw}"
+                else:
+                    # 沒有後綴：第4條
+                    title = f"第{num_raw}條"
+                
                 # 建立條文，新增 paragraphs 清單並保留相容的 items 欄位
                 current_article = {"article": title, "article_no": normalize_digits(num_raw), "type_en": "Article", "content": rest, "paragraphs": []}
+                if suffix_raw:
+                    current_article["article_suffix"] = normalize_digits(suffix_raw)
                 # 相容舊欄位（將指向同一個列表）
                 current_article["items"] = current_article["paragraphs"]
                 current_section["articles"].append(current_article)
@@ -8809,6 +9057,23 @@ async def hybrid_retrieve_original(query: str, k: int):
     return []
 
 
+@app.get("/api/debug-experimental-groups")
+async def debug_experimental_groups():
+    """調試接口：查看實驗組存儲狀態"""
+    return {
+        "saved_groups": store.list_experimental_groups(),
+        "experimental_group_embeddings_keys": list(store.experimental_group_embeddings.keys()),
+        "current_multi_level_embeddings_keys": list(store.multi_level_embeddings.keys()),
+        "experimental_group_details": {
+            group_id: {
+                "levels": list(group_data.get("multi_level_embeddings", {}).keys()),
+                "has_data": len(group_data.get("multi_level_embeddings", {})) > 0
+            }
+            for group_id, group_data in store.experimental_group_embeddings.items()
+        }
+    }
+
+
 @app.get("/api/embedding-databases")
 async def list_embedding_databases():
     """列出所有可用的embedding資料庫"""
@@ -8855,8 +9120,86 @@ async def list_embedding_databases():
             "created_at": datetime.now().isoformat()
         })
     
-    # 檢查多層次embedding - 合併為一個資料庫顯示
+    # 檢查多層次embedding - 按實驗組分別列出
     print(f"🔍 檢查多層次embedding: has_multi_level_embeddings={store.has_multi_level_embeddings()}")
+    
+    # 首先列出所有已保存的實驗組
+    saved_groups = store.list_experimental_groups()
+    print(f"🔍 已保存的實驗組: {saved_groups}")
+    
+    for group_id in saved_groups:
+        if group_id not in GRANULARITY_COMBINATIONS:
+            continue
+        
+        # 臨時加載該實驗組的數據以獲取信息
+        group_data = store.experimental_group_embeddings.get(group_id, {})
+        group_multi_level_embeddings = group_data.get("multi_level_embeddings", {})
+        
+        if not group_multi_level_embeddings:
+            continue
+        
+        # 收集該實驗組的信息
+        all_doc_info = {}
+        total_vectors = 0
+        providers = set()
+        models = set()
+        dimensions = set()
+        levels_info = []
+        
+        for level in group_multi_level_embeddings.keys():
+            level_data = {
+                'embeddings': group_multi_level_embeddings.get(level, []),
+                'chunks': group_data.get("multi_level_chunks_flat", {}).get(level, []),
+                'doc_ids': group_data.get("multi_level_chunk_doc_ids", {}).get(level, []),
+                'metadata': group_data.get("multi_level_metadata", {}).get(level, {})
+            }
+            
+            # 收集文檔信息
+            for doc_id in set(level_data.get('doc_ids', [])):
+                doc = store.get_doc(doc_id)
+                if doc:
+                    all_doc_info[doc_id] = {
+                        "filename": doc.filename,
+                        "json_data": doc.json_data is not None
+                    }
+            
+            # 統計信息
+            level_vectors = len(level_data.get('embeddings', []))
+            total_vectors += level_vectors
+            providers.add(level_data.get('metadata', {}).get('provider', 'unknown'))
+            models.add(level_data.get('metadata', {}).get('model', 'unknown'))
+            dimensions.add(level_data.get('metadata', {}).get('dimension', 0))
+            
+            levels_info.append({
+                "level": level,
+                "description": get_level_description(level),
+                "num_vectors": level_vectors
+            })
+        
+        if total_vectors > 0:
+            # 根據層次組合確定實驗組名稱
+            level_names = [level["level"] for level in levels_info]
+            combination = GRANULARITY_COMBINATIONS[group_id]
+            group_name = combination["name"]
+            
+            databases.append({
+                "id": f"experimental_group_{group_id}",
+                "type": "multi_level",
+                "name": f"實驗組Embedding - {group_name}",
+                "provider": list(providers)[0] if providers else "unknown",
+                "model": list(models)[0] if models else "unknown",
+                "num_vectors": total_vectors,
+                "dimension": list(dimensions)[0] if dimensions else 0,
+                "chunking_strategy": "hierarchical",
+                "documents": list(all_doc_info.values()),
+                "levels": levels_info,
+                "experimental_group": group_name,
+                "experimental_group_id": group_id,
+                "created_at": datetime.now().isoformat()
+            })
+    
+    # 也檢查當前激活的多層次embedding（如果沒有保存到實驗組存儲中）
+    # 如果檢測到有multi_level_embeddings但沒有對應的experimental_group_embeddings，嘗試自動遷移
     if store.has_multi_level_embeddings():
         available_levels = store.get_available_levels()
         
@@ -8896,31 +9239,52 @@ async def list_embedding_databases():
         if total_vectors > 0:
             # 根據層次組合確定實驗組
             level_names = [level["level"] for level in levels_info]
+            level_names_set = set(level_names)
             group_name = "未知實驗組"
+            group_id = None
             
-            if level_names == ["basic_unit"]:
+            # 修復實驗組識別邏輯
+            if level_names_set == {"basic_unit"}:
                 group_name = "A組：僅條文層 (Baseline)"
-            elif set(level_names) == {"basic_unit_hierarchy", "basic_unit"}:
+                group_id = "group_a"
+            elif level_names_set == {"document_component", "basic_unit_hierarchy", "basic_unit"}:
                 group_name = "B組：條文+章節結構"
-            elif set(level_names) == {"basic_unit", "basic_unit_component", "enumeration"}:
+                group_id = "group_b"
+            elif level_names_set == {"basic_unit", "basic_unit_component", "enumeration"}:
                 group_name = "C組：條文+細節層次"
-            elif len(level_names) == 6:
+                group_id = "group_c"
+            elif level_names_set == {"document_component", "basic_unit_hierarchy", "basic_unit", "basic_unit_component", "enumeration"}:
                 group_name = "D組：完整多層次ML-RAG"
+                group_id = "group_d"
             
-            databases.append({
-                "id": "multi_level_combined",
-                "type": "multi_level",
-                "name": f"實驗組Embedding - {group_name}",
-                "provider": list(providers)[0] if providers else "unknown",
-                "model": list(models)[0] if models else "unknown",
-                "num_vectors": total_vectors,
-                "dimension": list(dimensions)[0] if dimensions else 0,
-                "chunking_strategy": "hierarchical",
-                "documents": list(all_doc_info.values()),
-                "levels": levels_info,
-                "experimental_group": group_name,
-                "created_at": datetime.now().isoformat()
-            })
+            # 如果識別出實驗組但沒有保存到實驗組存儲中，自動遷移
+            if group_id and group_id not in saved_groups:
+                print(f"🔄 檢測到未保存的實驗組 {group_id}，自動遷移到實驗組存儲...")
+                store.save_experimental_group_embeddings(group_id)
+                store.save_data()
+                print(f"✅ 已自動遷移實驗組 {group_id} 到實驗組存儲")
+                saved_groups.append(group_id)  # 更新列表，避免重複顯示
+            
+            # 檢查是否已經在實驗組存儲中（避免重複顯示）
+            if group_id and group_id in saved_groups:
+                # 已經在實驗組列表中顯示，跳過
+                pass
+            else:
+                databases.append({
+                    "id": "multi_level_combined" if not group_id else f"experimental_group_{group_id}",
+                    "type": "multi_level",
+                    "name": f"實驗組Embedding - {group_name}",
+                    "provider": list(providers)[0] if providers else "unknown",
+                    "model": list(models)[0] if models else "unknown",
+                    "num_vectors": total_vectors,
+                    "dimension": list(dimensions)[0] if dimensions else 0,
+                    "chunking_strategy": "hierarchical",
+                    "documents": list(all_doc_info.values()),
+                    "levels": levels_info,
+                    "experimental_group": group_name,
+                    "experimental_group_id": group_id,
+                    "created_at": datetime.now().isoformat()
+                })
     
     return databases
 
@@ -9004,6 +9368,84 @@ async def activate_embedding_database(database_id: str):
                 "faiss_available": faiss_store.has_vectors(),
                 "bm25_available": bm25_index.has_index(),
                 "num_vectors": len(store.embeddings) if store.embeddings else 0,
+                "success": True
+            }
+            
+        elif database_id.startswith("experimental_group_"):
+            # 激活特定實驗組的embedding
+            # 處理可能的重複前綴（如 experimental_group_group_b）
+            group_id = database_id.replace("experimental_group_", "")
+            # 如果還有前綴，再次移除
+            if group_id.startswith("group_"):
+                # 已經是正確格式，不需要再處理
+                pass
+            print(f"🔄 激活實驗組: {group_id} (原始database_id: {database_id})")
+            
+            if group_id not in GRANULARITY_COMBINATIONS:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": f"未知的實驗組: {group_id}"}
+                )
+            
+            # 檢查實驗組數據是否存在
+            if group_id not in store.experimental_group_embeddings:
+                print(f"⚠️ 實驗組 {group_id} 不在存儲中，已保存的實驗組: {store.list_experimental_groups()}")
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": f"實驗組 {group_id} 的embedding資料不存在，請先執行該實驗組的embedding。已保存的實驗組: {', '.join(store.list_experimental_groups())}"}
+                )
+            
+            # 從實驗組存儲中加載數據
+            if not store.load_experimental_group_embeddings(group_id):
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": f"實驗組 {group_id} 的embedding資料加載失敗"}
+                )
+            
+            # 重建FAISS和BM25索引
+            print("📊 重建實驗組的FAISS和BM25索引...")
+            
+            # 清除現有索引
+            faiss_store.reset_vectors()
+            bm25_index.reset_index()
+            
+            # 為每個層次重建索引
+            available_levels = store.get_available_levels()
+            for level_name in available_levels:
+                level_data = store.get_multi_level_embeddings(level_name)
+                if not level_data:
+                    continue
+                
+                vectors = level_data.get('embeddings', [])
+                chunks = level_data.get('chunks', [])
+                doc_ids = level_data.get('doc_ids', [])
+                
+                if not vectors or not chunks:
+                    continue
+                
+                # 重建FAISS索引
+                level_chunk_ids = [f"{level_name}_{doc_id}_{i}" for i, doc_id in enumerate(doc_ids)]
+                faiss_store.add_multi_level_vectors(level_name, vectors, level_chunk_ids, doc_ids, chunks)
+                
+                # 重建BM25索引
+                bm25_index.build_multi_level_index(level_name, chunks, level_chunk_ids, doc_ids)
+                
+                print(f"✅ 層次 '{level_name}' 索引已重建: {len(vectors)} 個向量")
+            
+            # 保存索引
+            faiss_store.save_data()
+            bm25_index.save_data()
+            
+            combination = GRANULARITY_COMBINATIONS[group_id]
+            print(f"✅ 實驗組 {group_id} ({combination['name']}) 已激活")
+            return {
+                "message": f"實驗組 {group_id} 已激活",
+                "database_id": database_id,
+                "experimental_group_id": group_id,
+                "experimental_group_name": combination['name'],
+                "faiss_available": faiss_store.has_multi_level_vectors(),
+                "bm25_available": bm25_index.has_multi_level_index(),
+                "available_levels": available_levels,
                 "success": True
             }
             
@@ -9149,10 +9591,60 @@ async def delete_embedding_database(database_id: str):
                         content={"error": f"多層次embedding層次 '{level_name}' 不存在"}
                     )
             else:
+                    return JSONResponse(
+                        status_code=404, 
+                        content={"error": "多層次embedding資料庫不存在"}
+                    )
+        elif database_id.startswith("experimental_group_"):
+            # 刪除特定實驗組的embedding
+            # 處理可能的重複前綴
+            group_id = database_id.replace("experimental_group_", "")
+            print(f"🗑️ 刪除實驗組: {group_id} (原始database_id: {database_id})")
+            
+            if group_id not in GRANULARITY_COMBINATIONS:
                 return JSONResponse(
-                    status_code=404, 
-                    content={"error": "多層次embedding資料庫不存在"}
+                    status_code=404,
+                    content={"error": f"未知的實驗組: {group_id}"}
                 )
+            
+            if group_id not in store.experimental_group_embeddings:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": f"實驗組 {group_id} 的embedding資料不存在"}
+                )
+            
+            # 刪除實驗組數據
+            del store.experimental_group_embeddings[group_id]
+            store.save_data()
+            
+            # 如果當前激活的是這個實驗組，清除當前激活的數據
+            current_levels = store.get_available_levels()
+            if current_levels:
+                # 檢查當前激活的層次是否屬於這個實驗組
+                combination = GRANULARITY_COMBINATIONS[group_id]
+                group_levels = set(combination["levels"])
+                current_levels_set = set(current_levels)
+                
+                # 如果當前激活的層次完全匹配這個實驗組，清除當前激活的數據
+                if current_levels_set == group_levels:
+                    store.multi_level_embeddings = {}
+                    store.multi_level_chunk_doc_ids = {}
+                    store.multi_level_chunks_flat = {}
+                    store.multi_level_metadata = {}
+                    store.save_data()
+                    
+                    # 清除FAISS和BM25索引
+                    faiss_store.reset_vectors()
+                    bm25_index.reset_index()
+                    faiss_store.save_data()
+                    bm25_index.save_data()
+            
+            combination = GRANULARITY_COMBINATIONS[group_id]
+            print(f"✅ 已刪除實驗組 {group_id} ({combination['name']}) 的embedding資料")
+            return {
+                "message": f"實驗組 {group_id} ({combination['name']}) 的embedding資料已刪除",
+                "success": True
+            }
         else:
             return JSONResponse(
                 status_code=400, 

@@ -19,11 +19,15 @@ class InMemoryStore:
         self.chunks_flat: List[str] = []
         self.evaluation_tasks: Dict[str, EvaluationTask] = {}
         
-        # 多層次embedding存儲
+        # 多層次embedding存儲（當前激活的實驗組）
         self.multi_level_embeddings: Dict[str, Dict[str, Any]] = {}
         self.multi_level_chunk_doc_ids: Dict[str, List[str]] = {}
         self.multi_level_chunks_flat: Dict[str, List[str]] = {}
         self.multi_level_metadata: Dict[str, Dict[str, Any]] = {}  # 存儲模型信息等元數據
+        
+        # 按實驗組分別存儲embedding（支持多個實驗組同時存在）
+        # 結構: {group_id: {multi_level_embeddings: {...}, multi_level_chunk_doc_ids: {...}, ...}}
+        self.experimental_group_embeddings: Dict[str, Dict[str, Any]] = {}
         
         # Enhanced metadata存儲（在分塊階段生成）
         self.enhanced_metadata: Dict[str, Dict[str, Any]] = {}  # chunk_id -> enhanced_metadata
@@ -103,6 +107,7 @@ class InMemoryStore:
                 "multi_level_chunk_doc_ids": self.multi_level_chunk_doc_ids,
                 "multi_level_chunks_flat": self.multi_level_chunks_flat,
                 "multi_level_metadata": self.multi_level_metadata,
+                "experimental_group_embeddings": self.experimental_group_embeddings,  # 新增：按實驗組存儲
                 "enhanced_metadata": self.enhanced_metadata,
                 "demo_data_deleted": self.demo_data_deleted
             }
@@ -168,6 +173,7 @@ class InMemoryStore:
             self.multi_level_chunk_doc_ids = data.get("multi_level_chunk_doc_ids", {})
             self.multi_level_chunks_flat = data.get("multi_level_chunks_flat", {})
             self.multi_level_metadata = data.get("multi_level_metadata", {})
+            self.experimental_group_embeddings = data.get("experimental_group_embeddings", {})  # 新增：載入實驗組數據
             self.enhanced_metadata = data.get("enhanced_metadata", {})
             self.demo_data_deleted = data.get("demo_data_deleted", False)
             
@@ -235,6 +241,33 @@ class InMemoryStore:
     def get_available_levels(self) -> List[str]:
         """獲取可用的embedding層次"""
         return list(self.multi_level_embeddings.keys())
+    
+    def save_experimental_group_embeddings(self, group_id: str):
+        """保存當前激活的實驗組embedding到實驗組存儲中"""
+        self.experimental_group_embeddings[group_id] = {
+            "multi_level_embeddings": self.multi_level_embeddings.copy(),
+            "multi_level_chunk_doc_ids": self.multi_level_chunk_doc_ids.copy(),
+            "multi_level_chunks_flat": self.multi_level_chunks_flat.copy(),
+            "multi_level_metadata": self.multi_level_metadata.copy()
+        }
+        print(f"✅ 已保存實驗組 {group_id} 的embedding數據")
+    
+    def load_experimental_group_embeddings(self, group_id: str) -> bool:
+        """從實驗組存儲中加載指定實驗組的embedding"""
+        if group_id not in self.experimental_group_embeddings:
+            return False
+        
+        group_data = self.experimental_group_embeddings[group_id]
+        self.multi_level_embeddings = group_data.get("multi_level_embeddings", {}).copy()
+        self.multi_level_chunk_doc_ids = group_data.get("multi_level_chunk_doc_ids", {}).copy()
+        self.multi_level_chunks_flat = group_data.get("multi_level_chunks_flat", {}).copy()
+        self.multi_level_metadata = group_data.get("multi_level_metadata", {}).copy()
+        print(f"✅ 已加載實驗組 {group_id} 的embedding數據")
+        return True
+    
+    def list_experimental_groups(self) -> List[str]:
+        """列出所有已保存的實驗組ID"""
+        return list(self.experimental_group_embeddings.keys())
     
     # E/C/U標註管理方法
     def save_annotation(self, annotation: ECUAnnotation):

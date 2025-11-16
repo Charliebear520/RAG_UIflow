@@ -524,4 +524,11 @@ export const api = {
       marginal_benefit_analysis: Record<string, any>;
     }>(await fetch(`${base}/granularity-comparison-report`));
   },
+
+  // 通用 GET 方法
+  async get<T = any>(path: string): Promise<T> {
+    // 如果路徑已經包含 /api，直接使用；否則添加
+    const url = path.startsWith("/api/") ? path : `${base}${path.startsWith("/") ? path : `/${path}`}`;
+    return json<T>(await fetch(url));
+  },
 };
