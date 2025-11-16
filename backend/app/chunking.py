@@ -1838,26 +1838,8 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
         for law_data in json_data.get("laws", []):
             law_name = law_data.get("law_name", "未命名法規")
             
-            # 額外：Law 層（保持向後相容）
-            law_chunk = self._build_law_chunk(law_data)
-            law_metadata = {
-                "strategy": "multi_level_structured",
-                "level": "Law",
-                "level_en": "Law",
-                "law_name": law_name,
-                "chapter": "",
-                "section": "",
-                "article": "",
-                "chunk_index": len(all_chunks),
-                "length": len(law_chunk)
-            }
-            law_chunk_id = self._generate_provision_id(law_metadata)
-            all_chunks.append({
-                "content": law_chunk,
-                "span": {"start": 0, "end": len(law_chunk)},
-                "chunk_id": law_chunk_id,
-                "metadata": law_metadata
-            })
+            # 跳過 Law 層級的 chunk（不包含在分塊和 embedding 中）
+            # 因為它包含所有章節內容，過於龐大且不適合檢索
             
             # 處理章節
             for chapter_data in law_data.get("chapters", []):

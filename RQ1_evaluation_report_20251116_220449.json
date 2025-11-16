@@ -1,0 +1,3853 @@
+{
+  "evaluation_info": {
+    "total_queries": 30,
+    "k_values": [
+      5,
+      10
+    ],
+    "evaluation_date": "2025-11-16 22:04:49"
+  },
+  "per_query_results": [
+    {
+      "query_id": "Q1_Type_A",
+      "query_text": "公司員工利用公司之器材、資料所作成的職務上著作，公司能否利用?",
+      "query_type": "基礎型",
+      "ground_truth": {
+        "E": [
+          "Art_11"
+        ],
+        "C": [
+          "Chap_3_Sec_2",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 1.0,
+          "strict_f1": 0.33333333333333337,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.7499999999999999,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 1,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_3",
+            "Chap_3_Sec_4",
+            "Art_12",
+            "Art_54",
+            "Art_15",
+            "Chap_3_Sec_2",
+            "Art_44",
+            "Chap_3",
+            "Art_11"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 1.0,
+          "strict_f1": 0.18181818181818182,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.4615384615384615,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 1,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_3",
+            "Chap_3_Sec_4",
+            "Art_9",
+            "Art_29",
+            "Art_50",
+            "Chap_2",
+            "Art_51",
+            "Art_29_1",
+            "Art_46",
+            "Art_12",
+            "Art_54",
+            "Art_15",
+            "Chap_3_Sec_2",
+            "Art_44",
+            "Chap_3",
+            "Art_11"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 1.0,
+          "strict_f1": 0.33333333333333337,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.7499999999999999,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 1,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Art_11_P1",
+            "Art_11_P3",
+            "Chap_3_Sec_2",
+            "Chap_3",
+            "Art_11_P2",
+            "Art_11"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 1.0,
+          "strict_f1": 0.18181818181818182,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.4615384615384615,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 1,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_3",
+            "Art_9",
+            "Chap_2",
+            "Art_9_P2",
+            "Art_12_P3",
+            "Art_11_P1",
+            "Art_15_P3",
+            "Art_12",
+            "Art_11_P3",
+            "Art_15",
+            "Chap_3_Sec_2",
+            "Chap_3",
+            "Art_11_P2",
+            "Art_11"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q2_Type_A",
+      "query_text": "網路服務提供者（ISP）在什麼情況下可以免除民事責任？",
+      "query_type": "基礎型",
+      "ground_truth": {
+        "E": [
+          "Art_10_1"
+        ],
+        "C": [
+          "Art_28",
+          "Chap_3_Sec_1",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.0,
+          "relaxed_recall": 0.0,
+          "relaxed_f1": 0.0,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 0,
+          "total_e": 1,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Art_90_4",
+            "Chap_6",
+            "Art_90_6",
+            "Art_90_7",
+            "Art_90",
+            "Art_90_10",
+            "Art_90_5"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.0,
+          "relaxed_recall": 0.0,
+          "relaxed_f1": 0.0,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 0,
+          "total_e": 1,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Art_90_4",
+            "Chap_6",
+            "Art_90_6",
+            "Art_82",
+            "Art_90_9",
+            "Art_90_8",
+            "Art_90_7",
+            "Art_90",
+            "Art_90_12",
+            "Art_90_10",
+            "Art_90_5",
+            "Art_82_3",
+            "Art_90_11",
+            "Chap_5"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.0,
+          "relaxed_recall": 0.0,
+          "relaxed_f1": 0.0,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 0,
+          "total_e": 1,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Art_90_4",
+            "Chap_6",
+            "Art_90_6",
+            "Art_90_7",
+            "Art_90",
+            "Art_90_4_P1",
+            "Art_90_10",
+            "Art_90_5"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.0,
+          "relaxed_recall": 0.0,
+          "relaxed_f1": 0.0,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 0,
+          "total_e": 1,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Art_90_4",
+            "Chap_6",
+            "Art_90_6",
+            "Art_90_4_P1_C1",
+            "Art_90_8",
+            "Art_90_7",
+            "Art_90",
+            "Art_90_4_P1_C3",
+            "Art_90_4_P1",
+            "Art_90_10",
+            "Chap_6_1",
+            "Art_90_5"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q3_Type_A",
+      "query_text": "允書很有藝術天分，畫了一幅畫送給好友延宇，延宇很喜歡這幅畫，想要翻拍、掃描後製成拼圖自用或販售，這樣會有著作權問題嗎?",
+      "query_type": "基礎型",
+      "ground_truth": {
+        "E": [
+          "Art_22",
+          "Art_28_1",
+          "Art_51"
+        ],
+        "C": [
+          "Art_65",
+          "Art_28",
+          "Chap_3_Sec_4",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.25,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.42857142857142855,
+          "relaxed_f1": 0.5,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 3,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_58",
+            "Art_57",
+            "Art_45",
+            "Art_27",
+            "Art_51",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.6666666666666666,
+          "strict_f1": 0.30769230769230765,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.5714285714285714,
+          "relaxed_f1": 0.47058823529411764,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 3,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_4",
+            "Art_58",
+            "Art_57",
+            "Art_45",
+            "Art_22",
+            "Art_59",
+            "Art_27",
+            "Art_48",
+            "Art_79",
+            "Art_47",
+            "Art_51",
+            "Chap_3",
+            "Art_59_1"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.2857142857142857,
+          "relaxed_f1": 0.3333333333333333,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 3,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_57_P1",
+            "Art_58",
+            "Art_57",
+            "Art_45",
+            "Art_48",
+            "Art_48_P1_C1",
+            "Chap_3",
+            "Art_45_P1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.15384615384615383,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.42857142857142855,
+          "relaxed_f1": 0.3529411764705882,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 3,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_57_P1",
+            "Art_57",
+            "Art_106_2_P3",
+            "Art_48",
+            "Art_27",
+            "Art_48_P1_C1",
+            "Art_106",
+            "Art_79",
+            "Chap_4",
+            "Chap_3",
+            "Art_45_P1",
+            "Chap_8",
+            "Art_106_2",
+            "Art_22_P1",
+            "Art_58",
+            "Art_79_P1",
+            "Art_45",
+            "Art_22"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q4_Type_A",
+      "query_text": "報社所留存資料（如讀者投書、投稿等），他人欲利用，可否不經著作權人同意，而供給他人?",
+      "query_type": "基礎型",
+      "ground_truth": {
+        "E": [
+          "Art_41"
+        ],
+        "C": [
+          "Art_15",
+          "Chap_3_Sec_4",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 1.0,
+          "strict_f1": 0.33333333333333337,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.75,
+          "relaxed_f1": 0.6666666666666665,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 1,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_61",
+            "Art_49",
+            "Art_62",
+            "Art_41",
+            "Art_44",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 1.0,
+          "strict_f1": 0.18181818181818182,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.75,
+          "relaxed_f1": 0.4285714285714285,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 1,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_61",
+            "Art_50",
+            "Art_49",
+            "Art_51",
+            "Art_62",
+            "Art_52",
+            "Art_41",
+            "Art_54",
+            "Art_47",
+            "Art_44",
+            "Chap_3"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 1.0,
+          "strict_f1": 0.33333333333333337,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.75,
+          "relaxed_f1": 0.6666666666666665,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 1,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_61",
+            "Art_49",
+            "Art_48",
+            "Art_41",
+            "Art_48_P1_C1",
+            "Art_44",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 1.0,
+          "strict_f1": 0.18181818181818182,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.75,
+          "relaxed_f1": 0.4285714285714285,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 1,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_61",
+            "Art_50",
+            "Art_49",
+            "Art_62",
+            "Art_52",
+            "Art_48_P1_C2",
+            "Art_48",
+            "Art_41",
+            "Art_48_P1_C1",
+            "Art_47",
+            "Art_44",
+            "Chap_3"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q5_Type_A",
+      "query_text": "甲片商將錄影帶或VCD授權乙店出租，乙店將該視聽光碟片轉讓予丙店，丙店繼續從事出租行為，請問乙、丙是否違反著作權法?",
+      "query_type": "基礎型",
+      "ground_truth": {
+        "E": [
+          "Art_29_P1",
+          "Art_37",
+          "Art_60"
+        ],
+        "C": [
+          "Art_92",
+          "Chap_3_Sec_4",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.25,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.5454545454545454,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_29",
+            "Art_91_1",
+            "Art_91",
+            "Art_59",
+            "Chap_3",
+            "Art_60",
+            "Chap_7",
+            "Art_59_1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.15384615384615383,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.6666666666666666,
+          "relaxed_f1": 0.5,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_8",
+            "Art_29",
+            "Art_70",
+            "Chap_1",
+            "Art_91_1",
+            "Art_112",
+            "Art_91",
+            "Art_36",
+            "Art_59",
+            "Art_3",
+            "Art_92",
+            "Chap_3",
+            "Art_60",
+            "Chap_7",
+            "Art_59_1"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 0.6666666666666666,
+          "strict_f1": 0.5,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.6666666666666666,
+          "relaxed_f1": 0.7272727272727272,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_8",
+            "Art_60_P1",
+            "Art_29",
+            "Art_106_2",
+            "Art_106_2_P3",
+            "Art_29_P1",
+            "Art_106",
+            "Chap_3",
+            "Art_60"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.3,
+          "strict_recall": 1.0,
+          "strict_f1": 0.4615384615384615,
+          "relaxed_precision": 0.5,
+          "relaxed_recall": 0.8333333333333334,
+          "relaxed_f1": 0.625,
+          "retrieved_e_count": 3,
+          "retrieved_ec_count": 5,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_91_1_P1",
+            "Art_91",
+            "Art_106_2_P3",
+            "Art_29_P1",
+            "Art_106",
+            "Art_29_P2",
+            "Chap_3",
+            "Art_37",
+            "Chap_8",
+            "Art_60_P1",
+            "Art_29",
+            "Art_106_2",
+            "Chap_7",
+            "Art_37_P3",
+            "Art_91_1",
+            "Art_60",
+            "Art_91_P2"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q6_Type_A",
+      "query_text": "在KTV播放伴唱帶，是否須得音樂著作（詞、曲）的著作財產權人的授權?又KTV業者利用視聽伴唱帶從事營業播映行為，是否得到視聽伴唱帶製作人同意即可，毋須再得到視聽著作內詞、曲權利人同意?",
+      "query_type": "基礎型",
+      "ground_truth": {
+        "E": [
+          "Art_37",
+          "Art_3_P1_C9",
+          "Art_26"
+        ],
+        "C": [
+          "Chap_3_Sec_4",
+          "Chap_3",
+          "Chap_1"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.25,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.5454545454545454,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_28",
+            "Art_69",
+            "Art_28_1",
+            "Art_26",
+            "Art_26_1",
+            "Art_25",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.15384615384615383,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.37499999999999994,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_28",
+            "Art_29",
+            "Art_56",
+            "Art_70",
+            "Art_69",
+            "Art_22",
+            "Art_28_1",
+            "Art_26",
+            "Art_26_1",
+            "Art_25",
+            "Chap_3",
+            "Art_24"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 0.6666666666666666,
+          "strict_f1": 0.5,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.6666666666666666,
+          "relaxed_f1": 0.7272727272727272,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_37",
+            "Art_69",
+            "Art_26_P3",
+            "Art_37_P6_C1",
+            "Art_26",
+            "Art_25",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.6666666666666666,
+          "strict_f1": 0.30769230769230765,
+          "relaxed_precision": 0.5,
+          "relaxed_recall": 0.8333333333333334,
+          "relaxed_f1": 0.625,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 5,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_37",
+            "Art_56",
+            "Chap_1",
+            "Art_69",
+            "Art_26_P3",
+            "Art_37_P6_C1",
+            "Art_26_1_P2",
+            "Art_56_P1",
+            "Art_69_P1",
+            "Art_26",
+            "Art_26_1",
+            "Art_25",
+            "Chap_3"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q7_Type_A",
+      "query_text": "某雜誌社舉辦攝影比賽，於比賽辦法中規定得獎的作品，著作財產權歸該社所有，非經該社同意，不得刊登於其他媒體，請問該社或其他雜誌社是否先徵得原攝影者的同意，才可刊登?",
+      "query_type": "基礎型",
+      "ground_truth": {
+        "E": [
+          "Art_36"
+        ],
+        "C": [
+          "Chap_3_Sec_4",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.6666666666666666,
+          "relaxed_f1": 0.5,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 1,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_61",
+            "Art_49",
+            "Art_57",
+            "Art_41",
+            "Art_27",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.6666666666666666,
+          "relaxed_f1": 0.30769230769230765,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 1,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3_Sec_3",
+            "Art_61",
+            "Art_49",
+            "Art_58",
+            "Art_57",
+            "Art_62",
+            "Art_59",
+            "Art_41",
+            "Art_27",
+            "Art_54",
+            "Art_15",
+            "Chap_3",
+            "Art_59_1"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.6666666666666666,
+          "relaxed_f1": 0.5,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 1,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3_Sec_3",
+            "Art_15_P2_C1",
+            "Art_61",
+            "Art_15_P2_C2",
+            "Art_15_P3",
+            "Art_41",
+            "Art_15",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.6666666666666666,
+          "relaxed_f1": 0.30769230769230765,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 1,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3_Sec_3",
+            "Art_15_P2_C1",
+            "Art_61",
+            "Art_49",
+            "Art_57_P1",
+            "Art_57",
+            "Art_15_P2_C2",
+            "Art_15_P3",
+            "Art_41",
+            "Art_27",
+            "Art_15",
+            "Chap_3"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q8_Type_A",
+      "query_text": "記者採訪翻拍照片如人犯照片、採訪對象生活照片，是否違反著作權法規定?",
+      "query_type": "基礎型",
+      "ground_truth": {
+        "E": [
+          "Art_3_P1_C1",
+          "Art_3_P1_C5",
+          "Art_22",
+          "Art_49",
+          "Art_65"
+        ],
+        "C": [
+          "Chap_3_Sec_4",
+          "Chap_3",
+          "Chap_1"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.2,
+          "strict_f1": 0.20000000000000004,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.375,
+          "relaxed_f1": 0.4615384615384615,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_61",
+            "Art_49",
+            "Art_58",
+            "Art_52",
+            "Art_44",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.2,
+          "strict_f1": 0.13333333333333333,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.375,
+          "relaxed_f1": 0.33333333333333326,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_61",
+            "Art_49",
+            "Art_58",
+            "Art_57",
+            "Art_91",
+            "Art_52",
+            "Art_45",
+            "Art_54",
+            "Art_41",
+            "Art_44",
+            "Chap_3",
+            "Chap_7"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.2,
+          "strict_f1": 0.20000000000000004,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.375,
+          "relaxed_f1": 0.4615384615384615,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_61",
+            "Art_49",
+            "Art_58",
+            "Art_45",
+            "Art_44",
+            "Chap_3",
+            "Art_45_P1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.2,
+          "strict_f1": 0.13333333333333333,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.375,
+          "relaxed_f1": 0.33333333333333326,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_5",
+            "Art_61",
+            "Chap_7",
+            "Art_49",
+            "Chap_2",
+            "Art_58",
+            "Art_5_P1_C5",
+            "Art_91",
+            "Art_45",
+            "Art_52",
+            "Art_44",
+            "Chap_3",
+            "Art_45_P1"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q9_Type_A",
+      "query_text": "電影上映之前，影片公司會提供劇照由媒體報導，媒體於使用前，需不需再向電影公司取得同意?",
+      "query_type": "基礎型",
+      "ground_truth": {
+        "E": [
+          "Art_3_P1_C7",
+          "Art_24",
+          "Art_37_P1"
+        ],
+        "C": [
+          "Chap_3_Sec_4",
+          "Chap_3",
+          "Chap_1"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.3636363636363636,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_49",
+            "Art_58",
+            "Art_57",
+            "Art_62",
+            "Art_27",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.25,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_61",
+            "Art_49",
+            "Art_55",
+            "Art_58",
+            "Art_57",
+            "Art_62",
+            "Art_52",
+            "Art_27",
+            "Art_41",
+            "Art_25",
+            "Chap_3"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.3636363636363636,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3_Sec_3",
+            "Art_49",
+            "Art_58",
+            "Art_57",
+            "Art_15_P2_C2",
+            "Art_27",
+            "Art_15",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.25,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3_Sec_3",
+            "Art_61",
+            "Art_49",
+            "Art_57_P1",
+            "Art_58",
+            "Art_57",
+            "Art_15_P2_C2",
+            "Art_62",
+            "Art_52",
+            "Art_27",
+            "Art_41",
+            "Art_15",
+            "Chap_3"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q10_Type_A",
+      "query_text": "甲片商將錄影帶或VCD授權乙店出租，乙店將該視聽光碟片轉讓予丙店，丙店繼續從事出租行為，請問乙、丙是否違反著作權法?",
+      "query_type": "基礎型",
+      "ground_truth": {
+        "E": [
+          "Art_29",
+          "Art_60"
+        ],
+        "C": [
+          "Chap_3_Sec_4",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 1.0,
+          "strict_f1": 0.5714285714285715,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.888888888888889,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 2,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_29",
+            "Art_91_1",
+            "Art_91",
+            "Art_59",
+            "Chap_3",
+            "Art_60",
+            "Chap_7",
+            "Art_59_1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 1.0,
+          "strict_f1": 0.33333333333333337,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.5714285714285715,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 2,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_8",
+            "Art_29",
+            "Art_70",
+            "Chap_1",
+            "Art_91_1",
+            "Art_112",
+            "Art_91",
+            "Art_36",
+            "Art_59",
+            "Art_3",
+            "Art_92",
+            "Chap_3",
+            "Art_60",
+            "Chap_7",
+            "Art_59_1"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 1.0,
+          "strict_f1": 0.5714285714285715,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.888888888888889,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 2,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_8",
+            "Art_60_P1",
+            "Art_29",
+            "Art_106_2",
+            "Art_106_2_P3",
+            "Art_29_P1",
+            "Art_106",
+            "Chap_3",
+            "Art_60"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 1.0,
+          "strict_f1": 0.33333333333333337,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.5714285714285715,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 2,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_91_1_P1",
+            "Art_91",
+            "Art_106_2_P3",
+            "Art_29_P1",
+            "Art_106",
+            "Art_29_P2",
+            "Chap_3",
+            "Art_37",
+            "Chap_8",
+            "Art_60_P1",
+            "Art_29",
+            "Art_106_2",
+            "Chap_7",
+            "Art_37_P3",
+            "Art_91_1",
+            "Art_60",
+            "Art_91_P2"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q1_Type_B",
+      "query_text": "服裝設計是否也受著作權法的保護?",
+      "query_type": "細節型",
+      "ground_truth": {
+        "E": [
+          "Art_5_P1_C4",
+          "Art_5_P1_C6"
+        ],
+        "C": [
+          "Chap_2"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.25,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 1,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_10_1",
+            "Art_10",
+            "Art_4",
+            "Chap_2",
+            "Chap_1",
+            "Art_1",
+            "Art_27",
+            "Art_7",
+            "Chap_3",
+            "Chap_3_Sec_1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.1,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.15384615384615383,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 1,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_10_1",
+            "Art_10",
+            "Art_5",
+            "Art_6",
+            "Art_4",
+            "Chap_2",
+            "Chap_1",
+            "Art_57",
+            "Art_22",
+            "Art_1",
+            "Art_27",
+            "Art_7",
+            "Chap_3",
+            "Chap_3_Sec_1"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.25,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 1,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Art_10_1",
+            "Art_10",
+            "Art_5",
+            "Chap_2",
+            "Chap_1",
+            "Art_5_P1_C3",
+            "Chap_3",
+            "Chap_3_Sec_1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.5,
+          "strict_f1": 0.16666666666666669,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.6666666666666666,
+          "relaxed_f1": 0.30769230769230765,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 2,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_3_P1_C3",
+            "Chap_8",
+            "Art_10_1",
+            "Art_10",
+            "Art_5",
+            "Chap_2",
+            "Chap_1",
+            "Art_5_P1_C3",
+            "Art_27",
+            "Art_5_P1_C4",
+            "Chap_3",
+            "Art_3",
+            "Chap_3_Sec_1"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q2_Type_B",
+      "query_text": "節目資料非中文，經音樂廳請翻譯人員進行翻譯，中文譯稿作兩種使用(一)宣傳提供媒體使用(二)節目單製作賣錢營利，是否可行?",
+      "query_type": "細節型",
+      "ground_truth": {
+        "E": [
+          "Art_3_P1_C7",
+          "Art_3_P1_C10",
+          "Art_3_P1_C11",
+          "Art_3_P1_C12",
+          "Art_28",
+          "Art_26_1_P1",
+          "Art_37_P1"
+        ],
+        "C": [
+          "Chap_1",
+          "Chap_3_Sec_4",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.2,
+          "relaxed_f1": 0.26666666666666666,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 7,
+          "total_ec": 10,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_8",
+            "Art_46_1",
+            "Art_55",
+            "Art_63",
+            "Art_46",
+            "Art_59",
+            "Chap_3",
+            "Art_112",
+            "Art_59_1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.2,
+          "relaxed_f1": 0.20000000000000004,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 7,
+          "total_ec": 10,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_8",
+            "Art_46_1",
+            "Art_106_3",
+            "Art_61",
+            "Art_55",
+            "Art_63",
+            "Art_60",
+            "Art_46",
+            "Art_22",
+            "Art_59",
+            "Art_106",
+            "Art_44",
+            "Chap_3",
+            "Art_112",
+            "Art_59_1"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.2,
+          "relaxed_f1": 0.26666666666666666,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 7,
+          "total_ec": 10,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_8",
+            "Art_63",
+            "Art_112_P1",
+            "Art_63_P1",
+            "Chap_3",
+            "Art_112",
+            "Art_112_P2"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.3,
+          "relaxed_f1": 0.3,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 3,
+          "total_e": 7,
+          "total_ec": 10,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_46_1",
+            "Art_9_P1_C2",
+            "Art_112_P1",
+            "Art_46",
+            "Art_63_P1",
+            "Art_106",
+            "Chap_3",
+            "Art_112_P2",
+            "Chap_8",
+            "Art_9",
+            "Art_106_2",
+            "Art_46_1_P1",
+            "Chap_2",
+            "Art_55",
+            "Chap_1",
+            "Art_63",
+            "Art_112"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q3_Type_B",
+      "query_text": "到文化中心的圖書館影印報上的專欄資料是否侵害著作權?",
+      "query_type": "細節型",
+      "ground_truth": {
+        "E": [
+          "Art_3_P1_C5",
+          "Art_22",
+          "Art_51",
+          "Art_5_P1_C1"
+        ],
+        "C": [
+          "Art_48",
+          "Chap_3_Sec_4",
+          "Chap_3",
+          "Chap_1",
+          "Chap_2"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.25,
+          "strict_f1": 0.22222222222222224,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.4444444444444444,
+          "relaxed_f1": 0.5714285714285714,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 4,
+          "total_ec": 9,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_48_1",
+            "Art_49",
+            "Art_51",
+            "Art_48",
+            "Art_44",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.25,
+          "strict_f1": 0.14285714285714288,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.4444444444444444,
+          "relaxed_f1": 0.4210526315789474,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 4,
+          "total_ec": 9,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_48_1",
+            "Art_61",
+            "Art_50",
+            "Art_49",
+            "Art_51",
+            "Art_91",
+            "Art_52",
+            "Art_48",
+            "Art_54",
+            "Art_44",
+            "Chap_3",
+            "Chap_7"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.25,
+          "strict_f1": 0.22222222222222224,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.4444444444444444,
+          "relaxed_f1": 0.5714285714285714,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 4,
+          "total_ec": 9,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_44",
+            "Art_48_P1",
+            "Art_48_P1_C2",
+            "Art_48",
+            "Art_48_P1_C1",
+            "Art_51",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.25,
+          "strict_f1": 0.14285714285714288,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.4444444444444444,
+          "relaxed_f1": 0.4210526315789474,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 4,
+          "total_ec": 9,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_44",
+            "Art_48_P2_C1",
+            "Art_48_P1",
+            "Art_48_P1_C4",
+            "Art_48_P2_C2",
+            "Art_48_P1_C2",
+            "Art_48",
+            "Art_48_P1_C3",
+            "Art_48_P1_C1",
+            "Art_51",
+            "Chap_3"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q4_Type_B",
+      "query_text": "從書店買回歌譜，練唱後參加政府機關主辦的合唱比賽，是否違反著作權法?是否應由主辦單位出面辦理有關著作權事宜?",
+      "query_type": "細節型",
+      "ground_truth": {
+        "E": [
+          "Art_3_P1_C9",
+          "Art_3_P1_C4",
+          "Art_26_P1",
+          "Art_37_P1",
+          "Art_55"
+        ],
+        "C": [
+          "Art_65",
+          "Art_81",
+          "Art_50",
+          "Chap_3_Sec_4",
+          "Chap_3",
+          "Chap_1"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.2,
+          "strict_f1": 0.20000000000000004,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.36363636363636365,
+          "relaxed_f1": 0.5000000000000001,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 5,
+          "total_ec": 11,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_50",
+            "Art_55",
+            "Art_62",
+            "Art_54",
+            "Art_44",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.2,
+          "strict_f1": 0.13333333333333333,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.36363636363636365,
+          "relaxed_f1": 0.380952380952381,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 5,
+          "total_ec": 11,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_46_1",
+            "Art_50",
+            "Art_55",
+            "Art_51",
+            "Art_62",
+            "Art_46",
+            "Art_54",
+            "Art_26",
+            "Art_47",
+            "Art_44",
+            "Chap_3"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.36363636363636365,
+          "relaxed_f1": 0.5000000000000001,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 4,
+          "total_e": 5,
+          "total_ec": 11,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_50",
+            "Chap_1",
+            "Art_53",
+            "Art_54",
+            "Art_44",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.2,
+          "strict_f1": 0.13333333333333333,
+          "relaxed_precision": 0.5,
+          "relaxed_recall": 0.45454545454545453,
+          "relaxed_f1": 0.47619047619047616,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 5,
+          "total_e": 5,
+          "total_ec": 11,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_37",
+            "Chap_6",
+            "Art_50",
+            "Art_55",
+            "Chap_1",
+            "Art_53_P1",
+            "Art_87",
+            "Art_62",
+            "Art_37_P6_C1",
+            "Art_53",
+            "Art_87_1",
+            "Art_54",
+            "Art_87_1_P1_C4",
+            "Art_44",
+            "Chap_3"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q5_Type_B",
+      "query_text": "在國外購買書籍、CD唱片、DVD等著作物，未經著作財產權人的同意，可否帶入境，供自己使用?如可，有無數量的限制?",
+      "query_type": "細節型",
+      "ground_truth": {
+        "E": [
+          "Art_87_P1_C4",
+          "Art_87_1"
+        ],
+        "C": [
+          "Chap_6"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.0,
+          "relaxed_recall": 0.0,
+          "relaxed_f1": 0.0,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 0,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_51",
+            "Art_91",
+            "Art_59",
+            "Art_44",
+            "Chap_3",
+            "Art_60",
+            "Chap_7",
+            "Art_59_1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.1,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.15384615384615383,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 1,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_6",
+            "Art_50",
+            "Art_51",
+            "Art_90_1",
+            "Art_90",
+            "Art_91",
+            "Art_59",
+            "Art_48",
+            "Art_47",
+            "Art_44",
+            "Chap_3",
+            "Art_60",
+            "Chap_7",
+            "Art_59_1"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 1.0,
+          "strict_f1": 0.5714285714285715,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.7499999999999999,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 3,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_6",
+            "Art_87_1_P1_C3",
+            "Art_87",
+            "Art_87_P1_C3",
+            "Art_87_P1_C4",
+            "Art_87_1",
+            "Art_51",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 1.0,
+          "strict_f1": 0.33333333333333337,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.4615384615384615,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 3,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_44",
+            "Art_87_1_P1_C5",
+            "Chap_6",
+            "Art_87_1_P1_C3",
+            "Art_87",
+            "Art_87_P1_C3",
+            "Chap_1",
+            "Art_87_P1_C4",
+            "Art_91",
+            "Art_87_1",
+            "Art_87_1_P1_C6",
+            "Art_51",
+            "Chap_3",
+            "Chap_7"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q6_Type_B",
+      "query_text": "賣家於網拍平台刊登販售非法機上盒之訊息，網拍平台該怎麼處理？",
+      "query_type": "細節型",
+      "ground_truth": {
+        "E": [
+          "Art_3_P1_C19_I3",
+          "Art_90_4_P1",
+          "Art_90_7",
+          "Art_90_9"
+        ],
+        "C": [
+          "Chap_6",
+          "Chap_6_1",
+          "Chap_1"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.25,
+          "strict_f1": 0.22222222222222224,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.2857142857142857,
+          "relaxed_f1": 0.3333333333333333,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 2,
+          "total_e": 4,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Art_103",
+            "Chap_6",
+            "Art_90_9",
+            "Art_97",
+            "Art_90",
+            "Art_90_12",
+            "Art_90_2",
+            "Art_97_1",
+            "Chap_7"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.5,
+          "strict_f1": 0.28571428571428575,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.42857142857142855,
+          "relaxed_f1": 0.3529411764705882,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 3,
+          "total_e": 4,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Art_90_4",
+            "Art_103",
+            "Chap_6",
+            "Art_90_9",
+            "Art_97",
+            "Art_80_2",
+            "Art_90",
+            "Art_90_7",
+            "Art_90_12",
+            "Art_90_2",
+            "Art_90_10",
+            "Art_97_1",
+            "Chap_4",
+            "Art_80",
+            "Chap_7",
+            "Art_90_11"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.25,
+          "strict_f1": 0.22222222222222224,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.42857142857142855,
+          "relaxed_f1": 0.5,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 4,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_6",
+            "Art_90_9_P1",
+            "Art_90_9",
+            "Art_87",
+            "Art_80_2_P2",
+            "Art_80_2",
+            "Art_97",
+            "Art_87_P1_C8_I3",
+            "Art_90",
+            "Chap_6_1",
+            "Art_97_1",
+            "Chap_4",
+            "Art_80",
+            "Chap_7"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.25,
+          "strict_f1": 0.14285714285714288,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.42857142857142855,
+          "relaxed_f1": 0.3529411764705882,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 4,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Art_90_1_P12",
+            "Art_90_9_P3",
+            "Art_90_9_P1",
+            "Art_80_2_P2",
+            "Art_90",
+            "Art_87_P2",
+            "Chap_6_1",
+            "Art_87_P1_C6",
+            "Chap_4",
+            "Art_80",
+            "Art_97_1",
+            "Chap_6",
+            "Art_90_9",
+            "Art_87",
+            "Art_80_1",
+            "Art_97",
+            "Art_80_2",
+            "Art_90_1",
+            "Art_80_1_P2",
+            "Art_87_P1_C8_I3",
+            "Chap_7"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q7_Type_B",
+      "query_text": "現在的新聞稿，習慣上都冠上記者姓名，新聞照片更是張張都署名，這樣的情形，著作權屬報社？還是屬記者？利用時如何避免著作權方面之糾紛？",
+      "query_type": "細節型",
+      "ground_truth": {
+        "E": [
+          "Art_9_P1_C4",
+          "Art_11",
+          "Art_13_P1"
+        ],
+        "C": [
+          "Chap_2",
+          "Chap_3_Sec_2",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.25,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.5454545454545454,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_61",
+            "Art_49",
+            "Art_12",
+            "Art_41",
+            "Chap_3_Sec_2",
+            "Chap_3",
+            "Art_11"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.15384615384615383,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.6666666666666666,
+          "relaxed_f1": 0.5,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3_Sec_3",
+            "Art_9",
+            "Art_16",
+            "Art_61",
+            "Art_49",
+            "Chap_2",
+            "Art_52",
+            "Art_13",
+            "Art_12",
+            "Art_41",
+            "Chap_3_Sec_2",
+            "Chap_3",
+            "Art_21",
+            "Art_11"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.25,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.5454545454545454,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_9",
+            "Art_61",
+            "Chap_2",
+            "Art_49",
+            "Art_41",
+            "Art_9_P1_C4",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.6666666666666666,
+          "strict_f1": 0.30769230769230765,
+          "relaxed_precision": 0.5,
+          "relaxed_recall": 0.8333333333333334,
+          "relaxed_f1": 0.625,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 5,
+          "total_e": 3,
+          "total_ec": 6,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_9",
+            "Art_61",
+            "Art_12_P2",
+            "Art_11_P2",
+            "Chap_2",
+            "Art_49",
+            "Art_12",
+            "Art_41",
+            "Art_9_P1_C4",
+            "Chap_3_Sec_2",
+            "Chap_3",
+            "Art_11",
+            "Art_11_P1"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q8_Type_B",
+      "query_text": "產品使用說明書如果僅為操作程序和規格說明，是否仍可享有語文著作權?",
+      "query_type": "細節型",
+      "ground_truth": {
+        "E": [
+          "Art_3_P1_C1",
+          "Art_5_P1_C1",
+          "Art_5_P2",
+          "Art_10_1"
+        ],
+        "C": [
+          "Chap_1",
+          "Chap_2",
+          "Chap_3_Sec_1",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.25,
+          "strict_f1": 0.22222222222222224,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.6153846153846154,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 4,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_9",
+            "Art_10_1",
+            "Art_10",
+            "Art_5",
+            "Chap_2",
+            "Art_59",
+            "Art_23",
+            "Chap_3",
+            "Chap_3_Sec_1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.25,
+          "strict_f1": 0.14285714285714288,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.4444444444444445,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 4,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_9",
+            "Art_10_1",
+            "Art_10",
+            "Art_5",
+            "Chap_4",
+            "Chap_2",
+            "Art_63",
+            "Art_22",
+            "Art_65",
+            "Art_59",
+            "Art_23",
+            "Art_79",
+            "Art_47",
+            "Chap_3",
+            "Chap_3_Sec_1"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 0.5,
+          "strict_f1": 0.4444444444444445,
+          "relaxed_precision": 1.0,
+          "relaxed_recall": 0.625,
+          "relaxed_f1": 0.7692307692307693,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 5,
+          "total_e": 4,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Art_9_P1_C3",
+            "Art_9",
+            "Art_10_1",
+            "Art_5",
+            "Chap_6",
+            "Art_5_P1_C1",
+            "Art_10",
+            "Chap_2",
+            "Art_87",
+            "Art_87_1",
+            "Art_87_1_P1_C6",
+            "Chap_3",
+            "Chap_3_Sec_1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.5,
+          "strict_f1": 0.28571428571428575,
+          "relaxed_precision": 0.5,
+          "relaxed_recall": 0.625,
+          "relaxed_f1": 0.5555555555555556,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 5,
+          "total_e": 4,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Art_87_1_P1_C5",
+            "Art_9_P1_C3",
+            "Art_9",
+            "Art_10_1",
+            "Art_5",
+            "Chap_6",
+            "Art_5_P1_C1",
+            "Art_10",
+            "Chap_2",
+            "Art_87",
+            "Art_9_P1_C1",
+            "Art_87_1",
+            "Art_87_1_P1_C6",
+            "Art_9_P1_C4",
+            "Chap_3",
+            "Chap_3_Sec_1"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q9_Type_B",
+      "query_text": "錄影過程中，錄下現場的音樂是否涉及違法?現場實況錄影中所錄下的當事人，是否須經其同意才可以播出?",
+      "query_type": "細節型",
+      "ground_truth": {
+        "E": [
+          "Art_5_P1_C2",
+          "Art_5_P1_C8",
+          "Art_22_P1",
+          "Art_3_P1_C5",
+          "Art_24_P1"
+        ],
+        "C": [
+          "Chap_2",
+          "Chap_1",
+          "Chap_3_Sec_4",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.2222222222222222,
+          "relaxed_f1": 0.2857142857142857,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 5,
+          "total_ec": 9,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_56",
+            "Art_49",
+            "Art_70",
+            "Art_69",
+            "Art_22",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.3157894736842105,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 3,
+          "total_e": 5,
+          "total_ec": 9,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_56",
+            "Art_49",
+            "Art_70",
+            "Chap_1",
+            "Art_69",
+            "Art_58",
+            "Art_56_1",
+            "Art_62",
+            "Art_22",
+            "Art_46",
+            "Chap_3",
+            "Art_3"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.42857142857142855,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 3,
+          "total_e": 5,
+          "total_ec": 9,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_56",
+            "Art_49",
+            "Chap_1",
+            "Art_56_P1",
+            "Art_22",
+            "Art_3_P2",
+            "Art_22_P2",
+            "Chap_3",
+            "Art_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.2,
+          "strict_f1": 0.13333333333333333,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.4444444444444444,
+          "relaxed_f1": 0.4210526315789474,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 5,
+          "total_ec": 9,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_28",
+            "Art_3_P1_C5",
+            "Art_56_P1",
+            "Art_69_P1",
+            "Art_26_1_P2",
+            "Art_28_1",
+            "Chap_3",
+            "Art_28_1_P2",
+            "Art_3",
+            "Art_56",
+            "Art_49",
+            "Chap_1",
+            "Art_69",
+            "Art_22",
+            "Art_3_P2",
+            "Art_22_P2",
+            "Art_26",
+            "Art_26_1"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q10_Type_B",
+      "query_text": "將有關音樂或影片的他人網址轉貼，在網路聊天室上，有無侵害著作權的問題？",
+      "query_type": "細節型",
+      "ground_truth": {
+        "E": [
+          "Art_3_P1_C10",
+          "Art_26_1"
+        ],
+        "C": [
+          "Art_3_P1_C5",
+          "Art_22",
+          "Chap_3_Sec_4",
+          "Chap_3",
+          "Chap_1"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.2857142857142857,
+          "relaxed_f1": 0.3333333333333333,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 2,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_92",
+            "Chap_6",
+            "Art_61",
+            "Art_90_7",
+            "Art_90",
+            "Art_91",
+            "Art_90_5",
+            "Chap_3",
+            "Chap_7"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.2857142857142857,
+          "relaxed_f1": 0.23529411764705882,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 2,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_92",
+            "Art_46_1",
+            "Chap_6",
+            "Art_61",
+            "Art_90_6",
+            "Art_87",
+            "Art_90_8",
+            "Art_90_7",
+            "Art_90",
+            "Art_91",
+            "Art_46",
+            "Art_90_5",
+            "Chap_3",
+            "Chap_7",
+            "Art_90_11"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.0,
+          "relaxed_recall": 0.0,
+          "relaxed_f1": 0.0,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 0,
+          "total_e": 2,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_6",
+            "Art_87_P1_C8_I2",
+            "Art_87",
+            "Art_87_P1_C8",
+            "Art_87_P1_C8_I3",
+            "Art_87_P1_C8_I1",
+            "Art_87_P1_C7"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.42857142857142855,
+          "relaxed_f1": 0.3529411764705882,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 3,
+          "total_e": 2,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_90",
+            "Art_87_P1_C8_I3",
+            "Art_90_4_P2",
+            "Art_87_P1_C8",
+            "Art_87_P1_C6",
+            "Chap_3",
+            "Art_87_P1_C8_I1",
+            "Art_87_P1_C7",
+            "Art_90_4",
+            "Chap_6",
+            "Art_61",
+            "Art_87_P1_C8_I2",
+            "Art_87",
+            "Art_22",
+            "Art_22_P4",
+            "Art_90_5"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q1_Type_C",
+      "query_text": "有關教會非營利性福音佈道，演唱國人創作的福音詩歌，是否一定照會原作者?修改該詩歌在佈道時演唱呢?該演唱內容經錄製而於宗教團體中流通呢?",
+      "query_type": "主題型",
+      "ground_truth": {
+        "E": [
+          "Art_26_P1",
+          "Art_17",
+          "Art_22_P1",
+          "Art_55",
+          "Art_28_1"
+        ],
+        "C": [
+          "Chap_3_Sec_4",
+          "Chap_3",
+          "Chap_3_Sec_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.2,
+          "strict_f1": 0.20000000000000004,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.375,
+          "relaxed_f1": 0.4615384615384615,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_46_1",
+            "Art_50",
+            "Art_56",
+            "Art_55",
+            "Art_56_1",
+            "Art_62",
+            "Art_46",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.2,
+          "strict_f1": 0.13333333333333333,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.375,
+          "relaxed_f1": 0.33333333333333326,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_46_1",
+            "Art_50",
+            "Art_56",
+            "Art_55",
+            "Art_56_1",
+            "Art_62",
+            "Art_46",
+            "Art_59",
+            "Art_26",
+            "Art_44",
+            "Chap_3",
+            "Art_24",
+            "Art_59_1"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.2,
+          "strict_f1": 0.20000000000000004,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.375,
+          "relaxed_f1": 0.4615384615384615,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_50",
+            "Art_55",
+            "Chap_1",
+            "Art_62",
+            "Art_53",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.2,
+          "strict_f1": 0.13333333333333333,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.375,
+          "relaxed_f1": 0.33333333333333326,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 3,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_46_1",
+            "Art_37",
+            "Art_46_1_P1",
+            "Art_50",
+            "Art_55",
+            "Chap_1",
+            "Art_53_P1",
+            "Art_62",
+            "Art_46",
+            "Art_53",
+            "Art_37_P6_C2",
+            "Chap_3",
+            "Art_24_P2",
+            "Art_24"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q2_Type_C",
+      "query_text": "將所拍的照片送人，對方在報上發表或出版未註明攝影者或經其同意，對方是否違反著作權法?",
+      "query_type": "主題型",
+      "ground_truth": {
+        "E": [
+          "Art_15",
+          "Art_16",
+          "Art_22",
+          "Art_28_1",
+          "Art_65"
+        ],
+        "C": [
+          "Chap_3_Sec_4",
+          "Chap_3",
+          "Chap_3_Sec_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.2,
+          "strict_f1": 0.20000000000000004,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.6153846153846154,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3_Sec_3",
+            "Art_61",
+            "Art_49",
+            "Art_41",
+            "Art_27",
+            "Art_15",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.4,
+          "strict_f1": 0.26666666666666666,
+          "relaxed_precision": 0.5,
+          "relaxed_recall": 0.625,
+          "relaxed_f1": 0.5555555555555556,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 5,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3_Sec_3",
+            "Art_16",
+            "Art_61",
+            "Art_49",
+            "Art_58",
+            "Art_57",
+            "Art_41",
+            "Art_27",
+            "Art_64",
+            "Art_15",
+            "Chap_3",
+            "Art_99",
+            "Chap_7"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.2,
+          "strict_f1": 0.20000000000000004,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.6153846153846154,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_3",
+            "Chap_3_Sec_4",
+            "Art_15_P2_C1",
+            "Art_15_P2_C2",
+            "Art_15_P3",
+            "Art_41",
+            "Art_15",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.2,
+          "strict_f1": 0.13333333333333333,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.4444444444444445,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 5,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_3",
+            "Chap_3_Sec_4",
+            "Art_15_P2_C1",
+            "Art_61",
+            "Chap_1",
+            "Art_15_P2",
+            "Art_15_P2_C2",
+            "Art_15_P3",
+            "Art_41",
+            "Art_15",
+            "Chap_3"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q3_Type_C",
+      "query_text": "違反著作權法的處罰，哪些是非告訴乃論罪?",
+      "query_type": "主題型",
+      "ground_truth": {
+        "E": [
+          "Art_91_P3",
+          "Art_91_1_P3"
+        ],
+        "C": [
+          "Chap_7"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.25,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 1,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Art_100",
+            "Art_103",
+            "Art_101",
+            "Art_102",
+            "Art_99",
+            "Chap_7"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.1,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.15384615384615383,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 1,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Art_103",
+            "Art_101",
+            "Art_102",
+            "Art_91_1",
+            "Art_93",
+            "Art_91",
+            "Art_96_1",
+            "Art_100",
+            "Art_95",
+            "Art_96",
+            "Art_99",
+            "Chap_7"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.25,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 1,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Art_100",
+            "Art_82",
+            "Art_101",
+            "Art_102",
+            "Chap_7",
+            "Art_82_P2",
+            "Chap_5"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.1,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.15384615384615383,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 1,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Art_101_P2",
+            "Art_82",
+            "Art_103",
+            "Art_101",
+            "Art_102",
+            "Art_91_1",
+            "Art_93",
+            "Art_91",
+            "Art_100",
+            "Art_99",
+            "Chap_7",
+            "Art_82_P2",
+            "Chap_5"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q4_Type_C",
+      "query_text": "經常在報刊上看到道歉啟事：「本人 × × ×因不慎誤用 × × ×君之創作，蒙 × × ×君寬宏大量不予追究，謹此道歉」，請問是否如此即可免責?",
+      "query_type": "主題型",
+      "ground_truth": {
+        "E": [
+          "Art_91_P3",
+          "Art_91_1_P3",
+          "Art_100"
+        ],
+        "C": [
+          "Chap_7"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.25,
+          "relaxed_f1": 0.22222222222222224,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 1,
+          "total_e": 3,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Chap_6",
+            "Art_82",
+            "Art_101",
+            "Art_90",
+            "Art_88",
+            "Art_82_3",
+            "Art_99",
+            "Chap_7",
+            "Art_90_11",
+            "Chap_5"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.15384615384615383,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.28571428571428575,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 2,
+          "total_e": 3,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Chap_6",
+            "Art_82",
+            "Art_90_6",
+            "Art_85",
+            "Art_101",
+            "Art_90",
+            "Art_91",
+            "Art_88",
+            "Art_90_10",
+            "Art_100",
+            "Art_82_3",
+            "Art_99",
+            "Chap_7",
+            "Art_90_11",
+            "Chap_5"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.25,
+          "relaxed_f1": 0.22222222222222224,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 1,
+          "total_e": 3,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Art_88",
+            "Art_101_P2",
+            "Chap_6",
+            "Chap_7",
+            "Art_101",
+            "Art_88_P1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.1,
+          "relaxed_recall": 0.25,
+          "relaxed_f1": 0.14285714285714288,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 1,
+          "total_e": 3,
+          "total_ec": 4,
+          "retrieved_identifiers": [
+            "Art_88_P3",
+            "Art_101_P2",
+            "Chap_6",
+            "Art_82",
+            "Art_82_3_P2",
+            "Art_101",
+            "Art_90",
+            "Art_88",
+            "Art_88_P1",
+            "Art_82_3",
+            "Chap_7",
+            "Art_90_11",
+            "Chap_5"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q5_Type_C",
+      "query_text": "網路使用者所張貼的資訊如因權利人不實通知而遭網路服務提供者（ISP）取下時，有無救濟的途徑？",
+      "query_type": "主題型",
+      "ground_truth": {
+        "E": [
+          "Art_90_9",
+          "Art_90_11"
+        ],
+        "C": [
+          "Chap_6_1"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 1.0,
+          "strict_f1": 0.5714285714285715,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.6666666666666666,
+          "relaxed_f1": 0.5,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 2,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_6",
+            "Art_90_9",
+            "Art_90_7",
+            "Art_90",
+            "Art_90_12",
+            "Art_90_10",
+            "Art_90_11"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 1.0,
+          "strict_f1": 0.33333333333333337,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.6666666666666666,
+          "relaxed_f1": 0.30769230769230765,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 2,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Art_90_4",
+            "Chap_6",
+            "Art_90_6",
+            "Art_90_9",
+            "Art_90_8",
+            "Art_90_1",
+            "Art_90_7",
+            "Art_90",
+            "Art_90_12",
+            "Art_90_10",
+            "Art_90_5",
+            "Art_90_11"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 1.0,
+          "strict_f1": 0.5714285714285715,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.7499999999999999,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 3,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Chap_6",
+            "Art_90_9_P2",
+            "Art_90_9",
+            "Art_90_9_P5",
+            "Art_90",
+            "Chap_6_1",
+            "Art_90_11"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 1.0,
+          "strict_f1": 0.33333333333333337,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 1.0,
+          "relaxed_f1": 0.4615384615384615,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 3,
+          "total_e": 2,
+          "total_ec": 3,
+          "retrieved_identifiers": [
+            "Art_90_9_P4",
+            "Chap_6",
+            "Art_90_9_P3",
+            "Art_90_9_P2",
+            "Art_90_9",
+            "Art_90_9_P5",
+            "Art_90_9_P1",
+            "Art_90_7",
+            "Art_90",
+            "Chap_6_1",
+            "Art_90_10",
+            "Art_90_11"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q6_Type_C",
+      "query_text": "錄音帶大中小盤商批貨於店內販售錄音、錄影帶，如該錄音、錄影帶涉有侵害他人著作權之情事者，販售者有無構成著作財產權的侵害?",
+      "query_type": "主題型",
+      "ground_truth": {
+        "E": [
+          "Art_3_P1_C12",
+          "Art_28_1",
+          "Art_59_1",
+          "Art_87_P1_C6"
+        ],
+        "C": [
+          "Chap_1",
+          "Chap_3_Sec_4",
+          "Chap_3",
+          "Chap_6"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.25,
+          "strict_f1": 0.22222222222222224,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.6153846153846154,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 4,
+          "total_e": 4,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_6",
+            "Art_91_1",
+            "Art_91",
+            "Art_88",
+            "Art_59",
+            "Art_92",
+            "Chap_3",
+            "Chap_7",
+            "Art_59_1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.5,
+          "strict_f1": 0.28571428571428575,
+          "relaxed_precision": 0.5,
+          "relaxed_recall": 0.625,
+          "relaxed_f1": 0.5555555555555556,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 5,
+          "total_e": 4,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_28",
+            "Art_103",
+            "Chap_6",
+            "Art_87",
+            "Art_91_1",
+            "Art_91",
+            "Art_22",
+            "Art_88",
+            "Art_28_1",
+            "Art_59",
+            "Art_92",
+            "Chap_3",
+            "Art_60",
+            "Chap_7",
+            "Art_59_1"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.25,
+          "strict_f1": 0.22222222222222224,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.25,
+          "relaxed_f1": 0.3076923076923077,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 2,
+          "total_e": 4,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Chap_6",
+            "Art_87",
+            "Art_91_1",
+            "Art_91",
+            "Art_87_P1_C8",
+            "Art_87_P1_C8_I3",
+            "Art_87_P1_C6",
+            "Art_91_P2",
+            "Chap_7"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.25,
+          "strict_f1": 0.14285714285714288,
+          "relaxed_precision": 0.2,
+          "relaxed_recall": 0.25,
+          "relaxed_f1": 0.22222222222222224,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 2,
+          "total_e": 4,
+          "total_ec": 8,
+          "retrieved_identifiers": [
+            "Art_91_1_P1",
+            "Chap_6",
+            "Art_87_P1_C2",
+            "Art_87",
+            "Art_91_1",
+            "Art_91",
+            "Art_88",
+            "Art_87_P1_C8",
+            "Art_88_P1",
+            "Art_87_P1_C8_I3",
+            "Art_87_P1_C6",
+            "Art_91_P2",
+            "Art_87_P1_C8_I1",
+            "Chap_7"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q7_Type_C",
+      "query_text": "錄音、錄影帶販售店，因販售需要，於店內藉錄音、錄影器材播放該錄音、錄影帶，有無涉及著作財產權人權利行使問題?",
+      "query_type": "主題型",
+      "ground_truth": {
+        "E": [
+          "Art_3_P1_C8",
+          "Art_3_P1_C9",
+          "Art_5_P1_C2",
+          "Art_5_P1_C8",
+          "Art_25",
+          "Art_26",
+          "Art_65"
+        ],
+        "C": [
+          "Chap_1",
+          "Chap_2",
+          "Chap_4",
+          "Chap_3_Sec_4",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 0.2857142857142857,
+          "strict_f1": 0.3333333333333333,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.47058823529411764,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 7,
+          "total_ec": 12,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_57",
+            "Art_26",
+            "Art_26_1",
+            "Art_25",
+            "Chap_3",
+            "Art_60"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.2857142857142857,
+          "strict_f1": 0.23529411764705882,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.3333333333333333,
+          "relaxed_f1": 0.3636363636363636,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 7,
+          "total_ec": 12,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_46_1",
+            "Art_29",
+            "Art_55",
+            "Art_57",
+            "Art_46",
+            "Art_22",
+            "Art_27",
+            "Art_26",
+            "Art_26_1",
+            "Art_25",
+            "Chap_3",
+            "Art_60"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 0.2857142857142857,
+          "strict_f1": 0.3333333333333333,
+          "relaxed_precision": 1.0,
+          "relaxed_recall": 0.4166666666666667,
+          "relaxed_f1": 0.5882352941176471,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 5,
+          "total_e": 7,
+          "total_ec": 12,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_60_P1",
+            "Chap_1",
+            "Art_26_P3",
+            "Art_3_P2",
+            "Art_26",
+            "Art_25",
+            "Chap_3",
+            "Art_60",
+            "Art_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.2857142857142857,
+          "strict_f1": 0.23529411764705882,
+          "relaxed_precision": 0.5,
+          "relaxed_recall": 0.4166666666666667,
+          "relaxed_f1": 0.45454545454545453,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 5,
+          "total_e": 7,
+          "total_ec": 12,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_60_P1",
+            "Art_57_P1",
+            "Chap_1",
+            "Art_57",
+            "Art_26_P3",
+            "Art_26_1_P2",
+            "Art_3_P2",
+            "Art_26",
+            "Art_26_1",
+            "Art_25",
+            "Chap_3",
+            "Art_60",
+            "Art_3"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q8_Type_C",
+      "query_text": "新聞事件記者採訪報導時，引用電視台畫面補充漏未拍攝的鏡頭，可否依著作權法第四十九條規定主張係合理使用?",
+      "query_type": "主題型",
+      "ground_truth": {
+        "E": [
+          "Art_49",
+          "Art_52",
+          "Art_64"
+        ],
+        "C": [
+          "Chap_3_Sec_4",
+          "Chap_3"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 0.6666666666666666,
+          "strict_f1": 0.5,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.8,
+          "relaxed_f1": 0.8000000000000002,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 3,
+          "total_ec": 5,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3",
+            "Art_61",
+            "Art_49",
+            "Art_45",
+            "Art_65",
+            "Art_52"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.6666666666666666,
+          "strict_f1": 0.30769230769230765,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.8,
+          "relaxed_f1": 0.5333333333333333,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 3,
+          "total_ec": 5,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3",
+            "Art_46_1",
+            "Art_61",
+            "Art_50",
+            "Art_56",
+            "Art_49",
+            "Art_46",
+            "Art_45",
+            "Art_65",
+            "Art_44",
+            "Art_52"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 0.6666666666666666,
+          "strict_f1": 0.5,
+          "relaxed_precision": 0.8,
+          "relaxed_recall": 0.8,
+          "relaxed_f1": 0.8000000000000002,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 3,
+          "total_ec": 5,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3",
+            "Art_61",
+            "Art_49",
+            "Art_45",
+            "Art_52",
+            "Art_45_P1"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.6666666666666666,
+          "strict_f1": 0.30769230769230765,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.8,
+          "relaxed_f1": 0.5333333333333333,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 4,
+          "total_e": 3,
+          "total_ec": 5,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3",
+            "Art_65_P2_C1",
+            "Art_61",
+            "Art_50",
+            "Art_49",
+            "Art_65_P1",
+            "Art_45",
+            "Art_65",
+            "Art_65_P2",
+            "Art_52",
+            "Art_45_P1"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q9_Type_C",
+      "query_text": "政府機關的公關人員所拍攝照片由政府機關提供給記者發布新聞，報社應如何處理該照片，才能避免侵害著作權?又報社可否以○○記者名義拍攝刊於報導上?",
+      "query_type": "主題型",
+      "ground_truth": {
+        "E": [
+          "Art_11",
+          "Art_16_P1",
+          "Art_37_P1"
+        ],
+        "C": [
+          "Chap_3_Sec_2",
+          "Chap_3",
+          "Chap_3_Sec_3",
+          "Chap_3_Sec_4"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.2857142857142857,
+          "relaxed_f1": 0.3333333333333333,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 3,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_9",
+            "Art_61",
+            "Art_50",
+            "Chap_2",
+            "Art_49",
+            "Art_41",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.15384615384615383,
+          "relaxed_precision": 0.5,
+          "relaxed_recall": 0.7142857142857143,
+          "relaxed_f1": 0.588235294117647,
+          "retrieved_e_count": 1,
+          "retrieved_ec_count": 5,
+          "total_e": 3,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3_Sec_3",
+            "Art_9",
+            "Art_61",
+            "Art_50",
+            "Chap_2",
+            "Art_49",
+            "Art_62",
+            "Art_41",
+            "Chap_3_Sec_2",
+            "Art_54",
+            "Art_15",
+            "Art_44",
+            "Chap_3",
+            "Art_11"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.4,
+          "relaxed_recall": 0.2857142857142857,
+          "relaxed_f1": 0.3333333333333333,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 2,
+          "total_e": 3,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_9",
+            "Art_61",
+            "Art_50",
+            "Chap_2",
+            "Art_49",
+            "Art_9_P2",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.0,
+          "strict_recall": 0.0,
+          "strict_f1": 0.0,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.42857142857142855,
+          "relaxed_f1": 0.3529411764705882,
+          "retrieved_e_count": 0,
+          "retrieved_ec_count": 3,
+          "total_e": 3,
+          "total_ec": 7,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3_Sec_3",
+            "Art_9",
+            "Art_61",
+            "Art_50",
+            "Chap_2",
+            "Art_49",
+            "Art_9_P2",
+            "Chap_1",
+            "Art_41",
+            "Art_44",
+            "Chap_3"
+          ]
+        }
+      }
+    },
+    {
+      "query_id": "Q10_Type_C",
+      "query_text": "舉辦影展的單位，為介紹影片而出版專刊，若專刊中使用國外雜誌或國外影展特刊中的文章、圖片，但明白註明來源，是否仍違反著作權法?若將這些圖片或文章提供給新聞媒體報導用，是否涉及擅自重製?",
+      "query_type": "主題型",
+      "ground_truth": {
+        "E": [
+          "Art_3_P1_C5",
+          "Art_3_P1_C12",
+          "Art_4",
+          "Art_49",
+          "Art_52",
+          "Art_65"
+        ],
+        "C": [
+          "Art_61",
+          "Chap_3_Sec_4",
+          "Chap_3",
+          "Chap_1"
+        ]
+      },
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.3636363636363636,
+          "relaxed_precision": 1.0,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.6666666666666666,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 5,
+          "total_e": 6,
+          "total_ec": 10,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3",
+            "Art_48_1",
+            "Art_61",
+            "Art_49",
+            "Art_48",
+            "Art_44",
+            "Art_52"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.25,
+          "relaxed_precision": 0.5,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.5,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 5,
+          "total_e": 6,
+          "total_ec": 10,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Chap_3",
+            "Art_48_1",
+            "Art_61",
+            "Art_50",
+            "Art_49",
+            "Art_51",
+            "Art_57",
+            "Art_91",
+            "Art_48",
+            "Art_54",
+            "Art_44",
+            "Art_52",
+            "Chap_7"
+          ]
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.4,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.3636363636363636,
+          "relaxed_precision": 1.0,
+          "relaxed_recall": 0.5,
+          "relaxed_f1": 0.6666666666666666,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 5,
+          "total_e": 6,
+          "total_ec": 10,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_61",
+            "Art_49",
+            "Art_52",
+            "Art_48",
+            "Art_48_P1_C1",
+            "Art_44",
+            "Chap_3"
+          ]
+        },
+        "k_10": {
+          "strict_precision": 0.2,
+          "strict_recall": 0.3333333333333333,
+          "strict_f1": 0.25,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.6,
+          "relaxed_f1": 0.6,
+          "retrieved_e_count": 2,
+          "retrieved_ec_count": 6,
+          "total_e": 6,
+          "total_ec": 10,
+          "retrieved_identifiers": [
+            "Chap_3_Sec_4",
+            "Art_48_1",
+            "Art_61",
+            "Art_48_P3",
+            "Art_49",
+            "Art_57_P2",
+            "Chap_1",
+            "Art_57",
+            "Art_91",
+            "Art_52",
+            "Art_48",
+            "Art_48_P1_C1",
+            "Art_44",
+            "Chap_3",
+            "Chap_7"
+          ]
+        }
+      }
+    }
+  ],
+  "type_averages": {
+    "基礎型": {
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.16,
+          "strict_recall": 0.42000000000000004,
+          "strict_f1": 0.21880952380952384,
+          "relaxed_precision": 0.52,
+          "relaxed_recall": 0.5553571428571429,
+          "relaxed_f1": 0.5221639471639471
+        },
+        "k_10": {
+          "strict_precision": 0.09,
+          "strict_recall": 0.4533333333333333,
+          "strict_f1": 0.14456876456876458,
+          "relaxed_precision": 0.27999999999999997,
+          "relaxed_recall": 0.5863095238095238,
+          "relaxed_f1": 0.369815233785822
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.18,
+          "strict_recall": 0.4533333333333333,
+          "strict_f1": 0.24380952380952384,
+          "relaxed_precision": 0.54,
+          "relaxed_recall": 0.5744047619047619,
+          "relaxed_f1": 0.5418609168609169
+        },
+        "k_10": {
+          "strict_precision": 0.11000000000000001,
+          "strict_recall": 0.52,
+          "strict_f1": 0.17533799533799535,
+          "relaxed_precision": 0.3,
+          "relaxed_recall": 0.6220238095238095,
+          "relaxed_f1": 0.39555052790346906
+        }
+      }
+    },
+    "細節型": {
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.1,
+          "strict_recall": 0.12833333333333333,
+          "strict_f1": 0.11166666666666666,
+          "relaxed_precision": 0.48,
+          "relaxed_recall": 0.3135064935064935,
+          "relaxed_f1": 0.3701315351315351
+        },
+        "k_10": {
+          "strict_precision": 0.06000000000000001,
+          "strict_recall": 0.15333333333333332,
+          "strict_f1": 0.08586080586080587,
+          "relaxed_precision": 0.28,
+          "relaxed_recall": 0.3889033189033189,
+          "relaxed_f1": 0.3158166532469938
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.14,
+          "strict_recall": 0.23333333333333334,
+          "strict_f1": 0.17103174603174603,
+          "relaxed_precision": 0.5599999999999999,
+          "relaxed_recall": 0.4228318903318903,
+          "relaxed_f1": 0.45813519813519815
+        },
+        "k_10": {
+          "strict_precision": 0.11000000000000001,
+          "strict_recall": 0.35666666666666663,
+          "strict_f1": 0.1645787545787546,
+          "relaxed_precision": 0.37,
+          "relaxed_recall": 0.5625577200577201,
+          "relaxed_f1": 0.42739644170758717
+        }
+      }
+    },
+    "主題型": {
+      "group_a": {
+        "k_5": {
+          "strict_precision": 0.22000000000000003,
+          "strict_recall": 0.29357142857142854,
+          "strict_f1": 0.23906204906204906,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.4544047619047619,
+          "relaxed_f1": 0.49351181498240326
+        },
+        "k_10": {
+          "strict_precision": 0.15,
+          "strict_recall": 0.40523809523809523,
+          "strict_f1": 0.21197263520792933,
+          "relaxed_precision": 0.36,
+          "relaxed_recall": 0.5472619047619047,
+          "relaxed_f1": 0.41769021827845354
+        }
+      },
+      "group_d": {
+        "k_5": {
+          "strict_precision": 0.22000000000000003,
+          "strict_recall": 0.29357142857142854,
+          "strict_f1": 0.23906204906204906,
+          "relaxed_precision": 0.6,
+          "relaxed_recall": 0.47107142857142853,
+          "relaxed_f1": 0.4995072900955254
+        },
+        "k_10": {
+          "strict_precision": 0.11000000000000001,
+          "strict_recall": 0.29357142857142854,
+          "strict_f1": 0.15358435681965094,
+          "relaxed_precision": 0.32,
+          "relaxed_recall": 0.49535714285714283,
+          "relaxed_f1": 0.36990617225911343
+        }
+      }
+    }
+  },
+  "overall_averages": {
+    "group_a": {
+      "k_5": {
+        "strict_precision": 0.16000000000000003,
+        "strict_recall": 0.2806349206349206,
+        "strict_f1": 0.18984607984607985,
+        "relaxed_precision": 0.5333333333333333,
+        "relaxed_recall": 0.4410894660894661,
+        "relaxed_f1": 0.4619357657592952
+      },
+      "k_10": {
+        "strict_precision": 0.1,
+        "strict_recall": 0.33730158730158727,
+        "strict_f1": 0.1474674018791666,
+        "relaxed_precision": 0.3066666666666667,
+        "relaxed_recall": 0.5074915824915824,
+        "relaxed_f1": 0.36777403510375645
+      }
+    },
+    "group_d": {
+      "k_5": {
+        "strict_precision": 0.18000000000000002,
+        "strict_recall": 0.32674603174603173,
+        "strict_f1": 0.217967772967773,
+        "relaxed_precision": 0.5666666666666667,
+        "relaxed_recall": 0.48943602693602695,
+        "relaxed_f1": 0.4998344683638801
+      },
+      "k_10": {
+        "strict_precision": 0.11000000000000001,
+        "strict_recall": 0.3900793650793651,
+        "strict_f1": 0.16450036891213363,
+        "relaxed_precision": 0.33,
+        "relaxed_recall": 0.5599795574795575,
+        "relaxed_f1": 0.39761771395672324
+      }
+    }
+  }
+}

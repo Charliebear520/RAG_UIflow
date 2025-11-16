@@ -2384,6 +2384,11 @@ def convert_structured_to_multi_level(structured_chunks):
         # 將大寫的level名稱轉換為小寫（兼容MultiLevelStructuredChunking生成的格式）
         chunk_by = chunk_by.lower()
         
+        # 跳過 Law 層級的 chunk（不包含在分塊和 embedding 中）
+        # 因為它包含所有章節內容，過於龐大且不適合檢索
+        if chunk_by == 'law' or metadata.get('level_en', '').lower() == 'law':
+            continue
+        
         # 根據chunk_by和內容特徵分類到對應層次
         level_name, semantic_features = classify_chunk_to_level(content, metadata, chunk_by)
         
@@ -10195,12 +10200,63 @@ async def experimental_groups_batch_retrieve(req: Dict[str, Any]):
             
             level_results = []
             for idx in top_indices:
+                doc_id = doc_ids[idx]
+                doc = store.get_doc(doc_id)
+                
+                # 嘗試獲取chunk_id
+                chunk_id = None
+                metadata = {}
+                
+                # 方法1：從multi_level_chunks中獲取
+                if doc and doc.multi_level_chunks and level_name in doc.multi_level_chunks:
+                    level_chunks = doc.multi_level_chunks[level_name]
+                    # 通過content匹配找到對應的chunk
+                    chunk_content = chunks[idx]
+                    for chunk_data in level_chunks:
+                        if isinstance(chunk_data, dict):
+                            chunk_content_data = chunk_data.get('content', '')
+                            # 精確匹配或前200字符匹配
+                            if chunk_content_data == chunk_content or (
+                                len(chunk_content_data) > 100 and 
+                                len(chunk_content) > 100 and
+                                chunk_content_data[:200] == chunk_content[:200]
+                            ):
+                                chunk_id = chunk_data.get('chunk_id') or chunk_data.get('metadata', {}).get('chunk_id')
+                                metadata = chunk_data.get('metadata', {})
+                                break
+                
+                # 方法2：從faiss_store或bm25_index獲取
+                if not chunk_id:
+                    try:
+                        chunk_info = faiss_store.get_multi_level_chunk_by_index(level_name, idx)
+                        if chunk_info:
+                            chunk_id = chunk_info.get('chunk_id')
+                            if 'enhanced_metadata' in chunk_info:
+                                metadata = chunk_info.get('enhanced_metadata', {})
+                    except:
+                        pass
+                
+                # 方法3：從bm25_index獲取
+                if not chunk_id:
+                    try:
+                        chunk_info = bm25_index.get_multi_level_chunk_by_index(level_name, idx)
+                        if chunk_info:
+                            chunk_id = chunk_info.get('chunk_id')
+                    except:
+                        pass
+                
+                # 方法4：生成默認chunk_id
+                if not chunk_id:
+                    chunk_id = f"{doc_id}_{level_name}_{idx}"
+                
                 result = {
                     "content": chunks[idx],
                     "similarity": float(similarities[idx]),
                     "level": level_name,
-                    "doc_id": doc_ids[idx],
-                    "chunk_index": int(idx)
+                    "doc_id": doc_id,
+                    "chunk_index": int(idx),
+                    "chunk_id": chunk_id,
+                    "metadata": metadata
                 }
                 level_results.append(result)
                 all_results.append(result)
