@@ -7337,8 +7337,9 @@ def convert_pdf_structured(file_content: bytes, filename: str, options: Metadata
         # 修改章節正則表達式，支持「第X章之一」格式
         chapter_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)\s*章(?:[之\-]([一二三四五六七八九十百千0-9]+))?[\u3000\s]*(.*)$")
         section_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)\s*節[\u3000\s]*(.*)$")
-        # 修改條文正則表達式，分別捕獲主編號和後綴
-        article_re = re.compile(r"^第\s*([一二三四五六七八九十百千0-9]+)(?:[之\-]([一二三四五六七八九十0-9]+))?\s*條[\u3000\s]*(.*)$")
+        # 修改條文正則表達式，只匹配阿拉伯數字的條文號碼（避免將中文數字的條文引用誤識別為新條文）
+        # 例如：「第四十二條」不應該被識別為新條文，而是條文內容的一部分
+        article_re = re.compile(r"^第\s*([0-9]+)(?:[之\-]([0-9]+))?\s*條[\u3000\s]*(.*)$")
 
         def parse_item_line(ln: str):
             # Match common item markers like 「一、」「1.」「（一）」「(1)」「1）」 etc.
