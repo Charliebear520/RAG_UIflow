@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-RQ1 評估腳本
-評估階層式分塊策略（D組：完整多層次ML-RAG）相較於傳統條文基礎分塊（A組：僅條文層）的效益提升
+RQ2 & RQ3 評估腳本
+RQ2: 宏觀結構（章、節）與微觀細節（條、項、款、目）各自對法律問題的檢索準確度有何獨立的貢獻？
+RQ3: 針對不同類型的法律查詢（如主題型 vs. 細節型），是否存在對應的最佳分塊層次組合？
+
+實驗設計：
+- B組：條文+章節結構（對照組）
+- C組：條文+細節層次（實驗組）
 
 使用方法：
-    python evaluate_rq1.py
+    python evaluate_rq2_rq3.py
 """
 
 import json
@@ -210,8 +215,8 @@ def _cn_to_int_str(cn_str: str) -> str:
     
     return result if result else cn_str
 
-def retrieve_group_a(query: str, k: int = 10) -> List[Dict]:
-    """檢索A組（僅條文層）"""
+def retrieve_group_b(query: str, k: int = 10) -> List[Dict]:
+    """檢索B組（條文+章節結構 - 對照組）"""
     try:
         # 使用experimental-groups-batch-retrieve API
         response = requests.post(
@@ -219,30 +224,29 @@ def retrieve_group_a(query: str, k: int = 10) -> List[Dict]:
             json={
                 "query": query,
                 "k": k,
-                "groups_to_test": ["group_a"]
+                "groups_to_test": ["group_b"]
             },
             timeout=60
         )
         if response.status_code == 200:
             data = response.json()
-            # 提取group_a的結果
-            if "results" in data and "group_a" in data["results"]:
-                group_data = data["results"]["group_a"]
+            # 提取group_b的結果
+            if "results" in data and "group_b" in data["results"]:
+                group_data = data["results"]["group_b"]
                 fused_results = group_data.get("fused_results", [])
-                # 需要從store中獲取chunk_id，這裡先返回結果，後續從metadata提取
                 return fused_results
             return []
         else:
-            print(f"⚠️ A組檢索失敗: {response.status_code} - {response.text}")
+            print(f"⚠️ B組檢索失敗: {response.status_code} - {response.text}")
             return []
     except Exception as e:
-        print(f"❌ A組檢索異常: {e}")
+        print(f"❌ B組檢索異常: {e}")
         import traceback
         traceback.print_exc()
         return []
 
-def retrieve_group_d(query: str, k: int = 10) -> List[Dict]:
-    """檢索D組（完整多層次ML-RAG）"""
+def retrieve_group_c(query: str, k: int = 10) -> List[Dict]:
+    """檢索C組（條文+細節層次 - 實驗組）"""
     try:
         # 使用experimental-groups-batch-retrieve API
         response = requests.post(
@@ -250,23 +254,23 @@ def retrieve_group_d(query: str, k: int = 10) -> List[Dict]:
             json={
                 "query": query,
                 "k": k,
-                "groups_to_test": ["group_d"]
+                "groups_to_test": ["group_c"]
             },
             timeout=60
         )
         if response.status_code == 200:
             data = response.json()
-            # 提取group_d的結果
-            if "results" in data and "group_d" in data["results"]:
-                group_data = data["results"]["group_d"]
+            # 提取group_c的結果
+            if "results" in data and "group_c" in data["results"]:
+                group_data = data["results"]["group_c"]
                 fused_results = group_data.get("fused_results", [])
                 return fused_results
             return []
         else:
-            print(f"⚠️ D組檢索失敗: {response.status_code} - {response.text}")
+            print(f"⚠️ C組檢索失敗: {response.status_code} - {response.text}")
             return []
     except Exception as e:
-        print(f"❌ D組檢索異常: {e}")
+        print(f"❌ C組檢索異常: {e}")
         import traceback
         traceback.print_exc()
         return []
@@ -299,6 +303,7 @@ def calculate_metrics(
     # 轉換ground_truth為集合
     gt_e_set = set(ground_truth_e)
     gt_c_set = set(ground_truth_c)
+    gt_ec_set = gt_e_set | gt_c_set
     
     # 計算嚴格指標（僅考慮E）
     strict_e_retrieved = retrieved_identifiers & gt_e_set
@@ -309,17 +314,10 @@ def calculate_metrics(
         if (strict_precision + strict_recall) > 0 else 0.0
     )
     
-    # 計算寬鬆指標（考慮E或C，不去重）
-    # 分別計算E和C的命中數量
-    relaxed_e_retrieved = retrieved_identifiers & gt_e_set
-    relaxed_c_retrieved = retrieved_identifiers & gt_c_set
-    # 分子 = E命中數量 + C命中數量（不去重，允許重複計算）
-    relaxed_ec_count = len(relaxed_e_retrieved) + len(relaxed_c_retrieved)
-    # 分母 = E總數 + C總數（不去重）
-    total_ec_count = len(gt_e_set) + len(gt_c_set)
-    
-    relaxed_precision = relaxed_ec_count / k if k > 0 else 0.0
-    relaxed_recall = relaxed_ec_count / total_ec_count if total_ec_count > 0 else 0.0
+    # 計算寬鬆指標（考慮E或C）
+    relaxed_ec_retrieved = retrieved_identifiers & gt_ec_set
+    relaxed_precision = len(relaxed_ec_retrieved) / k if k > 0 else 0.0
+    relaxed_recall = len(relaxed_ec_retrieved) / len(gt_ec_set) if len(gt_ec_set) > 0 else 0.0
     relaxed_f1 = (
         2 * relaxed_precision * relaxed_recall / (relaxed_precision + relaxed_recall)
         if (relaxed_precision + relaxed_recall) > 0 else 0.0
@@ -333,18 +331,20 @@ def calculate_metrics(
         "relaxed_recall": relaxed_recall,
         "relaxed_f1": relaxed_f1,
         "retrieved_e_count": len(strict_e_retrieved),
-        "retrieved_c_count": len(relaxed_c_retrieved),
-        "retrieved_ec_count": relaxed_ec_count,  # E命中數量 + C命中數量（不去重）
+        "retrieved_ec_count": len(relaxed_ec_retrieved),
         "total_e": len(gt_e_set),
-        "total_c": len(gt_c_set),
-        "total_ec": total_ec_count,  # E總數 + C總數（不去重）
+        "total_ec": len(gt_ec_set),
         "retrieved_identifiers": list(retrieved_identifiers)
     }
 
-def evaluate_rq1():
-    """執行RQ1評估"""
+def evaluate_rq2_rq3():
+    """執行RQ2和RQ3評估"""
     print("=" * 80)
-    print("RQ1 評估：階層式分塊策略 vs 傳統條文基礎分塊")
+    print("RQ2 & RQ3 評估：宏觀結構 vs 微觀細節，以及不同查詢類型的最佳分塊層次組合")
+    print("=" * 80)
+    print("實驗設計：")
+    print("  - B組：條文+章節結構（對照組）")
+    print("  - C組：條文+細節層次（實驗組）")
     print("=" * 80)
     
     # 載入ground truth
@@ -387,15 +387,15 @@ def evaluate_rq1():
         print(f"查詢: {query_text[:60]}...")
         print(f"Ground Truth - E: {gt_e}, C: {gt_c}")
         
-        # 檢索A組
-        print("  🔍 檢索A組（僅條文層）...")
-        results_a = retrieve_group_a(query_text, k=max(k_values))
-        print(f"  ✅ A組返回 {len(results_a)} 個結果")
+        # 檢索B組（對照組）
+        print("  🔍 檢索B組（條文+章節結構 - 對照組）...")
+        results_b = retrieve_group_b(query_text, k=max(k_values))
+        print(f"  ✅ B組返回 {len(results_b)} 個結果")
         
-        # 檢索D組
-        print("  🔍 檢索D組（完整多層次ML-RAG）...")
-        results_d = retrieve_group_d(query_text, k=max(k_values))
-        print(f"  ✅ D組返回 {len(results_d)} 個結果")
+        # 檢索C組（實驗組）
+        print("  🔍 檢索C組（條文+細節層次 - 實驗組）...")
+        results_c = retrieve_group_c(query_text, k=max(k_values))
+        print(f"  ✅ C組返回 {len(results_c)} 個結果")
         
         # 計算各K值的指標
         item_result = {
@@ -403,26 +403,25 @@ def evaluate_rq1():
             "query_text": query_text,
             "query_type": query_type,
             "ground_truth": ground_truth,
-            "group_a": {},
-            "group_d": {}
+            "group_b": {},
+            "group_c": {}
         }
         
         for k in k_values:
-            # A組指標
-            metrics_a = calculate_metrics(results_a, gt_e, gt_c, k)
-            item_result["group_a"][f"k_{k}"] = metrics_a
+            # B組指標
+            metrics_b = calculate_metrics(results_b, gt_e, gt_c, k)
+            item_result["group_b"][f"k_{k}"] = metrics_b
             
-            # D組指標
-            metrics_d = calculate_metrics(results_d, gt_e, gt_c, k)
-            item_result["group_d"][f"k_{k}"] = metrics_d
+            # C組指標
+            metrics_c = calculate_metrics(results_c, gt_e, gt_c, k)
+            item_result["group_c"][f"k_{k}"] = metrics_c
             
-            # 打印K=5的結果摘要
-            if k == 5:
-                print(f"  📊 K={k} 指標:")
-                print(f"    A組 - Strict P@5: {metrics_a['strict_precision']:.3f}, R@5: {metrics_a['strict_recall']:.3f}, F1@5: {metrics_a['strict_f1']:.3f}")
-                print(f"    A組 - Relaxed P@5: {metrics_a['relaxed_precision']:.3f}, R@5: {metrics_a['relaxed_recall']:.3f}, F1@5: {metrics_a['relaxed_f1']:.3f}")
-                print(f"    D組 - Strict P@5: {metrics_d['strict_precision']:.3f}, R@5: {metrics_d['strict_recall']:.3f}, F1@5: {metrics_d['strict_f1']:.3f}")
-                print(f"    D組 - Relaxed P@5: {metrics_d['relaxed_precision']:.3f}, R@5: {metrics_d['relaxed_recall']:.3f}, F1@5: {metrics_d['relaxed_f1']:.3f}")
+            # 打印所有K值的結果摘要
+            print(f"  📊 K={k} 指標:")
+            print(f"    B組 - Strict P@{k}: {metrics_b['strict_precision']:.3f}, R@{k}: {metrics_b['strict_recall']:.3f}, F1@{k}: {metrics_b['strict_f1']:.3f}")
+            print(f"    B組 - Relaxed P@{k}: {metrics_b['relaxed_precision']:.3f}, R@{k}: {metrics_b['relaxed_recall']:.3f}, F1@{k}: {metrics_b['relaxed_f1']:.3f}")
+            print(f"    C組 - Strict P@{k}: {metrics_c['strict_precision']:.3f}, R@{k}: {metrics_c['strict_recall']:.3f}, F1@{k}: {metrics_c['strict_f1']:.3f}")
+            print(f"    C組 - Relaxed P@{k}: {metrics_c['relaxed_precision']:.3f}, R@{k}: {metrics_c['relaxed_recall']:.3f}, F1@{k}: {metrics_c['relaxed_f1']:.3f}")
         
         all_results.append(item_result)
         
@@ -443,7 +442,7 @@ def evaluate_rq1():
     type_averages = {}
     for query_type, type_items in type_results.items():
         type_averages[query_type] = {}
-        for group in ["group_a", "group_d"]:
+        for group in ["group_b", "group_c"]:
             type_averages[query_type][group] = {}
             for k in k_values:
                 k_key = f"k_{k}"
@@ -461,7 +460,7 @@ def evaluate_rq1():
     
     # 計算總體平均分
     overall_averages = {}
-    for group in ["group_a", "group_d"]:
+    for group in ["group_b", "group_c"]:
         overall_averages[group] = {}
         for k in k_values:
             k_key = f"k_{k}"
@@ -480,6 +479,13 @@ def evaluate_rq1():
     # 生成報告
     report = {
         "evaluation_info": {
+            "research_questions": ["RQ2", "RQ3"],
+            "rq2_description": "宏觀結構（章、節）與微觀細節（條、項、款、目）各自對法律問題的檢索準確度有何獨立的貢獻？",
+            "rq3_description": "針對不同類型的法律查詢（如主題型 vs. 細節型），是否存在對應的最佳分塊層次組合？",
+            "experimental_design": {
+                "control_group": "B組：條文+章節結構",
+                "experimental_group": "C組：條文+細節層次"
+            },
             "total_queries": len(ground_truth_data),
             "k_values": k_values,
             "evaluation_date": time.strftime("%Y-%m-%d %H:%M:%S")
@@ -490,7 +496,7 @@ def evaluate_rq1():
     }
     
     # 保存報告
-    output_file = f"RQ1_evaluation_report_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    output_file = f"RQ2_RQ3_evaluation_report_{time.strftime('%Y%m%d_%H%M%S')}.json"
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"\n✅ 評估報告已保存至: {output_file}")
@@ -503,30 +509,30 @@ def evaluate_rq1():
     for k in k_values:
         k_key = f"k_{k}"
         print(f"\n📊 K={k} 總體平均指標:")
-        print(f"\n  A組（僅條文層 - Baseline）:")
-        if k_key in overall_averages["group_a"]:
-            avg_a = overall_averages["group_a"][k_key]
-            print(f"    嚴格指標 - P@{k}: {avg_a['strict_precision']:.4f}, R@{k}: {avg_a['strict_recall']:.4f}, F1@{k}: {avg_a['strict_f1']:.4f}")
-            print(f"    寬鬆指標 - P@{k}: {avg_a['relaxed_precision']:.4f}, R@{k}: {avg_a['relaxed_recall']:.4f}, F1@{k}: {avg_a['relaxed_f1']:.4f}")
+        print(f"\n  B組（條文+章節結構 - 對照組）:")
+        if k_key in overall_averages["group_b"]:
+            avg_b = overall_averages["group_b"][k_key]
+            print(f"    嚴格指標 - P@{k}: {avg_b['strict_precision']:.4f}, R@{k}: {avg_b['strict_recall']:.4f}, F1@{k}: {avg_b['strict_f1']:.4f}")
+            print(f"    寬鬆指標 - P@{k}: {avg_b['relaxed_precision']:.4f}, R@{k}: {avg_b['relaxed_recall']:.4f}, F1@{k}: {avg_b['relaxed_f1']:.4f}")
         
-        print(f"\n  D組（完整多層次ML-RAG）:")
-        if k_key in overall_averages["group_d"]:
-            avg_d = overall_averages["group_d"][k_key]
-            print(f"    嚴格指標 - P@{k}: {avg_d['strict_precision']:.4f}, R@{k}: {avg_d['strict_recall']:.4f}, F1@{k}: {avg_d['strict_f1']:.4f}")
-            print(f"    寬鬆指標 - P@{k}: {avg_d['relaxed_precision']:.4f}, R@{k}: {avg_d['relaxed_recall']:.4f}, F1@{k}: {avg_d['relaxed_f1']:.4f}")
+        print(f"\n  C組（條文+細節層次 - 實驗組）:")
+        if k_key in overall_averages["group_c"]:
+            avg_c = overall_averages["group_c"][k_key]
+            print(f"    嚴格指標 - P@{k}: {avg_c['strict_precision']:.4f}, R@{k}: {avg_c['strict_recall']:.4f}, F1@{k}: {avg_c['strict_f1']:.4f}")
+            print(f"    寬鬆指標 - P@{k}: {avg_c['relaxed_precision']:.4f}, R@{k}: {avg_c['relaxed_recall']:.4f}, F1@{k}: {avg_c['relaxed_f1']:.4f}")
             
             # 計算提升幅度
-            if k_key in overall_averages["group_a"]:
-                avg_a = overall_averages["group_a"][k_key]
-                print(f"\n  📈 提升幅度（D組 vs A組）:")
-                strict_f1_improvement = avg_d['strict_f1'] - avg_a['strict_f1']
-                relaxed_f1_improvement = avg_d['relaxed_f1'] - avg_a['relaxed_f1']
-                print(f"    嚴格F1@{k}提升: {strict_f1_improvement:+.4f} ({strict_f1_improvement/avg_a['strict_f1']*100:+.2f}%)" if avg_a['strict_f1'] > 0 else "    嚴格F1@{k}提升: N/A")
-                print(f"    寬鬆F1@{k}提升: {relaxed_f1_improvement:+.4f} ({relaxed_f1_improvement/avg_a['relaxed_f1']*100:+.2f}%)" if avg_a['relaxed_f1'] > 0 else "    寬鬆F1@{k}提升: N/A")
+            if k_key in overall_averages["group_b"]:
+                avg_b = overall_averages["group_b"][k_key]
+                print(f"\n  📈 提升幅度（C組 vs B組）:")
+                strict_f1_improvement = avg_c['strict_f1'] - avg_b['strict_f1']
+                relaxed_f1_improvement = avg_c['relaxed_f1'] - avg_b['relaxed_f1']
+                print(f"    嚴格F1@{k}提升: {strict_f1_improvement:+.4f} ({strict_f1_improvement/avg_b['strict_f1']*100:+.2f}%)" if avg_b['strict_f1'] > 0 else "    嚴格F1@{k}提升: N/A")
+                print(f"    寬鬆F1@{k}提升: {relaxed_f1_improvement:+.4f} ({relaxed_f1_improvement/avg_b['relaxed_f1']*100:+.2f}%)" if avg_b['relaxed_f1'] > 0 else "    寬鬆F1@{k}提升: N/A")
     
-    # 按類型打印
+    # 按類型打印（RQ3相關）
     print("\n" + "=" * 80)
-    print("按查詢類型分組的平均指標")
+    print("按查詢類型分組的平均指標 (RQ3)")
     print("=" * 80)
     
     for query_type in ["基礎型", "細節型", "主題型"]:
@@ -535,12 +541,23 @@ def evaluate_rq1():
             for k in k_values:
                 k_key = f"k_{k}"
                 print(f"\n  K={k}:")
-                for group_name, group_key in [("A組（僅條文層）", "group_a"), ("D組（完整多層次ML-RAG）", "group_d")]:
+                for group_name, group_key in [("B組（條文+章節結構 - 對照組）", "group_b"), ("C組（條文+細節層次 - 實驗組）", "group_c")]:
                     if k_key in type_averages[query_type][group_key]:
                         avg = type_averages[query_type][group_key][k_key]
                         print(f"    {group_name}:")
                         print(f"      嚴格 - P@{k}: {avg['strict_precision']:.4f}, R@{k}: {avg['strict_recall']:.4f}, F1@{k}: {avg['strict_f1']:.4f}")
                         print(f"      寬鬆 - P@{k}: {avg['relaxed_precision']:.4f}, R@{k}: {avg['relaxed_recall']:.4f}, F1@{k}: {avg['relaxed_f1']:.4f}")
+                
+                # 計算該類型下的提升幅度
+                if (k_key in type_averages[query_type]["group_b"] and 
+                    k_key in type_averages[query_type]["group_c"]):
+                    avg_b = type_averages[query_type]["group_b"][k_key]
+                    avg_c = type_averages[query_type]["group_c"][k_key]
+                    strict_improvement = avg_c['strict_f1'] - avg_b['strict_f1']
+                    relaxed_improvement = avg_c['relaxed_f1'] - avg_b['relaxed_f1']
+                    print(f"    📈 {query_type} 提升幅度 (C組 vs B組):")
+                    print(f"      嚴格F1@{k}: {strict_improvement:+.4f} ({strict_improvement/avg_b['strict_f1']*100:+.2f}%)" if avg_b['strict_f1'] > 0 else "      嚴格F1@{k}: N/A")
+                    print(f"      寬鬆F1@{k}: {relaxed_improvement:+.4f} ({relaxed_improvement/avg_b['relaxed_f1']*100:+.2f}%)" if avg_b['relaxed_f1'] > 0 else "      寬鬆F1@{k}: N/A")
     
     print("\n" + "=" * 80)
     print("評估完成！")
@@ -550,7 +567,7 @@ def evaluate_rq1():
 
 if __name__ == "__main__":
     try:
-        report = evaluate_rq1()
+        report = evaluate_rq2_rq3()
     except KeyboardInterrupt:
         print("\n\n⚠️ 評估被用戶中斷")
         sys.exit(1)

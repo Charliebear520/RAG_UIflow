@@ -10,11 +10,11 @@
   },
   {
     "query_id": "Q2_Type_A",
-    "query_text": "網路服務提供者（ISP）在什麼情況下可以免除民事責任？",
+    "query_text": "阿德想要拍一個微電影，參考「忌日快樂」的「主角不斷重複被謀殺的一天」創意，改為描述主角一直逃避現實生活，每天被殺死，不斷重複當天的循環，這樣參考創意的方式會侵害著作權嗎？",
     "query_type": "基礎型",
     "ground_truth": {
       "E": ["Art_10_1"],
-      "C": ["Art_28", "Chap_3_Sec_1", "Chap_3"]
+      "C": ["Art_28", "Chap_3_Sec_1", "Chap_3","Chap_3_Sec_4"]
     }
   },
   {
@@ -32,7 +32,7 @@
     "query_type": "基礎型",
     "ground_truth": {
       "E": ["Art_41"],
-      "C": ["Art_15", "Chap_3_Sec_4", "Chap_3"]
+      "C": ["Art_15", "Chap_3_Sec_4", "Chap_3","Chap_3_Sec_3"]
     }
   },
   {
@@ -41,7 +41,7 @@
     "query_type": "基礎型",
     "ground_truth": {
       "E": ["Art_29_P1", "Art_37", "Art_60"],
-      "C": ["Art_92", "Chap_3_Sec_4", "Chap_3"]
+      "C": ["Art_92", "Chap_3_Sec_4", "Chap_3","Chap_7"]
     }
   },
   {
@@ -130,7 +130,7 @@
     "query_type": "細節型",
     "ground_truth": {
       "E": ["Art_3_P1_C9", "Art_3_P1_C4", "Art_26_P1", "Art_37_P1", "Art_55"],
-      "C": ["Art_65", "Art_81", "Art_50", "Chap_3_Sec_4", "Chap_3", "Chap_1"]
+      "C": ["Art_65", "Art_81", "Art_50", "Chap_3_Sec_4", "Chap_3", "Chap_1","Chap_5"]
     }
   },
   {
@@ -213,11 +213,11 @@
   },
   {
     "query_id": "Q3_Type_C",
-    "query_text": "違反著作權法的處罰，哪些是非告訴乃論罪?",
+    "query_text": "如有一創作的著作由許多位創作者完成，則著作權如何判別分辨是否為共有或其他?",
     "query_type": "主題型",
     "ground_truth": {
-      "E": ["Art_91_P3", "Art_91_1_P3"],
-      "C": ["Chap_7"]
+      "E": ["Art_8"],
+      "C": ["Art_40","Art_40_1","Art_19_P1","Art_3","Chap_2","Chap_1","Chap_3","Chap_3_Sec_3"]
     }
   },
   {
