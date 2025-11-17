@@ -7,6 +7,7 @@ const stages = [
   { key: "chunk", label: "Chunk", path: "/chunk" },
   { key: "embed", label: "Embed", path: "/embed" },
   { key: "retrieve", label: "Retrieve", path: "/retrieve" },
+  { key: "experiment-e", label: "Experiment E", path: "/experiment-e" },
   { key: "generate", label: "Generate", path: "/generate" },
   { key: "evaluate", label: "Evaluate", path: "/evaluate" },
 ];

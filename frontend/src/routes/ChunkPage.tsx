@@ -886,6 +886,7 @@ export function ChunkPage() {
     setHighlightedChunkId(null);
   };
 
+
   const renderHierarchyNode = (
     node: ChunkHierarchyNode,
     depth: number = 0
@@ -2007,6 +2008,7 @@ export function ChunkPage() {
                                 前往 Embedding
                               </button>
                             </div>
+
                           </div>
                         ) : (
                           <div>

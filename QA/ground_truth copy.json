@@ -1,0 +1,286 @@
+[
+  {
+    "query_id": "Q1_Type_A",
+    "query_text": "阿德想要拍一個微電影，參考「忌日快樂」的「主角不斷重複被謀殺的一天」創意，改為描述主角一直逃避現實生活，每天被殺死，不斷重複當天的循環，這樣參考創意的方式會侵害著作權嗎？",
+    "query_type": "基礎型",
+    "ground_truth": {
+      "E": ["Art_10_1"],
+      "C": ["Art_28", "Chap_3_Sec_1", "Chap_3","Chap_3_Sec_4"]
+    }
+  },
+  {
+    "query_id": "Q2_Type_A",
+    "query_text": "允書很有藝術天分，畫了一幅畫送給好友延宇，延宇很喜歡這幅畫，想要翻拍、掃描後製成拼圖自用或販售，這樣會有著作權問題嗎?",
+    "query_type": "基礎型",
+    "ground_truth": {
+      "E": ["Art_22", "Art_28_1", "Art_51"],
+      "C": ["Art_65", "Art_28", "Chap_3_Sec_4", "Chap_3"]
+    }
+  },
+  {
+    "query_id": "Q3_Type_A",
+    "query_text": "報社所留存資料（如讀者投書、投稿等），他人欲利用，可否不經著作權人同意，而供給他人?",
+    "query_type": "基礎型",
+    "ground_truth": {
+      "E": ["Art_41"],
+      "C": ["Art_15", "Chap_3_Sec_4", "Chap_3","Chap_3_Sec_3"]
+    }
+  },  
+  {
+    "query_id": "Q4_Type_A",
+    "query_text": "某人購買了一本攝影集，想將書中照片掃描後上傳至自己的部落格分享。此行為是否侵犯著作權？",
+    "query_type": "基礎型",
+    "ground_truth": {
+      "E": ["Art_22_P1","Art_26_1_P1"],
+      "C": ["Art_3_P1_C7", "Art_65"]
+    }
+  },  
+  {
+    "query_id": "Q5_Type_A",
+    "query_text": "老師因為授課需要，可以使用他人之照片、圖片、文章做為教材、教具嗎？需要注意利用範圍的問題嗎？",
+    "query_type": "基礎型",
+    "ground_truth": {
+      "E": ["Art_46"],
+      "C": ["Art_3_P1", "Art_65_2"]
+    }
+  },
+  {
+    "query_id": "Q6_Type_A",
+    "query_text": "廣播電台可否公開播送報章雜誌上的文章?另網站可否公開傳輸報章雜誌或者其他網站刊載的文章？",
+    "query_type": "基礎型",
+    "ground_truth": {
+      "E": ["Art_61"],
+      "C": ["Art_64"]
+    }
+  },
+  {
+    "query_id": "Q7_Type_A",
+    "query_text": "投稿人有抄襲的情形，廣播節目製作人不知情予以播出，是否須負違反著作權的責任?",
+    "query_type": "基礎型",
+    "ground_truth": {
+      "E": ["Art_88_P1"],
+      "C": ["Art_84", "Art_92","Art_101_P1","Art_3_P1_C7"]
+    }
+  },
+  {
+    "query_id": "Q8_Type_A",
+    "query_text": "我本身是個傳播業者，專司製作節目，經常要用坊間音樂來配樂，有時利用全首，有時只是部分，我們也很願意合理付費，請問有無此類合法的機構可查詢付費的標準?",
+    "query_type": "基礎型",
+    "ground_truth": {
+      "E": ["Art_81"],
+      "C": ["Art_37_P1", "Art_65"]
+    }
+  },
+  {
+    "query_id": "Q9_Type_A",
+    "query_text": "我本身是個傳播業者，專司製作節目，經常要用坊間音樂來配樂，有時利用全首，有時只是部分，我們也很願意合理付費，請問有無此類合法的機構可查詢付費的標準?",
+    "query_type": "基礎型",
+    "ground_truth": {
+      "E": ["Art_81"],
+      "C": ["Art_37_P1", "Art_65"]
+    }
+  },
+  {
+    "query_id": "Q1_Type_B",
+    "query_text": "節目資料非中文，經音樂廳請翻譯人員進行翻譯，中文譯稿作兩種使用(一)宣傳提供媒體使用(二)節目單製作賣錢營利，是否可行?",
+    "query_type": "細節型",
+    "ground_truth": {
+      "E": [
+        "Art_3_P1_C7",
+        "Art_3_P1_C10",
+        "Art_3_P1_C11",
+        "Art_3_P1_C12",
+        "Art_28",
+        "Art_26_1_P1",
+        "Art_37_P1"
+      ],
+      "C": ["Chap_1", "Chap_3_Sec_4", "Chap_3"]
+    }
+  },
+  {
+    "query_id": "Q2_Type_B",
+    "query_text": "到文化中心的圖書館影印報上的專欄資料是否侵害著作權?",
+    "query_type": "細節型",
+    "ground_truth": {
+      "E": ["Art_3_P1_C5", "Art_22", "Art_51", "Art_5_P1_C1"],
+      "C": ["Art_48", "Chap_3_Sec_4", "Chap_3", "Chap_1", "Chap_2"]
+    }
+  },
+  {
+    "query_id": "Q3_Type_B",
+    "query_text": "從書店買回歌譜，練唱後參加政府機關主辦的合唱比賽，是否違反著作權法?是否應由主辦單位出面辦理有關著作權事宜?",
+    "query_type": "細節型",
+    "ground_truth": {
+      "E": ["Art_3_P1_C9", "Art_3_P1_C4", "Art_26_P1", "Art_37_P1", "Art_55"],
+      "C": ["Art_65", "Art_81", "Art_50", "Chap_3_Sec_4", "Chap_3", "Chap_1","Chap_5"]
+    }
+  },
+
+  {
+    "query_id": "Q4_Type_B",
+    "query_text": "賣家於網拍平台刊登販售非法機上盒之訊息，網拍平台該怎麼處理？",
+    "query_type": "細節型",
+    "ground_truth": {
+      "E": ["Art_3_P1_C19_I3", "Art_90_4_P1", "Art_90_7", "Art_90_9"],
+      "C": ["Chap_6", "Chap_6_1", "Chap_1"]
+    }
+  },
+  {
+    "query_id": "Q5_Type_B",
+    "query_text": "現在的新聞稿，習慣上都冠上記者姓名，新聞照片更是張張都署名，這樣的情形，著作權屬報社？還是屬記者？利用時如何避免著作權方面之糾紛？",
+    "query_type": "細節型",
+    "ground_truth": {
+      "E": ["Art_9_P1_C4", "Art_11", "Art_13_P1"],
+      "C": ["Chap_2", "Chap_3_Sec_2", "Chap_3"]
+    }
+  },
+  {
+    "query_id": "Q6_Type_B",
+    "query_text": "產品使用說明書如果僅為操作程序和規格說明，是否仍可享有語文著作權?",
+    "query_type": "細節型",
+    "ground_truth": {
+      "E": ["Art_3_P1_C1", "Art_5_P1_C1", "Art_5_P2", "Art_10_1"],
+      "C": ["Chap_1", "Chap_2", "Chap_3_Sec_1", "Chap_3"]
+    }
+  },
+  {
+    "query_id": "Q7_Type_B",
+    "query_text": "錄影過程中，錄下現場的音樂是否涉及違法?現場實況錄影中所錄下的當事人，是否須經其同意才可以播出?",
+    "query_type": "細節型",
+    "ground_truth": {
+      "E": [
+        "Art_5_P1_C2",
+        "Art_5_P1_C8",
+        "Art_22_P1",
+        "Art_3_P1_C5",
+        "Art_24_P1"
+      ],
+      "C": ["Chap_2", "Chap_1", "Chap_3_Sec_4", "Chap_3"]
+    }
+  },
+  {
+    "query_id": "Q8_Type_B",
+    "query_text": "將有關音樂或影片的他人網址轉貼，在網路聊天室上，有無侵害著作權的問題？",
+    "query_type": "細節型",
+    "ground_truth": {
+      "E": ["Art_3_P1_C10", "Art_26_1"],
+      "C": ["Art_3_P1_C5", "Art_22", "Chap_3_Sec_4", "Chap_3", "Chap_1"]
+    }
+  },
+  {
+    "query_id": "Q9_Type_B",
+    "query_text": "錄音帶大中小盤商批貨於店內販售錄音、錄影帶，如該錄音、錄影帶涉有侵害他人著作權之情事者，販售者有無構成著作財產權的侵害?",
+    "query_type": "細節型",
+    "ground_truth": {
+      "E": ["Art_3_P1_C12", "Art_28_1", "Art_59_1", "Art_87_P1_C6"],
+      "C": ["Chap_1", "Chap_3_Sec_4", "Chap_3", "Chap_6"]
+    }
+  },
+  {
+    "query_id": "Q10_Type_B",
+    "query_text": "錄音、錄影帶販售店，因販售需要，於店內藉錄音、錄影器材播放該錄音、錄影帶，有無涉及著作財產權人權利行使問題?",
+    "query_type": "主題型",
+    "ground_truth": {
+      "E": [
+        "Art_3_P1_C8",
+        "Art_3_P1_C9",
+        "Art_5_P1_C2",
+        "Art_5_P1_C8",
+        "Art_25",
+        "Art_26",
+        "Art_65"
+      ],
+      "C": ["Chap_1", "Chap_2", "Chap_4", "Chap_3_Sec_4", "Chap_3"]
+    }
+  },
+  {
+    "query_id": "Q1_Type_C",
+    "query_text": "公司員工利用公司之器材、資料所作成的職務上著作，公司能否利用?",
+    "query_type": "主題型",
+    "ground_truth": {
+      "E": ["Art_11"],
+      "C": ["Chap_3_Sec_2", "Chap_3"]
+    }
+  },
+  {
+    "query_id": "Q2_Type_C",
+    "query_text": "甲片商將錄影帶或VCD授權乙店出租，乙店將該視聽光碟片轉讓予丙店，丙店繼續從事出租行為，請問乙、丙是否違反著作權法?",
+    "query_type": "主題型",
+    "ground_truth": {
+      "E": ["Art_29_P1", "Art_37", "Art_60"],
+      "C": ["Art_92", "Chap_3_Sec_4", "Chap_3","Chap_7"]
+    }
+  },
+  {
+    "query_id": "Q3_Type_C",
+    "query_text": "在KTV播放伴唱帶，是否須得音樂著作（詞、曲）的著作財產權人的授權?又KTV業者利用視聽伴唱帶從事營業播映行為，是否得到視聽伴唱帶製作人同意即可，毋須再得到視聽著作內詞、曲權利人同意?",
+    "query_type": "主題型",
+    "ground_truth": {
+      "E": ["Art_37", "Art_3_P1_C9", "Art_26"],
+      "C": ["Chap_3_Sec_4", "Chap_3", "Chap_1"]
+    }
+  },
+  {
+    "query_id": "Q4_Type_C",
+    "query_text": "某雜誌社舉辦攝影比賽，於比賽辦法中規定得獎的作品，著作財產權歸該社所有，非經該社同意，不得刊登於其他媒體，請問該社或其他雜誌社是否先徵得原攝影者的同意，才可刊登?",
+    "query_type": "主題型",
+    "ground_truth": {
+      "E": ["Art_36"],
+      "C": ["Chap_3_Sec_4", "Chap_3"]
+    }
+  },
+  {
+    "query_id": "Q5_Type_C",
+    "query_text": "如有一創作的著作由許多位創作者完成，則著作權如何判別分辨是否為共有或其他?",
+    "query_type": "主題型",
+    "ground_truth": {
+      "E": ["Art_8"],
+      "C": ["Art_40","Art_40_1","Art_19_P1","Art_3","Chap_2","Chap_1","Chap_3","Chap_3_Sec_3"]
+    }
+  },
+  {
+    "query_id": "Q6_Type_C",
+    "query_text": "經常在報刊上看到道歉啟事：「本人 × × ×因不慎誤用 × × ×君之創作，蒙 × × ×君寬宏大量不予追究，謹此道歉」，請問是否如此即可免責?",
+    "query_type": "主題型",
+    "ground_truth": {
+      "E": ["Art_91_P3", "Art_91_1_P3", "Art_100"],
+      "C": ["Chap_7"]
+    }
+  },
+  {
+    "query_id": "Q7_Type_C",
+    "query_text": "在國外購買書籍、CD唱片、DVD等著作物，未經著作財產權人的同意，可否帶入境，供自己使用?如可，有無數量的限制?",
+    "query_type": "主題型",
+    "ground_truth": {
+      "E": ["Art_87_P1_C4", "Art_87_1"],
+      "C": ["Chap_6"]
+    }
+  },
+  {
+    "query_id": "Q8_Type_C",
+    "query_text": "網路使用者所張貼的資訊如因權利人不實通知而遭網路服務提供者（ISP）取下時，有無救濟的途徑？",
+    "query_type": "主題型",
+    "ground_truth": {
+      "E": ["Art_90_9", "Art_90_11"],
+      "C": ["Chap_6_1"]
+    }
+  },
+  {
+    "query_id": "Q9_Type_C",
+    "query_text": "新聞事件記者採訪報導時，引用電視台畫面補充漏未拍攝的鏡頭，可否依著作權法第四十九條規定主張係合理使用?",
+    "query_type": "主題型",
+    "ground_truth": {
+      "E": ["Art_49", "Art_52", "Art_64"],
+      "C": ["Chap_3_Sec_4", "Chap_3"]
+    }
+  },
+  {
+    "query_id": "Q10_Type_C",
+    "query_text": "政府機關的公關人員所拍攝照片由政府機關提供給記者發布新聞，報社應如何處理該照片，才能避免侵害著作權?又報社可否以○○記者名義拍攝刊於報導上?",
+    "query_type": "主題型",
+    "ground_truth": {
+      "E": ["Art_11", "Art_16_P1", "Art_37_P1"],
+      "C": ["Chap_3_Sec_2", "Chap_3", "Chap_3_Sec_3", "Chap_3_Sec_4"]
+    }
+  }
+]

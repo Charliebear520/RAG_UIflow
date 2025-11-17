@@ -56,7 +56,10 @@ type RagContextType = {
     strategy: string
   ) => void;
   embed: () => Promise<void>;
-  multiLevelEmbed: (experimentalGroups?: string[]) => Promise<void>;
+  multiLevelEmbed: (
+    experimentalGroups?: string[],
+    options?: { doc_ids?: string[]; group_e_filters?: any[] }
+  ) => Promise<void>;
   retrieve: (query: string, k: number) => Promise<void>;
   hybridRetrieve: (query: string, k: number) => Promise<void>;
   hybridRrfRetrieve: (query: string, k: number) => Promise<void>;
@@ -298,10 +301,20 @@ export function RagProvider({ children }: { children: React.ReactNode }) {
     setEmbedDimension(res.dimension || res.num_features || null);
   }
 
-  async function multiLevelEmbed(experimentalGroups?: string[]) {
-    const res = await api.multiLevelEmbed({
+  async function multiLevelEmbed(
+    experimentalGroups?: string[],
+    options?: { doc_ids?: string[]; group_e_filters?: any[] }
+  ) {
+    const payload: Record<string, any> = {
       experimental_groups: experimentalGroups,
-    });
+    };
+    if (options?.doc_ids) {
+      payload.doc_ids = options.doc_ids;
+    }
+    if (options?.group_e_filters) {
+      payload.group_e_filters = options.group_e_filters;
+    }
+    const res = await api.multiLevelEmbed(payload);
     setEmbedProvider(
       res.levels?.conceptual?.provider ||
         res.levels?.procedural?.provider ||

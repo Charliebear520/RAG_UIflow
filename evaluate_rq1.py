@@ -16,6 +16,12 @@ import time
 
 # API配置
 API_BASE_URL = "http://localhost:8000/api"
+GROUPS_TO_EVALUATE = ["group_a", "group_d", "group_e"]
+GROUP_LABELS = {
+    "group_a": "A組（僅條文層）",
+    "group_d": "D組（完整多層次）",
+    "group_e": "E組（LLM章節導向）",
+}
 
 def load_ground_truth(file_path: str = "QA/ground_truth.json") -> List[Dict]:
     """載入ground truth數據"""
@@ -210,66 +216,29 @@ def _cn_to_int_str(cn_str: str) -> str:
     
     return result if result else cn_str
 
-def retrieve_group_a(query: str, k: int = 10) -> List[Dict]:
-    """檢索A組（僅條文層）"""
+def retrieve_experimental_groups(query: str, k: int, groups: List[str]) -> Dict[str, Any]:
+    """一次性檢索多個實驗組"""
     try:
-        # 使用experimental-groups-batch-retrieve API
         response = requests.post(
             f"{API_BASE_URL}/experimental-groups-batch-retrieve",
             json={
                 "query": query,
                 "k": k,
-                "groups_to_test": ["group_a"]
+                "groups_to_test": groups
             },
-            timeout=60
+            timeout=90
         )
         if response.status_code == 200:
             data = response.json()
-            # 提取group_a的結果
-            if "results" in data and "group_a" in data["results"]:
-                group_data = data["results"]["group_a"]
-                fused_results = group_data.get("fused_results", [])
-                # 需要從store中獲取chunk_id，這裡先返回結果，後續從metadata提取
-                return fused_results
-            return []
+            return data.get("results", {})
         else:
-            print(f"⚠️ A組檢索失敗: {response.status_code} - {response.text}")
-            return []
+            print(f"⚠️ 實驗組檢索失敗: {response.status_code} - {response.text}")
+            return {}
     except Exception as e:
-        print(f"❌ A組檢索異常: {e}")
+        print(f"❌ 實驗組檢索異常: {e}")
         import traceback
         traceback.print_exc()
-        return []
-
-def retrieve_group_d(query: str, k: int = 10) -> List[Dict]:
-    """檢索D組（完整多層次ML-RAG）"""
-    try:
-        # 使用experimental-groups-batch-retrieve API
-        response = requests.post(
-            f"{API_BASE_URL}/experimental-groups-batch-retrieve",
-            json={
-                "query": query,
-                "k": k,
-                "groups_to_test": ["group_d"]
-            },
-            timeout=60
-        )
-        if response.status_code == 200:
-            data = response.json()
-            # 提取group_d的結果
-            if "results" in data and "group_d" in data["results"]:
-                group_data = data["results"]["group_d"]
-                fused_results = group_data.get("fused_results", [])
-                return fused_results
-            return []
-        else:
-            print(f"⚠️ D組檢索失敗: {response.status_code} - {response.text}")
-            return []
-    except Exception as e:
-        print(f"❌ D組檢索異常: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+        return {}
 
 def calculate_metrics(
     retrieved_results: List[Dict],
@@ -388,14 +357,15 @@ def evaluate_rq1():
         print(f"Ground Truth - E: {gt_e}, C: {gt_c}")
         
         # 檢索A組
-        print("  🔍 檢索A組（僅條文層）...")
-        results_a = retrieve_group_a(query_text, k=max(k_values))
-        print(f"  ✅ A組返回 {len(results_a)} 個結果")
-        
-        # 檢索D組
-        print("  🔍 檢索D組（完整多層次ML-RAG）...")
-        results_d = retrieve_group_d(query_text, k=max(k_values))
-        print(f"  ✅ D組返回 {len(results_d)} 個結果")
+        print("  🔍 檢索實驗組 (A/D/E)...")
+        group_payloads = retrieve_experimental_groups(
+            query_text,
+            k=max(k_values),
+            groups=GROUPS_TO_EVALUATE,
+        )
+        for group in GROUPS_TO_EVALUATE:
+            fused = group_payloads.get(group, {}).get("fused_results", [])
+            print(f"    - {GROUP_LABELS[group]} 返回 {len(fused)} 個結果")
         
         # 計算各K值的指標
         item_result = {
@@ -403,26 +373,27 @@ def evaluate_rq1():
             "query_text": query_text,
             "query_type": query_type,
             "ground_truth": ground_truth,
-            "group_a": {},
-            "group_d": {}
         }
+        for group in GROUPS_TO_EVALUATE:
+            item_result[group] = {}
         
         for k in k_values:
-            # A組指標
-            metrics_a = calculate_metrics(results_a, gt_e, gt_c, k)
-            item_result["group_a"][f"k_{k}"] = metrics_a
-            
-            # D組指標
-            metrics_d = calculate_metrics(results_d, gt_e, gt_c, k)
-            item_result["group_d"][f"k_{k}"] = metrics_d
-            
-            # 打印K=5的結果摘要
-            if k == 5:
+            summaries = []
+            for group in GROUPS_TO_EVALUATE:
+                fused_results = group_payloads.get(group, {}).get("fused_results", [])
+                metrics = calculate_metrics(fused_results, gt_e, gt_c, k)
+                item_result[group][f"k_{k}"] = metrics
+                if k == 5:
+                    summaries.append(
+                        f"    {GROUP_LABELS[group]} - Strict P@{k}: {metrics['strict_precision']:.3f}, "
+                        f"R@{k}: {metrics['strict_recall']:.3f}, F1@{k}: {metrics['strict_f1']:.3f}\n"
+                        f"                     Relaxed P@{k}: {metrics['relaxed_precision']:.3f}, "
+                        f"R@{k}: {metrics['relaxed_recall']:.3f}, F1@{k}: {metrics['relaxed_f1']:.3f}"
+                    )
+            if summaries:
                 print(f"  📊 K={k} 指標:")
-                print(f"    A組 - Strict P@5: {metrics_a['strict_precision']:.3f}, R@5: {metrics_a['strict_recall']:.3f}, F1@5: {metrics_a['strict_f1']:.3f}")
-                print(f"    A組 - Relaxed P@5: {metrics_a['relaxed_precision']:.3f}, R@5: {metrics_a['relaxed_recall']:.3f}, F1@5: {metrics_a['relaxed_f1']:.3f}")
-                print(f"    D組 - Strict P@5: {metrics_d['strict_precision']:.3f}, R@5: {metrics_d['strict_recall']:.3f}, F1@5: {metrics_d['strict_f1']:.3f}")
-                print(f"    D組 - Relaxed P@5: {metrics_d['relaxed_precision']:.3f}, R@5: {metrics_d['relaxed_recall']:.3f}, F1@5: {metrics_d['relaxed_f1']:.3f}")
+                for line in summaries:
+                    print(line)
         
         all_results.append(item_result)
         
@@ -443,12 +414,15 @@ def evaluate_rq1():
     type_averages = {}
     for query_type, type_items in type_results.items():
         type_averages[query_type] = {}
-        for group in ["group_a", "group_d"]:
+        for group in GROUPS_TO_EVALUATE:
             type_averages[query_type][group] = {}
             for k in k_values:
                 k_key = f"k_{k}"
-                metrics_list = [item[group][k_key] for item in type_items if k_key in item[group]]
-                
+                metrics_list = [
+                    item[group][k_key]
+                    for item in type_items
+                    if group in item and k_key in item[group]
+                ]
                 if metrics_list:
                     type_averages[query_type][group][k_key] = {
                         "strict_precision": sum(m["strict_precision"] for m in metrics_list) / len(metrics_list),
@@ -461,12 +435,15 @@ def evaluate_rq1():
     
     # 計算總體平均分
     overall_averages = {}
-    for group in ["group_a", "group_d"]:
+    for group in GROUPS_TO_EVALUATE:
         overall_averages[group] = {}
         for k in k_values:
             k_key = f"k_{k}"
-            metrics_list = [item[group][k_key] for item in all_results if k_key in item[group]]
-            
+            metrics_list = [
+                item[group][k_key]
+                for item in all_results
+                if group in item and k_key in item[group]
+            ]
             if metrics_list:
                 overall_averages[group][k_key] = {
                     "strict_precision": sum(m["strict_precision"] for m in metrics_list) / len(metrics_list),
@@ -503,26 +480,30 @@ def evaluate_rq1():
     for k in k_values:
         k_key = f"k_{k}"
         print(f"\n📊 K={k} 總體平均指標:")
-        print(f"\n  A組（僅條文層 - Baseline）:")
-        if k_key in overall_averages["group_a"]:
-            avg_a = overall_averages["group_a"][k_key]
-            print(f"    嚴格指標 - P@{k}: {avg_a['strict_precision']:.4f}, R@{k}: {avg_a['strict_recall']:.4f}, F1@{k}: {avg_a['strict_f1']:.4f}")
-            print(f"    寬鬆指標 - P@{k}: {avg_a['relaxed_precision']:.4f}, R@{k}: {avg_a['relaxed_recall']:.4f}, F1@{k}: {avg_a['relaxed_f1']:.4f}")
+        for group in GROUPS_TO_EVALUATE:
+            if k_key in overall_averages.get(group, {}):
+                avg = overall_averages[group][k_key]
+                print(f"\n  {GROUP_LABELS[group]}:")
+                print(f"    嚴格指標 - P@{k}: {avg['strict_precision']:.4f}, R@{k}: {avg['strict_recall']:.4f}, F1@{k}: {avg['strict_f1']:.4f}")
+                print(f"    寬鬆指標 - P@{k}: {avg['relaxed_precision']:.4f}, R@{k}: {avg['relaxed_recall']:.4f}, F1@{k}: {avg['relaxed_f1']:.4f}")
         
-        print(f"\n  D組（完整多層次ML-RAG）:")
-        if k_key in overall_averages["group_d"]:
-            avg_d = overall_averages["group_d"][k_key]
-            print(f"    嚴格指標 - P@{k}: {avg_d['strict_precision']:.4f}, R@{k}: {avg_d['strict_recall']:.4f}, F1@{k}: {avg_d['strict_f1']:.4f}")
-            print(f"    寬鬆指標 - P@{k}: {avg_d['relaxed_precision']:.4f}, R@{k}: {avg_d['relaxed_recall']:.4f}, F1@{k}: {avg_d['relaxed_f1']:.4f}")
-            
-            # 計算提升幅度
-            if k_key in overall_averages["group_a"]:
-                avg_a = overall_averages["group_a"][k_key]
-                print(f"\n  📈 提升幅度（D組 vs A組）:")
-                strict_f1_improvement = avg_d['strict_f1'] - avg_a['strict_f1']
-                relaxed_f1_improvement = avg_d['relaxed_f1'] - avg_a['relaxed_f1']
-                print(f"    嚴格F1@{k}提升: {strict_f1_improvement:+.4f} ({strict_f1_improvement/avg_a['strict_f1']*100:+.2f}%)" if avg_a['strict_f1'] > 0 else "    嚴格F1@{k}提升: N/A")
-                print(f"    寬鬆F1@{k}提升: {relaxed_f1_improvement:+.4f} ({relaxed_f1_improvement/avg_a['relaxed_f1']*100:+.2f}%)" if avg_a['relaxed_f1'] > 0 else "    寬鬆F1@{k}提升: N/A")
+        # 與基線比較
+        baseline = overall_averages.get("group_a", {}).get(k_key)
+        if baseline:
+            for group in ["group_d", "group_e"]:
+                if k_key in overall_averages.get(group, {}):
+                    comp = overall_averages[group][k_key]
+                    strict_diff = comp["strict_f1"] - baseline["strict_f1"]
+                    relaxed_diff = comp["relaxed_f1"] - baseline["relaxed_f1"]
+                    print(f"\n  📈 提升幅度（{GROUP_LABELS[group]} vs Baseline）:")
+                    if baseline["strict_f1"] > 0:
+                        print(f"    嚴格F1@{k}提升: {strict_diff:+.4f} ({strict_diff / baseline['strict_f1'] * 100:+.2f}%)")
+                    else:
+                        print("    嚴格F1@{k}提升: N/A")
+                    if baseline["relaxed_f1"] > 0:
+                        print(f"    寬鬆F1@{k}提升: {relaxed_diff:+.4f} ({relaxed_diff / baseline['relaxed_f1'] * 100:+.2f}%)")
+                    else:
+                        print("    寬鬆F1@{k}提升: N/A")
     
     # 按類型打印
     print("\n" + "=" * 80)
@@ -535,10 +516,10 @@ def evaluate_rq1():
             for k in k_values:
                 k_key = f"k_{k}"
                 print(f"\n  K={k}:")
-                for group_name, group_key in [("A組（僅條文層）", "group_a"), ("D組（完整多層次ML-RAG）", "group_d")]:
-                    if k_key in type_averages[query_type][group_key]:
-                        avg = type_averages[query_type][group_key][k_key]
-                        print(f"    {group_name}:")
+                for group in GROUPS_TO_EVALUATE:
+                    avg = type_averages[query_type].get(group, {}).get(k_key)
+                    if avg:
+                        print(f"    {GROUP_LABELS[group]}:")
                         print(f"      嚴格 - P@{k}: {avg['strict_precision']:.4f}, R@{k}: {avg['strict_recall']:.4f}, F1@{k}: {avg['strict_f1']:.4f}")
                         print(f"      寬鬆 - P@{k}: {avg['relaxed_precision']:.4f}, R@{k}: {avg['relaxed_recall']:.4f}, F1@{k}: {avg['relaxed_f1']:.4f}")
     

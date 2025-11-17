@@ -1935,14 +1935,14 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                                     })
                                     
                                     # 處理項 - 根據實驗組決定是否包含項層級
-                                    if experimental_group in ['group_c', 'group_d']:
+                                    if experimental_group in ['group_c', 'group_d', 'group_e']:
                                         paragraphs = article_data.get("paragraphs", [])
                                         for item_data in paragraphs:
                                             # 4. 項 Paragraph（僅使用新結構）
                                             item_title = item_data.get("paragraph", "")
                                             
                                             # 根據實驗組決定項chunk的上下文脈絡
-                                            if experimental_group in ['group_c', 'group_d']:
+                                            if experimental_group in ['group_c', 'group_d', 'group_e']:
                                                 # 項層級需要包含條文主文作為上文脈絡
                                                 item_chunk = self._build_item_chunk_with_context(
                                                     item_data, law_name, chapter_title, section_title, 
@@ -1980,7 +1980,7 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                                                 subparagraph_name = sub_item_data.get("subparagraph", "")
                                                 
                                                 # 根據實驗組決定款chunk的上下文脈絡
-                                                if experimental_group in ['group_c', 'group_d']:
+                                                if experimental_group in ['group_c', 'group_d', 'group_e']:
                                                     # 款層級需要包含條文主文和項內容作為上文脈絡
                                                     sub_item_chunk = self._build_sub_item_chunk_with_context(
                                                         sub_item_data, law_name, chapter_title, section_title, 
@@ -2020,7 +2020,7 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                                                     item_lvl3_content = item_lvl3_data.get("content", "")
                                                     
                                                     # 根據實驗組決定目chunk的上下文脈絡
-                                                    if experimental_group in ['group_c', 'group_d']:
+                                                    if experimental_group in ['group_c', 'group_d', 'group_e']:
                                                         # 目層級需要包含條文主文、項內容和款內容作為上文脈絡
                                                         item_lvl3_chunk = self._build_item_third_level_with_context(
                                                             item_lvl3_data, law_name, chapter_title, section_title, 
@@ -2093,14 +2093,14 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                                 })
                                 
                                 # 處理項 - 根據實驗組決定是否包含項層級
-                                if experimental_group in ['group_c', 'group_d']:
+                                if experimental_group in ['group_c', 'group_d', 'group_e']:
                                     paragraphs = article_data.get("paragraphs", [])
                                     for item_data in paragraphs:
                                         # 4. 項 Paragraph（僅使用新結構）
                                         item_title = item_data.get("paragraph", "")
                                         
                                         # 根據實驗組決定項chunk的上下文脈絡
-                                        if experimental_group in ['group_c', 'group_d']:
+                                        if experimental_group in ['group_c', 'group_d', 'group_e']:
                                             # 項層級需要包含條文主文作為上文脈絡
                                             item_chunk = self._build_item_chunk_with_context(
                                                 item_data, law_name, chapter_title, section_title, 
@@ -2137,7 +2137,7 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                                             subparagraph_name = sub_item_data.get("subparagraph", "")
                                             
                                             # 根據實驗組決定款chunk的上下文脈絡
-                                            if experimental_group in ['group_c', 'group_d']:
+                                            if experimental_group in ['group_c', 'group_d', 'group_e']:
                                                 # 款層級需要包含條文主文和項內容作為上文脈絡
                                                 sub_item_chunk = self._build_sub_item_chunk_with_context(
                                                     sub_item_data, law_name, chapter_title, section_title, 
@@ -2177,7 +2177,7 @@ class MultiLevelStructuredChunking(StructuredHierarchicalChunking):
                                                     continue
                                                 
                                                 # 根據實驗組決定目chunk的上下文脈絡
-                                                if experimental_group in ['group_c', 'group_d']:
+                                                if experimental_group in ['group_c', 'group_d', 'group_e']:
                                                     # 目層級需要包含條文主文、項內容和款內容作為上文脈絡
                                                     third_chunk = self._build_item_third_level_with_context(
                                                         third, law_name, chapter_title, section_title, 

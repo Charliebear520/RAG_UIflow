@@ -5,12 +5,14 @@ import os
 import uuid
 from dataclasses import dataclass
 import re
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Set
 import json
 from datetime import datetime
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
+from collections import defaultdict
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -80,10 +82,16 @@ def get_env_bool(name: str, default: bool = False) -> bool:
     return v.lower() in {"1", "true", "yes", "on"}
 
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or "AIzaSyC3hF9d-BWVQRjTd_uzo4grF9upIDsZhEI"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 USE_GEMINI_EMBEDDING = True  # ✅ 使用 Gemini Embedding（已優化速率限制）
 USE_GEMINI_COMPLETION = True  # LLM推理使用Gemini
 USE_BGE_M3_EMBEDDING = False  # ❌ BGE-M3在Mac上太慢，已禁用
+DEFAULT_THINKING_MODEL = os.getenv("GOOGLE_THINKING_MODEL", "gemini-2.5-flash")
+DEFAULT_SUMMARY_MODEL = os.getenv("GOOGLE_SUMMARY_MODEL", "gemini-2.5-flash")
+CHAPTER_SUMMARY_PATH = os.path.join("data", "chapter_summaries.json")
+chapter_summary_cache: Dict[str, Any] = {}
+chapter_summary_loaded = False
+_multi_level_chunker = None
 
 # 調試信息
 print(f"🔧 Embedding 配置:")
@@ -2458,6 +2466,873 @@ def ensure_multi_level_chunks(doc: DocRecord) -> Optional[Dict[str, Any]]:
     return None
 
 
+CHUNK_METADATA_CACHE: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+
+
+def _normalize_label(label: Optional[str]) -> str:
+    if not label:
+        return ""
+    return re.sub(r"\s+", "", label).lower()
+
+
+def _hash_content_snippet(content: str) -> str:
+    snippet = (content or "")[:200].encode("utf-8", "ignore")
+    return hashlib.md5(snippet).hexdigest()
+
+
+def _get_chunk_metadata_by_content(doc_id: str, level_name: str, chunk_content: str) -> Dict[str, Any]:
+    cache_key = (doc_id, level_name, _hash_content_snippet(chunk_content))
+    if cache_key in CHUNK_METADATA_CACHE:
+        return CHUNK_METADATA_CACHE[cache_key]
+    
+    doc = store.get_doc(doc_id)
+    if not doc:
+        CHUNK_METADATA_CACHE[cache_key] = {}
+        return {}
+    
+    multi_chunks = ensure_multi_level_chunks(doc)
+    if not multi_chunks or level_name not in multi_chunks:
+        CHUNK_METADATA_CACHE[cache_key] = {}
+        return {}
+    
+    target_snippet = chunk_content[:200]
+    for chunk in multi_chunks[level_name]:
+        if not isinstance(chunk, dict):
+            continue
+        content = chunk.get("content", "")
+        if content == chunk_content or content[:200] == target_snippet:
+            metadata = (chunk.get("metadata") or {}).copy()
+            metadata["chunk_id"] = chunk.get("chunk_id")
+            metadata["doc_id"] = doc_id
+            metadata["level"] = level_name
+            CHUNK_METADATA_CACHE[cache_key] = metadata
+            return metadata
+    
+    CHUNK_METADATA_CACHE[cache_key] = {}
+    return {}
+
+
+def _build_chapter_section_catalog(
+    max_docs: int = 5,
+    max_chapters_per_doc: int = 8,
+    max_sections_per_chapter: int = 3,
+    max_total_entries: int = 24,
+) -> List[Dict[str, Any]]:
+    catalog: List[Dict[str, Any]] = []
+    docs_processed = 0
+    
+    for doc in store.docs.values():
+        multi_chunks = ensure_multi_level_chunks(doc)
+        if not multi_chunks:
+            continue
+        
+        chapters = multi_chunks.get("document_component") or []
+        sections = multi_chunks.get("basic_unit_hierarchy") or []
+        
+        sections_by_chapter: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for section_chunk in sections:
+            if not isinstance(section_chunk, dict):
+                continue
+            meta = section_chunk.get("metadata") or {}
+            section_title = (meta.get("section") or "").strip()
+            if not section_title or section_title in {"未分類節", "未分類"}:
+                continue
+            chapter_title = (meta.get("chapter") or "").strip()
+            sections_by_chapter[chapter_title].append({
+                "section_title": section_title,
+                "section_key": _normalize_label(section_title),
+                "chunk_id": section_chunk.get("chunk_id"),
+                "summary": (section_chunk.get("content") or "")[:360]
+            })
+        
+        chapter_count = 0
+        for chapter_chunk in chapters:
+            if chapter_count >= max_chapters_per_doc or len(catalog) >= max_total_entries:
+                break
+            if not isinstance(chapter_chunk, dict):
+                continue
+            meta = chapter_chunk.get("metadata") or {}
+            chapter_title = (meta.get("chapter") or "").strip() or f"{doc.filename}-Chapter-{chapter_count+1}"
+            entry = {
+                "doc_id": doc.id,
+                "law_name": meta.get("law_name") or doc.filename,
+                "chapter_title": chapter_title,
+                "chapter_key": _normalize_label(chapter_title),
+                "chunk_id": chapter_chunk.get("chunk_id"),
+                "summary": (chapter_chunk.get("content") or "")[:600],
+                "sections": sections_by_chapter.get(chapter_title, [])[:max_sections_per_chapter]
+            }
+            catalog.append(entry)
+            chapter_count += 1
+        
+        docs_processed += 1
+        if docs_processed >= max_docs or len(catalog) >= max_total_entries:
+            break
+    
+    return catalog
+
+
+def _extract_json_block(text: str) -> Optional[str]:
+    if not text:
+        return None
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        return match.group(0)
+    return None
+
+
+def _safe_parse_json(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        snippet = _extract_json_block(text)
+        if snippet:
+            try:
+                return json.loads(snippet)
+            except json.JSONDecodeError:
+                return {}
+    return {}
+
+
+async def _llm_select_relevant_chapters(
+    query: str,
+    catalog: List[Dict[str, Any]],
+    max_selected_chapters: int = 3
+) -> Dict[str, Any]:
+    if not catalog:
+        return {}
+    
+    llm_payload = []
+    for entry in catalog:
+        llm_payload.append({
+            "chunk_id": entry.get("chunk_id"),
+            "chapter_title": entry.get("chapter_title"),
+            "law_name": entry.get("law_name"),
+            "summary": entry.get("routing_summary") or entry.get("summary"),
+            "sections": [
+                {
+                    "chunk_id": section.get("chunk_id"),
+                    "section_title": section.get("section_title"),
+                    "summary": section.get("routing_summary") or section.get("summary"),
+                }
+                for section in entry.get("sections", [])
+            ]
+        })
+    catalog_text = json.dumps(llm_payload, ensure_ascii=False, indent=2)
+    instruction = (
+        "你是法律檢索專家。請閱讀查詢與章節摘要，挑選最相關的章節，"
+        "必要時列出特別關鍵的節。只輸出JSON，格式為：\n"
+        "{{\n"
+        '  "chapters": [\n'
+        "    {{\n"
+        '      "chapter_title": "...",\n'
+        '      "chapter_key": "...",\n'
+        '      "reason": "...",\n'
+        '      "sections": [\n'
+        '        {{"section_title": "...", "section_key": "...", "reason": "..."}}\n'
+        "      ]\n"
+        "    }}\n"
+        "  ],\n"
+        '  "thinking": "..." \n'
+        "}}\n"
+        "章節數量不超過 {max_selected_chapters}。"
+    ).format(max_selected_chapters=max_selected_chapters)
+    
+    prompt = [
+        {"role": "system", "content": instruction},
+        {
+            "role": "user",
+            "content": f"查詢: {query}\n\n章節/節摘要:\n{catalog_text}"
+        }
+    ]
+    
+    try:
+        response = await gemini_chat(prompt, model=DEFAULT_THINKING_MODEL)
+    except Exception as e:
+        error_msg = f"LLM 章節選擇失敗: {str(e)}"
+        print(f"⚠️ {error_msg}")
+        raise RuntimeError(error_msg)
+    
+    parsed = _safe_parse_json(response)
+    if not parsed or not parsed.get("chapters"):
+        error_msg = "LLM 返回結果無效或缺少章節信息"
+        print(f"⚠️ {error_msg}")
+        raise ValueError(error_msg)
+    
+    return parsed
+
+
+def _fallback_catalog_selection(catalog: List[Dict[str, Any]], top_n: int = 3) -> Dict[str, Any]:
+    selected = []
+    for entry in catalog[:top_n]:
+        selected.append({
+            "chapter_title": entry.get("chapter_title"),
+            "chapter_key": entry.get("chapter_key"),
+            "chunk_id": entry.get("chunk_id"),
+            "sections": entry.get("sections", [])[:1],
+            "reason": "依預設順序選取（LLM未提供結果）"
+        })
+    return {
+        "chapters": selected,
+        "thinking": "LLM選擇失敗，採用預設章節",
+        "_fallback": True
+    }
+
+
+def _prepare_selection_sets(llm_result: Dict[str, Any], fallback_catalog: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not llm_result or not llm_result.get("chapters"):
+        raise ValueError("LLM 結果無效或缺少章節信息，無法處理")
+    
+    chapter_keys = set()
+    chapter_titles = set()
+    section_keys = set()
+    section_titles = set()
+    chapter_chunk_ids = set()
+    section_chunk_ids = set()
+    structured_details = []
+    
+    for chapter in llm_result.get("chapters", []):
+        chapter_title = chapter.get("chapter_title") or ""
+        chapter_key = chapter.get("chapter_key") or _normalize_label(chapter_title)
+        chunk_id = chapter.get("chunk_id") or ""
+        chapter_titles.add(chapter_title.strip())
+        if chapter_key:
+            chapter_keys.add(chapter_key)
+        if chunk_id:
+            chapter_chunk_ids.add(chunk_id)
+        detail = {
+            "chapter_title": chapter_title,
+            "chapter_key": chapter_key,
+            "chunk_id": chunk_id,
+            "reason": chapter.get("reason", ""),
+            "sections": []
+        }
+        for section in chapter.get("sections", []):
+            section_title = section.get("section_title") or ""
+            section_key = section.get("section_key") or _normalize_label(section_title)
+            sec_chunk_id = section.get("chunk_id") or ""
+            section_titles.add(section_title.strip())
+            if section_key:
+                section_keys.add(section_key)
+            if sec_chunk_id:
+                section_chunk_ids.add(sec_chunk_id)
+            detail["sections"].append({
+                "section_title": section_title,
+                "section_key": section_key,
+                "chunk_id": sec_chunk_id,
+                "reason": section.get("reason", "")
+            })
+        structured_details.append(detail)
+    
+    return {
+        "chapter_titles": chapter_titles,
+        "chapter_keys": chapter_keys,
+        "section_titles": section_titles,
+        "section_keys": section_keys,
+        "chapter_chunk_ids": chapter_chunk_ids,
+        "section_chunk_ids": section_chunk_ids,
+        "details": structured_details,
+        "thinking": llm_result.get("thinking", ""),
+        "fallback_used": bool(llm_result.get("_fallback"))
+    }
+
+
+def _chunk_matches_selection(metadata: Dict[str, Any], selection: Dict[str, Any]) -> bool:
+    chapter = _normalize_label(metadata.get("chapter"))
+    section = _normalize_label(metadata.get("section"))
+    chunk_id = (metadata.get("chunk_id") or "").strip()
+    if selection.get("chapter_chunk_ids") or selection.get("section_chunk_ids"):
+        if chunk_id and (
+            chunk_id in selection.get("chapter_chunk_ids", set())
+            or chunk_id in selection.get("section_chunk_ids", set())
+        ):
+            return True
+    if not selection["chapter_keys"] and not selection["section_keys"]:
+        return True
+    if chapter and (chapter in selection["chapter_keys"] or metadata.get("chapter", "").strip() in selection["chapter_titles"]):
+        return True
+    if section and (section in selection["section_keys"] or metadata.get("section", "").strip() in selection["section_titles"]):
+        return True
+    return False
+
+
+def _load_chapter_summary_cache() -> Dict[str, Any]:
+    global chapter_summary_cache, chapter_summary_loaded
+    if chapter_summary_loaded:
+        return chapter_summary_cache
+    try:
+        with open(CHAPTER_SUMMARY_PATH, "r", encoding="utf-8") as f:
+            chapter_summary_cache = json.load(f)
+    except FileNotFoundError:
+        chapter_summary_cache = {"entries": {}}
+    except Exception as e:
+        print(f"⚠️ 無法讀取章節摘要檔: {e}")
+        chapter_summary_cache = {"entries": {}}
+    if "entries" not in chapter_summary_cache:
+        chapter_summary_cache["entries"] = {}
+    chapter_summary_loaded = True
+    return chapter_summary_cache
+
+
+def _save_chapter_summary_cache():
+    cache = _load_chapter_summary_cache()
+    os.makedirs(os.path.dirname(CHAPTER_SUMMARY_PATH), exist_ok=True)
+    try:
+        with open(CHAPTER_SUMMARY_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ 無法儲存章節摘要檔: {e}")
+
+
+def _get_chapter_summary_entries(doc_id: Optional[str] = None, level: Optional[str] = None) -> List[Dict[str, Any]]:
+    cache = _load_chapter_summary_cache()
+    entries = list(cache.get("entries", {}).values())
+    if doc_id:
+        entries = [e for e in entries if e.get("doc_id") == doc_id]
+    if level:
+        entries = [e for e in entries if e.get("level") == level]
+    return entries
+
+
+def _get_summary_entry_map(doc_id: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    entries = _get_chapter_summary_entries(doc_id)
+    entry_map: Dict[str, Dict[str, Any]] = {}
+    for entry in entries:
+        chunk_id = entry.get("chunk_id")
+        if chunk_id:
+            entry_map[chunk_id] = entry
+    return entry_map
+
+
+def _get_multi_level_chunker():
+    global _multi_level_chunker
+    if _multi_level_chunker is None:
+        from .chunking import MultiLevelStructuredChunking
+        _multi_level_chunker = MultiLevelStructuredChunking()
+    return _multi_level_chunker
+
+
+def _ensure_chunk_id_for_metadata(chunk_data: Dict[str, Any], metadata: Dict[str, Any], fallback_level: str) -> str:
+    chunk_id = chunk_data.get("chunk_id") or metadata.get("chunk_id")
+    if chunk_id:
+        return chunk_id
+    try:
+        chunker = _get_multi_level_chunker()
+        chunk_id = chunker._generate_provision_id(metadata)
+    except Exception:
+        chunk_id = f"{fallback_level}_{metadata.get('chunk_index', len(metadata))}"
+    chunk_data["chunk_id"] = chunk_id
+    return chunk_id
+
+
+async def _summarize_chunk_content(title: str, level: str, law_name: str, content: str) -> str:
+    text = (content or "").strip()
+    if not text:
+        return ""
+    excerpt = text[:4000]
+    system_prompt = (
+        "你是一名臺灣法律編輯，負責為章或節生成高度濃縮的摘要。"
+        "摘要需使用繁體中文，重點描述該章節規範的主題、適用對象或範圍。"
+        "請避免列舉條號，只需2~3句話。"
+    )
+    user_prompt = (
+        f"法規：{law_name}\n"
+        f"層級：{level}\n"
+        f"標題：{title}\n"
+        f"內容：\n{excerpt}\n\n"
+        "請輸出2~3句簡潔摘要。"
+    )
+    try:
+        response = await gemini_chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            model=DEFAULT_SUMMARY_MODEL,
+        )
+        return response.strip()
+    except Exception as e:
+        print(f"⚠️ 摘要生成失敗: {e}")
+        return excerpt[:240]
+
+
+async def _generate_routing_summary(provision_id: str, chapter_title: str, full_text: str) -> str:
+    text = (full_text or "").strip()
+    if not text:
+        return ""
+    prompt_text = (
+        "# 角色：法律資訊學專家 (Legal Informatics Expert)\n\n"
+        "您是一位專精於法律資訊學與法條結構分析的專家。"
+        "請閱讀台灣《著作權法》的單一「章」或「節」的完整條文內容，"
+        "並為其生成一個「路由最佳化摘要」（Routing-Optimized Summary）。\n\n"
+        "## 摘要黃金準則\n"
+        "1. 職能導向：說明該章/節的法律職能（定義、權利限制、罰則、免責等）。\n"
+        "2. 關鍵字豐富：包含最重要、最獨特的法律概念與行為動詞。\n"
+        "3. 條文索引：指明涵蓋的主要條文編號。\n"
+        "4. 精簡客觀：避免評論，維持2~3句精煉描述。\n\n"
+        "## 輸出格式\n"
+        "請嚴格輸出 JSON：\n"
+        "{\n"
+        '  "provision_id": "<章節ID>",\n'
+        '  "chapter_title": "<章節標題>",\n'
+        '  "summary_for_routing": "<路由最佳化摘要>"\n'
+        "}\n"
+        "勿加入多餘說明。"
+    )
+    user_prompt = (
+        f"[法規章節 ID]:\n{provision_id}\n\n"
+        f"[法規章節標題]:\n{chapter_title}\n\n"
+        "[法規章節完整內文]:\n"
+        f"{text[:6000]}"
+    )
+    try:
+        response = await gemini_chat(
+            [
+                {"role": "system", "content": prompt_text},
+                {"role": "user", "content": user_prompt},
+            ],
+            model=DEFAULT_SUMMARY_MODEL,
+        )
+        parsed = _safe_parse_json(response)
+        summary = ""
+        if isinstance(parsed, dict):
+            summary = parsed.get("summary_for_routing") or ""
+        if not summary and isinstance(response, str):
+            summary = response.strip()
+        return summary or text[:360]
+    except Exception as e:
+        print(f"⚠️ 路由摘要生成失敗: {e}")
+        return text[:360]
+
+
+async def ensure_chapter_summaries(
+    doc_id: Optional[str] = None,
+    include_sections: bool = True,
+    max_items: Optional[int] = None,
+    target_chunk_ids: Optional[Set[str]] = None
+) -> Dict[str, Any]:
+    docs: List[DocRecord] = []
+    if doc_id:
+        doc = store.get_doc(doc_id)
+        if doc:
+            docs.append(doc)
+    else:
+        docs = list(store.docs.values())
+    
+    cache = _load_chapter_summary_cache()
+    target_chunk_ids = set(target_chunk_ids) if target_chunk_ids else None
+    total_new_documents = 0
+    total_new_chapters = 0
+    total_new_sections = 0
+    total_processed = 0
+    max_items = max_items if isinstance(max_items, int) and max_items > 0 else None
+    
+    for doc in docs:
+        multi_chunks = ensure_multi_level_chunks(doc)
+        if not multi_chunks:
+            continue
+        
+        law_name = doc.filename
+        doc_level_chunks = multi_chunks.get("document") or []
+        book_chapters = multi_chunks.get("document_component") or []
+        sections = multi_chunks.get("basic_unit_hierarchy") or []
+        chapter_map: Dict[str, Dict[str, Any]] = {}
+        
+        for doc_chunk in doc_level_chunks:
+            if max_items and total_processed >= max_items:
+                break
+            if not isinstance(doc_chunk, dict):
+                continue
+            metadata = (doc_chunk.get("metadata") or {}).copy()
+            title = metadata.get("title") or metadata.get("law_name") or doc.filename
+            chunk_id = _ensure_chunk_id_for_metadata(doc_chunk, metadata, "document")
+            metadata["chunk_id"] = chunk_id
+            if target_chunk_ids and chunk_id not in target_chunk_ids:
+                continue
+            entry_key = f"{doc.id}:{chunk_id}"
+            content = doc_chunk.get("content", "")
+            content_hash = hashlib.md5(content.encode("utf-8", "ignore")).hexdigest()
+            existing = cache["entries"].get(entry_key)
+            if existing and existing.get("content_hash") == content_hash:
+                continue
+            
+            summary = await _summarize_chunk_content(title, "法規", law_name, content)
+            cache["entries"][entry_key] = {
+                "chunk_id": chunk_id,
+                "doc_id": doc.id,
+                "doc_name": doc.filename,
+                "law_name": metadata.get("law_name") or law_name,
+                "title": title,
+                "level": "document",
+                "document_key": _normalize_label(title),
+                "summary": summary,
+                "routing_summary": summary,
+                "content_hash": content_hash,
+                "word_count": len(content),
+                "last_updated": datetime.now().isoformat(),
+            }
+            total_new_documents += 1
+            total_processed += 1
+            if max_items and total_processed >= max_items:
+                break
+        
+        if max_items and total_processed >= max_items:
+            break
+        
+        for chapter_chunk in book_chapters:
+            if not isinstance(chapter_chunk, dict):
+                continue
+            metadata = (chapter_chunk.get("metadata") or {}).copy()
+            title = metadata.get("chapter") or metadata.get("title") or metadata.get("level") or "章節"
+            chunk_id = _ensure_chunk_id_for_metadata(chapter_chunk, metadata, "chapter")
+            chapter_key = _normalize_label(title) or chunk_id.lower()
+            metadata["chunk_id"] = chunk_id
+            chapter_map[chapter_key] = {"chunk_id": chunk_id, "metadata": metadata}
+            
+            if target_chunk_ids and chunk_id not in target_chunk_ids:
+                continue
+            if max_items and total_new_chapters >= max_items:
+                break
+            
+            entry_key = f"{doc.id}:{chunk_id}"
+            content = chapter_chunk.get("content", "")
+            content_hash = hashlib.md5(content.encode("utf-8", "ignore")).hexdigest()
+            existing = cache["entries"].get(entry_key)
+            if existing and existing.get("content_hash") == content_hash:
+                continue
+            
+            summary = await _summarize_chunk_content(title, "章", law_name, content)
+            routing_summary = await _generate_routing_summary(chunk_id, title, content)
+            cache["entries"][entry_key] = {
+                "chunk_id": chunk_id,
+                "doc_id": doc.id,
+                "doc_name": doc.filename,
+                "law_name": metadata.get("law_name") or law_name,
+                "title": title,
+                "level": "chapter",
+                "chapter_key": chapter_key,
+                "summary": summary,
+                "routing_summary": routing_summary,
+                "content_hash": content_hash,
+                "word_count": len(content),
+                "last_updated": datetime.now().isoformat(),
+                "section_count": 0,
+            }
+            total_new_chapters += 1
+            total_processed += 1
+            if max_items and total_processed >= max_items:
+                break
+        
+        if (include_sections or target_chunk_ids) and (not max_items or total_processed < max_items):
+            for section_chunk in sections:
+                if max_items and total_processed >= max_items:
+                    break
+                if not isinstance(section_chunk, dict):
+                    continue
+                metadata = (section_chunk.get("metadata") or {}).copy()
+                section_title = metadata.get("section") or metadata.get("title") or "節"
+                if section_title in {"未分類節", "未分類"}:
+                    continue
+                chunk_id = _ensure_chunk_id_for_metadata(section_chunk, metadata, "section")
+                chapter_key = _normalize_label(metadata.get("chapter") or "")
+                parent_chapter = chapter_map.get(chapter_key)
+                parent_chunk_id = parent_chapter["chunk_id"] if parent_chapter else None
+                if target_chunk_ids:
+                    if chunk_id not in target_chunk_ids:
+                        continue
+                elif not include_sections:
+                    continue
+                
+                entry_key = f"{doc.id}:{chunk_id}"
+                content = section_chunk.get("content", "")
+                content_hash = hashlib.md5(content.encode("utf-8", "ignore")).hexdigest()
+                existing = cache["entries"].get(entry_key)
+                if existing and existing.get("content_hash") == content_hash:
+                    continue
+                
+                summary = await _summarize_chunk_content(section_title, "節", law_name, content)
+                cache["entries"][entry_key] = {
+                    "chunk_id": chunk_id,
+                    "doc_id": doc.id,
+                    "doc_name": doc.filename,
+                    "law_name": metadata.get("law_name") or law_name,
+                    "title": section_title,
+                    "level": "section",
+                    "chapter_key": chapter_key,
+                    "section_key": _normalize_label(section_title),
+                    "parent_chapter_id": parent_chunk_id,
+                    "parent_chapter_key": chapter_key,
+                    "summary": summary,
+                    "routing_summary": summary,
+                    "content_hash": content_hash,
+                    "word_count": len(content),
+                    "last_updated": datetime.now().isoformat(),
+                }
+                total_new_sections += 1
+                total_processed += 1
+        if max_items and total_processed >= max_items:
+            break
+    
+    if total_new_documents or total_new_chapters or total_new_sections:
+        _save_chapter_summary_cache()
+    
+    return {
+        "documents_updated": total_new_documents,
+        "chapters_updated": total_new_chapters,
+        "sections_updated": total_new_sections,
+        "total_entries": len(_get_chapter_summary_entries()),
+        "doc_id": doc_id,
+    }
+
+
+def _reset_chapter_summaries(doc_id: Optional[str] = None) -> Dict[str, Any]:
+    cache = _load_chapter_summary_cache()
+    entries = cache.get("entries", {})
+    if not isinstance(entries, dict):
+        cache["entries"] = {}
+        entries = cache["entries"]
+    if doc_id:
+        targets = [key for key, value in entries.items() if value.get("doc_id") == doc_id]
+        for key in targets:
+            entries.pop(key, None)
+        removed = len(targets)
+    else:
+        removed = len(entries)
+        cache["entries"] = {}
+    _save_chapter_summary_cache()
+    return {
+        "doc_id": doc_id,
+        "removed_entries": removed,
+        "total_entries": len(_get_chapter_summary_entries())
+    }
+
+
+def _build_selection_from_filters(filters: Dict[str, Any]) -> Dict[str, Any]:
+    chapter_titles = filters.get("chapter_titles") or []
+    section_titles = filters.get("section_titles") or []
+    chapter_keys = {_normalize_label(title) for title in chapter_titles if title}
+    section_keys = {_normalize_label(title) for title in section_titles if title}
+    return {
+        "chapter_titles": set(chapter_titles),
+        "chapter_keys": set(filter(None, chapter_keys)),
+        "section_titles": set(section_titles),
+        "section_keys": set(filter(None, section_keys)),
+        "chapter_chunk_ids": set(filters.get("chapter_chunk_ids") or []),
+        "section_chunk_ids": set(filters.get("section_chunk_ids") or []),
+    }
+
+
+async def _build_chapter_section_catalog(
+    doc_id: Optional[str] = None,
+    limit_chapters: Optional[int] = None,
+    max_sections_per_chapter: Optional[int] = 3,
+) -> List[Dict[str, Any]]:
+    entries = _get_chapter_summary_entries(doc_id)
+    if not entries:
+        return []
+    
+    chapters = [e for e in entries if e.get("level") == "chapter"]
+    sections = [e for e in entries if e.get("level") == "section"]
+    sections_by_parent: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for section in sections:
+        parent_id = section.get("parent_chapter_id") or section.get("parent_chapter_key")
+        if parent_id:
+            sections_by_parent[parent_id].append(section)
+    
+    catalog: List[Dict[str, Any]] = []
+    chapters_sorted = sorted(
+        chapters,
+        key=lambda c: (
+            c.get("law_name") or "",
+            c.get("chapter_key") or c.get("title") or "",
+        ),
+    )
+    
+    for chapter in chapters_sorted:
+        chapter_entry = {
+            "doc_id": chapter.get("doc_id"),
+            "law_name": chapter.get("law_name"),
+            "chapter_title": chapter.get("title"),
+            "chapter_key": chapter.get("chapter_key"),
+            "chunk_id": chapter.get("chunk_id"),
+            "summary": chapter.get("routing_summary") or chapter.get("summary"),
+            "routing_summary": chapter.get("routing_summary") or chapter.get("summary"),
+            "last_updated": chapter.get("last_updated"),
+            "section_count": 0,
+            "sections": [],
+        }
+        parent_id = chapter.get("chunk_id") or chapter.get("chapter_key")
+        section_list = sections_by_parent.get(parent_id, [])
+        chapter_entry["section_count"] = len(section_list)
+        section_list = sorted(section_list, key=lambda s: s.get("title") or "")
+        if max_sections_per_chapter:
+            section_list = section_list[:max_sections_per_chapter]
+        chapter_entry["sections"] = [
+            {
+                "chunk_id": section.get("chunk_id"),
+                "section_title": section.get("title"),
+                "section_key": section.get("section_key"),
+                    "summary": section.get("routing_summary") or section.get("summary"),
+                    "routing_summary": section.get("routing_summary") or section.get("summary"),
+                "last_updated": section.get("last_updated"),
+            }
+            for section in section_list
+        ]
+        catalog.append(chapter_entry)
+        if limit_chapters and len(catalog) >= limit_chapters:
+            break
+    
+    return catalog
+
+
+GROUP_E_LEVELS = ["basic_unit", "basic_unit_component", "enumeration"]
+GROUP_E_LEVEL_WEIGHTS = {
+    "basic_unit": 1.0,
+    "basic_unit_component": 0.9,
+    "enumeration": 0.85
+}
+
+
+async def _embed_query_vector(query: str) -> Optional[List[float]]:
+    if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+        vectors = await embed_gemini([query])
+        return vectors[0]
+    if USE_BGE_M3_EMBEDDING and SENTENCE_TRANSFORMERS_AVAILABLE:
+        return embed_bge_m3([query])[0]
+    return None
+
+
+def _prepare_candidate_indices(level_name: str, selection: Dict[str, Any]):
+    level_data = store.get_multi_level_embeddings(level_name)
+    if not level_data:
+        return None
+    vectors = level_data["embeddings"]
+    chunks = level_data["chunks"]
+    doc_ids = level_data["doc_ids"]
+    
+    candidate_indices = []
+    candidate_metadata = []
+    candidate_chunks = []
+    
+    for idx, (doc_id, chunk_content) in enumerate(zip(doc_ids, chunks)):
+        metadata = _get_chunk_metadata_by_content(doc_id, level_name, chunk_content)
+        if not metadata:
+            continue
+        if _chunk_matches_selection(metadata, selection):
+            candidate_indices.append(idx)
+            candidate_metadata.append(metadata)
+            candidate_chunks.append(chunk_content)
+    
+    if not candidate_indices:
+        return None
+    
+    return {
+        "vectors": np.array(vectors)[candidate_indices],
+        "metadata": candidate_metadata,
+        "chunks": candidate_chunks,
+        "doc_ids": [doc_ids[idx] for idx in candidate_indices],
+        "original_indices": candidate_indices
+    }
+
+
+async def _retrieve_level_with_selection(
+    query_vector: List[float],
+    level_name: str,
+    selection: Dict[str, Any],
+    k: int
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    candidate_pack = _prepare_candidate_indices(level_name, selection)
+    if not candidate_pack:
+        return [], {"candidates": 0, "selected": 0}
+    
+    vectors = candidate_pack["vectors"]
+    if vectors.size == 0:
+        return [], {"candidates": 0, "selected": 0}
+    
+    sims = cosine_similarity([query_vector], vectors)[0]
+    order = np.argsort(sims)[::-1][:k]
+    weight = GROUP_E_LEVEL_WEIGHTS.get(level_name, 1.0)
+    
+    results = []
+    for rank_idx in order:
+        metadata = (candidate_pack["metadata"][rank_idx] or {}).copy()
+        chunk_id = metadata.get("chunk_id") or candidate_pack["doc_ids"][rank_idx]
+        result = {
+            "content": candidate_pack["chunks"][rank_idx],
+            "similarity": float(sims[rank_idx]) * weight,
+            "raw_similarity": float(sims[rank_idx]),
+            "doc_id": candidate_pack["doc_ids"][rank_idx],
+            "chunk_id": chunk_id,
+            "level": level_name,
+            "metadata": metadata
+        }
+        results.append(result)
+    
+    contribution = {
+        "candidates": len(candidate_pack["metadata"]),
+        "selected": len(results),
+        "weight": weight
+    }
+    return results, contribution
+
+
+async def _run_experimental_group_e_pipeline(query: str, k: int, doc_id: Optional[str] = None) -> Dict[str, Any]:
+    if not doc_id:
+        raise HTTPException(status_code=400, detail="doc_id is required for group_e pipeline")
+    catalog = await _build_chapter_section_catalog(
+        doc_id=doc_id,
+        limit_chapters=24,
+        max_sections_per_chapter=3
+    )
+    llm_raw = await _llm_select_relevant_chapters(query, catalog)
+    selection = _prepare_selection_sets(llm_raw, catalog)
+    
+    query_vector = await _embed_query_vector(query)
+    if query_vector is None:
+        raise HTTPException(status_code=500, detail="無法生成查詢向量")
+    
+    combined_results = []
+    level_contributions = {}
+    
+    for level_name in GROUP_E_LEVELS:
+        level_results, contribution = await _retrieve_level_with_selection(query_vector, level_name, selection, k)
+        if level_results:
+            combined_results.extend(level_results)
+        level_contributions[level_name] = contribution
+    
+    if not combined_results:
+        # 如果選擇過於嚴苛，放寬限制重新檢索
+        relaxed_selection = {
+            "chapter_titles": set(),
+            "chapter_keys": set(),
+            "section_titles": set(),
+            "section_keys": set()
+        }
+        selection["fallback_used"] = True
+        for level_name in GROUP_E_LEVELS:
+            level_results, contribution = await _retrieve_level_with_selection(query_vector, level_name, relaxed_selection, k)
+            if level_results:
+                combined_results.extend(level_results)
+                level_contributions[level_name] = contribution
+    
+    combined_results.sort(key=lambda x: x["similarity"], reverse=True)
+    fused_results = combined_results[:k]
+    
+    return {
+        "group_info": GRANULARITY_COMBINATIONS.get("group_e"),
+        "llm_stage": {
+            "selection_details": selection.get("details", []),
+            "thinking": selection.get("thinking", ""),
+            "fallback_used": selection.get("fallback_used", False),
+            "raw_response": llm_raw
+        },
+        "level_contributions": level_contributions,
+        "fused_results": fused_results,
+        "total_results": len(fused_results)
+    }
+
 _CN_NUM_MAP = {
     "零": 0,
     "〇": 0,
@@ -3762,6 +4637,19 @@ async def multi_level_embed(req: Dict[str, Any]):
         print(f"🔍 未指定doc_ids，自動選擇 {len(selected)} 個使用structured_hierarchical策略的文檔（已去重）: {[store.docs[d].filename for d in selected]}")
     
     experimental_groups = req.get("experimental_groups", [])  # 新增：實驗組選擇
+    group_e_filters_raw = req.get("group_e_filters")
+    group_e_filters_by_doc: Dict[str, Dict[str, Any]] = {}
+    if isinstance(group_e_filters_raw, list):
+        for filt in group_e_filters_raw:
+            if isinstance(filt, dict):
+                filt_doc_id = filt.get("doc_id")
+                if filt_doc_id:
+                    group_e_filters_by_doc[filt_doc_id] = _build_selection_from_filters(filt)
+    elif isinstance(group_e_filters_raw, dict):
+        filt_doc_id = group_e_filters_raw.get("doc_id")
+        if filt_doc_id:
+            group_e_filters_by_doc[filt_doc_id] = _build_selection_from_filters(group_e_filters_raw)
+    group_e_active = "group_e" in experimental_groups and bool(group_e_filters_by_doc)
     all_multi_level_chunks = {}
     
     for doc_id in selected:
@@ -3889,11 +4777,22 @@ async def multi_level_embed(req: Dict[str, Any]):
         
         # 收集該層次的所有chunks
         for doc_id, multi_chunks in all_multi_level_chunks.items():
+            if group_e_active and group_e_filters_by_doc and doc_id not in group_e_filters_by_doc:
+                continue
+            selection_filter = group_e_filters_by_doc.get(doc_id) if group_e_active else None
             if level_name in multi_chunks:
                 for chunk_data in multi_chunks[level_name]:
-                    if isinstance(chunk_data, dict) and 'content' in chunk_data:
-                        level_chunks.append(chunk_data['content'])
-                        level_doc_ids.append(doc_id)
+                    if not (isinstance(chunk_data, dict) and 'content' in chunk_data):
+                        continue
+                    if selection_filter and level_name in GROUP_E_LEVELS:
+                        metadata = (chunk_data.get("metadata") or {}).copy()
+                        chunk_id = chunk_data.get("chunk_id")
+                        if chunk_id and not metadata.get("chunk_id"):
+                            metadata["chunk_id"] = chunk_id
+                        if not _chunk_matches_selection(metadata, selection_filter):
+                            continue
+                    level_chunks.append(chunk_data['content'])
+                    level_doc_ids.append(doc_id)
         
         if not level_chunks:
             print(f"⚠️ 層次 '{level_name}' 沒有可用的chunks")
@@ -6665,7 +7564,7 @@ def clean_markdown_from_answer(answer: str) -> str:
     return answer.strip()
 
 
-async def gemini_chat(messages: List[Dict[str, str]]) -> str:
+async def gemini_chat(messages: List[Dict[str, str]], model: Optional[str] = None) -> str:
     if not httpx:
         raise RuntimeError("httpx not available")
     
@@ -6674,9 +7573,9 @@ async def gemini_chat(messages: List[Dict[str, str]]) -> str:
     if not api_key:
         raise RuntimeError("GOOGLE_API_KEY or GEMINI_API_KEY not set")
     
-    model = os.getenv("GOOGLE_CHAT_MODEL", "gemini-2.0-flash")
+    model_name = model or os.getenv("GOOGLE_CHAT_MODEL", "gemini-2.0-flash")
     # Use Generative Language API: models/{model}:generateContent
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     # Convert messages to Gemini format
     contents = []
     for message in messages:
@@ -9803,6 +10702,16 @@ GRANULARITY_COMBINATIONS = {
         "research_purpose": "作為最佳效能的對比組，評估完整多層次方法的綜合表現"
     },
     
+    # E組：LLM章節導向 + 細節檢索
+    "group_e": {
+        "name": "E組：LLM章節導向 + 細節RAG",
+        "description": "Gemini-2.5 Flash Thinking 選章→章節內C組細節檢索",
+        "levels": ["document_component", "basic_unit_hierarchy",
+                   "basic_unit", "basic_unit_component", "enumeration"],
+        "research_purpose": "評估先由LLM鎖定章節，再於章節內進行細粒度檢索的效益",
+        "strategy": "llm_guided"
+    },
+    
     # 額外的對比組合，用於更細緻的分析
     "document_only": {
         "name": "僅文件層",
@@ -10050,17 +10959,265 @@ def calculate_ecu_metrics(annotations: List[ECUAnnotation], k_values: List[int])
     return metrics
 
 
+@app.get("/api/chapters/catalog")
+async def get_chapter_catalog(
+    doc_id: Optional[str] = None,
+    limit: Optional[int] = None,
+    max_sections: Optional[int] = 5
+):
+    if max_sections is not None and max_sections <= 0:
+        max_sections = None
+    catalog = await _build_chapter_section_catalog(
+        doc_id=doc_id,
+        limit_chapters=limit,
+        max_sections_per_chapter=max_sections,
+    )
+    entries = _get_chapter_summary_entries(doc_id)
+    document_entries = [
+        e for e in entries if e.get("level") == "document"
+    ]
+    documents = sorted(
+        [
+            {
+                "doc_id": e.get("doc_id"),
+                "law_name": e.get("law_name"),
+                "title": e.get("title"),
+                "chunk_id": e.get("chunk_id"),
+                "summary": e.get("routing_summary") or e.get("summary"),
+                "last_updated": e.get("last_updated"),
+            }
+            for e in document_entries
+        ],
+        key=lambda d: (d.get("law_name") or "", d.get("title") or ""),
+    )
+    doc_ids = sorted({e.get("doc_id") for e in entries if e.get("doc_id")})
+    stats = {
+        "total_entries": len(entries),
+        "total_documents": len(document_entries),
+        "total_chapters": sum(1 for e in entries if e.get("level") == "chapter"),
+        "total_sections": sum(1 for e in entries if e.get("level") == "section"),
+        "doc_ids": doc_ids,
+        "last_updated": max((e.get("last_updated") for e in entries if e.get("last_updated")), default=None),
+    }
+    return {"catalog": catalog, "documents": documents, "stats": stats}
+
+
+@app.post("/api/chapters/summarize")
+async def summarize_chapters(req: Dict[str, Any]):
+    doc_id = req.get("doc_id")
+    include_sections = req.get("include_sections", True)
+    max_items = req.get("max_items")
+    target_chunk_ids = req.get("target_chunk_ids")
+    if target_chunk_ids and not isinstance(target_chunk_ids, (list, set, tuple)):
+        return JSONResponse(status_code=400, content={"error": "target_chunk_ids must be a list"})
+    summary_stats = await ensure_chapter_summaries(
+        doc_id=doc_id,
+        include_sections=include_sections,
+        max_items=max_items,
+        target_chunk_ids=set(target_chunk_ids) if target_chunk_ids else None,
+    )
+    catalog = await _build_chapter_section_catalog(doc_id=doc_id)
+    summary_stats["catalog"] = catalog
+    return summary_stats
+
+
+@app.delete("/api/chapters/summarize")
+async def delete_chapter_summaries(doc_id: Optional[str] = None):
+    result = _reset_chapter_summaries(doc_id=doc_id)
+    return result
+
+
+@app.post("/api/group-e/route")
+async def route_group_e_chapters(req: Dict[str, Any]):
+    doc_id = req.get("doc_id")
+    query = req.get("query")
+    max_chapters = req.get("max_chapters", 24)
+    max_sections = req.get("max_sections", 3)
+    if not doc_id or not query:
+        return JSONResponse(status_code=400, content={"error": "doc_id and query are required"})
+    catalog = await _build_chapter_section_catalog(
+        doc_id=doc_id,
+        limit_chapters=max_chapters,
+        max_sections_per_chapter=max_sections,
+    )
+    if not catalog:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "找不到章節摘要，請先執行章/節摘要生成"}
+        )
+    try:
+        llm_raw = await _llm_select_relevant_chapters(query, catalog)
+        selection = _prepare_selection_sets(llm_raw, catalog)
+    except (RuntimeError, ValueError) as e:
+        error_msg = str(e)
+        print(f"❌ 實驗組E章節路由失敗: {error_msg}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "章節路由失敗",
+                "message": error_msg,
+                "detail": "LLM 無法完成章節選擇，請檢查網絡連接、API 配置或重新嘗試"
+            }
+        )
+    selection_payload = {
+        "chapter_chunk_ids": list(selection.get("chapter_chunk_ids", set())),
+        "section_chunk_ids": list(selection.get("section_chunk_ids", set())),
+        "chapter_titles": list(selection.get("chapter_titles", set())),
+        "section_titles": list(selection.get("section_titles", set())),
+        "chapter_keys": list(selection.get("chapter_keys", set())),
+        "section_keys": list(selection.get("section_keys", set())),
+    }
+    return {
+        "doc_id": doc_id,
+        "query": query,
+        "llm_stage": {
+            "selection_details": selection.get("details", []),
+            "thinking": selection.get("thinking", ""),
+            "fallback_used": selection.get("fallback_used", False),
+            "raw_response": llm_raw,
+        },
+        "selection": selection_payload,
+    }
+
+
+@app.get("/api/chapters/summary-status")
+async def get_chapter_summary_status(doc_id: Optional[str] = None):
+    if not doc_id:
+        return JSONResponse(status_code=400, content={"error": "doc_id is required"})
+    doc = store.get_doc(doc_id)
+    if not doc:
+        return JSONResponse(status_code=404, content={"error": "Document not found"})
+    multi_chunks = ensure_multi_level_chunks(doc)
+    if not multi_chunks:
+        return {
+            "doc_id": doc_id,
+            "doc_name": doc.filename,
+            "document_chunks": [],
+            "chapters": [],
+            "orphan_sections": [],
+            "stats": {
+                "total_chapters": 0,
+                "total_sections": 0,
+                "summarized_chapters": 0,
+                "summarized_sections": 0,
+            },
+        }
+    
+    summary_map = _get_summary_entry_map(doc_id)
+    document_status = []
+    for doc_chunk in multi_chunks.get("document") or []:
+        if not isinstance(doc_chunk, dict):
+            continue
+        metadata = (doc_chunk.get("metadata") or {}).copy()
+        title = metadata.get("title") or metadata.get("law_name") or doc.filename
+        chunk_id = _ensure_chunk_id_for_metadata(doc_chunk, metadata, "document")
+        entry = summary_map.get(chunk_id) or {}
+        document_status.append({
+            "chunk_id": chunk_id,
+            "title": title,
+            "has_summary": bool(entry),
+            "summary": entry.get("routing_summary") or entry.get("summary") or "",
+            "last_updated": entry.get("last_updated"),
+            "level": "document",
+        })
+    
+    chapters_raw = multi_chunks.get("document_component") or []
+    chapter_entries: List[Dict[str, Any]] = []
+    chapter_index_by_id: Dict[str, Dict[str, Any]] = {}
+    chapter_index_by_key: Dict[str, Dict[str, Any]] = {}
+    summarized_chapters = 0
+    
+    for chapter_chunk in chapters_raw:
+        if not isinstance(chapter_chunk, dict):
+            continue
+        metadata = (chapter_chunk.get("metadata") or {}).copy()
+        title = metadata.get("chapter") or metadata.get("title") or metadata.get("level") or "章節"
+        chunk_id = _ensure_chunk_id_for_metadata(chapter_chunk, metadata, "chapter")
+        chapter_key = _normalize_label(title) or chunk_id.lower()
+        entry = summary_map.get(chunk_id) or {}
+        has_summary = bool(entry)
+        if has_summary:
+            summarized_chapters += 1
+        chapter_entry = {
+            "chunk_id": chunk_id,
+            "title": title,
+            "has_summary": has_summary,
+            "summary": entry.get("routing_summary") or entry.get("summary") or "",
+            "last_updated": entry.get("last_updated"),
+            "sections": [],
+            "level": "chapter",
+        }
+        chapter_entries.append(chapter_entry)
+        chapter_index_by_id[chunk_id] = chapter_entry
+        chapter_index_by_key[chapter_key] = chapter_entry
+    
+    sections_raw = multi_chunks.get("basic_unit_hierarchy") or []
+    total_sections = 0
+    summarized_sections = 0
+    orphan_sections: List[Dict[str, Any]] = []
+    
+    for section_chunk in sections_raw:
+        if not isinstance(section_chunk, dict):
+            continue
+        metadata = (section_chunk.get("metadata") or {}).copy()
+        section_title = metadata.get("section") or metadata.get("title") or "節"
+        chunk_id = _ensure_chunk_id_for_metadata(section_chunk, metadata, "section")
+        chapter_label = metadata.get("chapter") or ""
+        parent_chunk_id = metadata.get("parent_chunk_id") or metadata.get("parent_id")
+        entry = summary_map.get(chunk_id) or {}
+        has_summary = bool(entry)
+        total_sections += 1
+        if has_summary:
+            summarized_sections += 1
+        section_entry = {
+            "chunk_id": chunk_id,
+            "title": section_title,
+            "chapter_title": chapter_label,
+            "has_summary": has_summary,
+            "summary": entry.get("routing_summary") or entry.get("summary") or "",
+            "last_updated": entry.get("last_updated"),
+            "level": "section",
+        }
+        parent = None
+        if parent_chunk_id and parent_chunk_id in chapter_index_by_id:
+            parent = chapter_index_by_id[parent_chunk_id]
+        else:
+            normalized_parent = _normalize_label(chapter_label)
+            if normalized_parent and normalized_parent in chapter_index_by_key:
+                parent = chapter_index_by_key[normalized_parent]
+        if parent:
+            parent["sections"].append(section_entry)
+        else:
+            orphan_sections.append(section_entry)
+    
+    stats = {
+        "total_chapters": len(chapter_entries),
+        "total_sections": total_sections,
+        "summarized_chapters": summarized_chapters,
+        "summarized_sections": summarized_sections,
+    }
+    
+    return {
+        "doc_id": doc_id,
+        "doc_name": doc.filename,
+        "document_chunks": document_status,
+        "chapters": chapter_entries,
+        "orphan_sections": orphan_sections,
+        "stats": stats,
+    }
+
+
 @app.post("/api/experimental-groups-generate-embeddings")
 async def experimental_groups_generate_embeddings(req: Dict[str, Any]):
     """
     為不同實驗組生成對應層次的embedding
     req = {
         "doc_id": str,
-        "groups_to_embed": List[str]  # ["group_a", "group_b", "group_c", "group_d"]
+        "groups_to_embed": List[str]  # ["group_a", "group_b", "group_c", "group_d", "group_e"]
     }
     """
     doc_id = req.get("doc_id")
-    groups_to_embed = req.get("groups_to_embed", ["group_a", "group_b", "group_c", "group_d"])
+    groups_to_embed = req.get("groups_to_embed", ["group_a", "group_b", "group_c", "group_d", "group_e"])
     
     if not doc_id:
         return JSONResponse(status_code=400, content={"error": "Document ID is required"})
@@ -10131,15 +11288,21 @@ async def experimental_groups_batch_retrieve(req: Dict[str, Any]):
     req = {
         "query": str,
         "k": int,
-        "groups_to_test": List[str]  # ["group_a", "group_b", "group_c", "group_d"]
+        "groups_to_test": List[str]  # ["group_a", "group_b", "group_c", "group_d", "group_e"]
     }
     """
     query = req.get("query")
     k = req.get("k", 10)
-    groups_to_test = req.get("groups_to_test", ["group_a", "group_b", "group_c", "group_d"])
+    groups_to_test = req.get("groups_to_test", ["group_a", "group_b", "group_c", "group_d", "group_e"])
+    doc_id = req.get("doc_id")
     
     if not query:
         return JSONResponse(status_code=400, content={"error": "Query is required"})
+    if "group_e" in groups_to_test and not doc_id:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "doc_id is required when testing group_e"}
+        )
     
     # 檢查各實驗組是否有對應的embedding
     missing_embeddings = []
@@ -10174,6 +11337,19 @@ async def experimental_groups_batch_retrieve(req: Dict[str, Any]):
     
     for group_key in groups_to_test:
         if group_key not in GRANULARITY_COMBINATIONS:
+            continue
+        
+        if group_key == "group_e":
+            try:
+                results[group_key] = await _run_experimental_group_e_pipeline(query, k, doc_id=doc_id)
+            except Exception as e:
+                print(f"⚠️ 實驗組E檢索失敗: {e}")
+                results[group_key] = {
+                    "group_info": GRANULARITY_COMBINATIONS[group_key],
+                    "error": str(e),
+                    "fused_results": [],
+                    "total_results": 0
+                }
             continue
             
         combination = GRANULARITY_COMBINATIONS[group_key]
@@ -10311,7 +11487,7 @@ def generate_comparison_report():
     report = {
         "total_queries": len(query_group_data),
         "total_annotations": len(all_annotations),
-        "experimental_groups": ["group_a", "group_b", "group_c", "group_d"],
+        "experimental_groups": ["group_a", "group_b", "group_c", "group_d", "group_e"],
         "per_query_results": {},
         "group_comparison": {},
         "marginal_benefit_analysis": {}
@@ -10353,7 +11529,7 @@ def generate_comparison_report():
     # 計算邊際效益分析
     if "group_a" in report["group_comparison"]:
         baseline = report["group_comparison"]["group_a"]
-        for group in ["group_b", "group_c", "group_d"]:
+        for group in ["group_b", "group_c", "group_d", "group_e"]:
             if group in report["group_comparison"]:
                 comparison = report["group_comparison"][group]
                 report["marginal_benefit_analysis"][f"{group}_vs_group_a"] = {}

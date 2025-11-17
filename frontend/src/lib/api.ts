@@ -86,6 +86,13 @@ export const api = {
   async multiLevelEmbed(body?: {
     doc_ids?: string[];
     experimental_groups?: string[];
+    group_e_filters?: Array<{
+      doc_id: string;
+      chapter_chunk_ids?: string[];
+      chapter_titles?: string[];
+      section_chunk_ids?: string[];
+      section_titles?: string[];
+    }>;
   }) {
     const res = await fetch(`${base}/multi-level-embed`, {
       method: "POST",
@@ -480,6 +487,7 @@ export const api = {
     query: string;
     k: number;
     groups_to_test: string[];
+    doc_id?: string;
   }) {
     return json<{
       query: string;
@@ -501,8 +509,16 @@ export const api = {
             level: string;
             doc_id: string;
             chunk_index: number;
+            chunk_id?: string;
           }>;
           total_results: number;
+          llm_stage?: {
+            selection_details?: Array<any>;
+            thinking?: string;
+            fallback_used?: boolean;
+            raw_response?: any;
+          };
+          error?: string;
         }
       >;
     }>(
@@ -525,8 +541,88 @@ export const api = {
     }>(await fetch(`${base}/granularity-comparison-report`));
   },
 
+  async getChapterCatalog(params?: {
+    doc_id?: string;
+    limit?: number;
+    max_sections?: number;
+  }) {
+    const search = new URLSearchParams();
+    if (params?.doc_id) search.set("doc_id", params.doc_id);
+    if (typeof params?.limit === "number")
+      search.set("limit", params.limit.toString());
+    if (typeof params?.max_sections === "number")
+      search.set("max_sections", params.max_sections.toString());
+    const qs = search.toString();
+    const res = await fetch(
+      `${base}/chapters/catalog${qs ? `?${qs}` : ""}`,
+      { method: "GET" }
+    );
+    return json<any>(res);
+  },
+
+  async summarizeChapters(body?: {
+    doc_id?: string;
+    include_sections?: boolean;
+    max_items?: number;
+    target_chunk_ids?: string[];
+  }) {
+    const res = await fetch(`${base}/chapters/summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    return json<any>(res);
+  },
+
+  async resetChapterSummaries(params?: { doc_id?: string }) {
+    const search = params?.doc_id
+      ? `?doc_id=${encodeURIComponent(params.doc_id)}`
+      : "";
+    const res = await fetch(`${base}/chapters/summarize${search}`, {
+      method: "DELETE",
+    });
+    return json<any>(res);
+  },
+
+  async getChapterSummaryStatus(params: { doc_id: string }) {
+    const res = await fetch(
+      `${base}/chapters/summary-status?doc_id=${encodeURIComponent(
+        params.doc_id
+      )}`
+    );
+    return json<any>(res);
+  },
+
+  async experimentalGroupERetrieve(params: {
+    query: string;
+    k: number;
+    doc_id?: string;
+  }) {
+    const payload = await api.experimentalGroupsBatchRetrieve({
+      query: params.query,
+      k: params.k,
+      doc_id: params.doc_id,
+      groups_to_test: ["group_e"],
+    });
+    return payload.results?.group_e;
+  },
+
+  async routeGroupEChapters(body: {
+    doc_id: string;
+    query: string;
+    max_chapters?: number;
+    max_sections?: number;
+  }) {
+    const res = await fetch(`${base}/group-e/route`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return json<any>(res);
+  },
+
   // 通用 GET 方法
-  async get<T = any>(path: string): Promise<T> {
+  async fetchJson<T = any>(path: string): Promise<T> {
     // 如果路徑已經包含 /api，直接使用；否則添加
     const url = path.startsWith("/api/") ? path : `${base}${path.startsWith("/") ? path : `/${path}`}`;
     return json<T>(await fetch(url));
