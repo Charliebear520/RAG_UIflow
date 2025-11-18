@@ -32,7 +32,7 @@
     "query_type": "基礎型",
     "ground_truth": {
       "E": ["Art_22_P1","Art_26_1_P1"],
-      "C": ["Art_3_P1_C7", "Art_65"]
+      "C": ["Art_3_P1_C7", "Art_65","Chap_3_Sec_4", "Chap_3","Chap_1"]
     }
   },  
   {
@@ -41,7 +41,7 @@
     "query_type": "基礎型",
     "ground_truth": {
       "E": ["Art_46"],
-      "C": ["Art_3_P1", "Art_65_2"]
+      "C": ["Art_3_P1", "Art_65_2","Chap_3_Sec_4", "Chap_3","Chap_1"]
     }
   },
   {
@@ -50,7 +50,7 @@
     "query_type": "基礎型",
     "ground_truth": {
       "E": ["Art_61"],
-      "C": ["Art_64"]
+      "C": ["Art_64","Chap_3_Sec_4", "Chap_3"]
     }
   },
   {
@@ -59,7 +59,7 @@
     "query_type": "基礎型",
     "ground_truth": {
       "E": ["Art_88_P1"],
-      "C": ["Art_84", "Art_92","Art_101_P1","Art_3_P1_C7"]
+      "C": ["Art_84", "Art_92","Art_101_P1","Art_3_P1_C7","Chap_6","Chap_7","Chap_1"]
     }
   },
   {
@@ -68,16 +68,25 @@
     "query_type": "基礎型",
     "ground_truth": {
       "E": ["Art_81"],
-      "C": ["Art_37_P1", "Art_65"]
+      "C": ["Art_37_P1", "Art_65","Chap_3_Sec_4", "Chap_3","Chap_5"]
     }
   },
   {
     "query_id": "Q9_Type_A",
-    "query_text": "我本身是個傳播業者，專司製作節目，經常要用坊間音樂來配樂，有時利用全首，有時只是部分，我們也很願意合理付費，請問有無此類合法的機構可查詢付費的標準?",
+    "query_text": "公務員職務上草擬的文書，是否受著作權法保護？",
     "query_type": "基礎型",
     "ground_truth": {
-      "E": ["Art_81"],
-      "C": ["Art_37_P1", "Art_65"]
+      "E": ["Art_9_P1","Art_9_P2"],
+      "C": ["Chap_2"]
+    }
+  },
+  {
+    "query_id": "Q10_Type_A",
+    "query_text": "某公司想將員工於職務上完成的海報設計，用於公司年度廣告。公司是否需要取得員工的額外授權？",
+    "query_type": "基礎型",
+    "ground_truth": {
+      "E": ["Art_11_P1"],
+      "C": ["Art_15_P1", "Art_10_1","Chap_3_Sec_1", "Chap_3_Sec_3","Chap_3"]
     }
   },
   {

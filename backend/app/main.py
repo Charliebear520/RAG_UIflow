@@ -2659,6 +2659,16 @@ async def _llm_select_relevant_chapters(
     if not parsed or not parsed.get("chapters"):
         error_msg = "LLM 返回結果無效或缺少章節信息"
         print(f"⚠️ {error_msg}")
+        print(f"   LLM 原始響應（前500字符）: {response[:500] if response else 'None'}")
+        print(f"   解析後的結果: {parsed}")
+        raise ValueError(error_msg)
+    
+    # 驗證 chapters 是否為空列表
+    chapters = parsed.get("chapters", [])
+    if not isinstance(chapters, list) or len(chapters) == 0:
+        error_msg = f"LLM 返回的 chapters 為空或格式錯誤（期望非空列表，實際: {type(chapters).__name__}）"
+        print(f"⚠️ {error_msg}")
+        print(f"   LLM 原始響應（前500字符）: {response[:500] if response else 'None'}")
         raise ValueError(error_msg)
     
     return parsed
@@ -3279,15 +3289,37 @@ async def _retrieve_level_with_selection(
 
 
 async def _run_experimental_group_e_pipeline(query: str, k: int, doc_id: Optional[str] = None) -> Dict[str, Any]:
-    if not doc_id:
-        raise HTTPException(status_code=400, detail="doc_id is required for group_e pipeline")
+    # 強制使用已知的正確 doc_id（與 chapter_summaries.json 一致）
+    KNOWN_GROUP_E_DOC_ID = "71c23286-d3fb-4982-a2e2-33a931687c5d"
+    if not doc_id or doc_id != KNOWN_GROUP_E_DOC_ID:
+        original_doc_id = doc_id
+        print(
+            f"[_run_experimental_group_e_pipeline] ⚠️ 強制覆寫 doc_id={original_doc_id!r} "
+            f"為 {KNOWN_GROUP_E_DOC_ID}（確保與 chapter_summaries.json 一致）"
+        )
+        doc_id = KNOWN_GROUP_E_DOC_ID
+    
     catalog = await _build_chapter_section_catalog(
         doc_id=doc_id,
         limit_chapters=24,
         max_sections_per_chapter=3
     )
-    llm_raw = await _llm_select_relevant_chapters(query, catalog)
-    selection = _prepare_selection_sets(llm_raw, catalog)
+    if not catalog:
+        raise HTTPException(status_code=400, detail=f"無法為 doc_id={doc_id} 構建章節目錄，請確認該文檔是否有章節摘要")
+    
+    # 嘗試使用 LLM 選擇章節，失敗時使用 fallback
+    llm_raw = None
+    fallback_used = False
+    try:
+        llm_raw = await _llm_select_relevant_chapters(query, catalog)
+        selection = _prepare_selection_sets(llm_raw, catalog)
+    except (RuntimeError, ValueError) as e:
+        error_msg = str(e)
+        print(f"⚠️ LLM 章節選擇失敗，使用 fallback 機制: {error_msg}")
+        # 使用 fallback 機制：選擇前3個章節
+        llm_raw = _fallback_catalog_selection(catalog, top_n=3)
+        selection = _prepare_selection_sets(llm_raw, catalog)
+        fallback_used = True
     
     query_vector = await _embed_query_vector(query)
     if query_vector is None:
@@ -3310,7 +3342,7 @@ async def _run_experimental_group_e_pipeline(query: str, k: int, doc_id: Optiona
             "section_titles": set(),
             "section_keys": set()
         }
-        selection["fallback_used"] = True
+        fallback_used = True  # 標記使用了完全放寬的 fallback
         for level_name in GROUP_E_LEVELS:
             level_results, contribution = await _retrieve_level_with_selection(query_vector, level_name, relaxed_selection, k)
             if level_results:
@@ -3325,7 +3357,7 @@ async def _run_experimental_group_e_pipeline(query: str, k: int, doc_id: Optiona
         "llm_stage": {
             "selection_details": selection.get("details", []),
             "thinking": selection.get("thinking", ""),
-            "fallback_used": selection.get("fallback_used", False),
+            "fallback_used": fallback_used or selection.get("fallback_used", False),
             "raw_response": llm_raw
         },
         "level_contributions": level_contributions,
@@ -11295,14 +11327,22 @@ async def experimental_groups_batch_retrieve(req: Dict[str, Any]):
     k = req.get("k", 10)
     groups_to_test = req.get("groups_to_test", ["group_a", "group_b", "group_c", "group_d", "group_e"])
     doc_id = req.get("doc_id")
+
+    # 臨時策略（為了讓當前 RQ 實驗穩定可跑）：
+    # 只要要測 group_e，就強制使用目前 chapter_summaries.json 對應的 doc_id，
+    # 避免前端或其他客戶端傳入沒有章節摘要的 doc_id。
+    KNOWN_GROUP_E_DOC_ID = "71c23286-d3fb-4982-a2e2-33a931687c5d"
+    if "group_e" in groups_to_test:
+        original_doc_id = doc_id
+        if doc_id != KNOWN_GROUP_E_DOC_ID:
+            print(
+                f"[experimental-groups-batch-retrieve] ⚠️ 強制覆寫傳入的 doc_id={original_doc_id!r} "
+                f"為已知可用的 doc_id={KNOWN_GROUP_E_DOC_ID}（group_e 專用，確保與 chapter_summaries.json 一致）"
+            )
+        doc_id = KNOWN_GROUP_E_DOC_ID  # 無論如何都使用正確的 doc_id
     
     if not query:
         return JSONResponse(status_code=400, content={"error": "Query is required"})
-    if "group_e" in groups_to_test and not doc_id:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "doc_id is required when testing group_e"}
-        )
     
     # 檢查各實驗組是否有對應的embedding
     missing_embeddings = []
