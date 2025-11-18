@@ -216,26 +216,21 @@ def _cn_to_int_str(cn_str: str) -> str:
     return result if result else cn_str
 
 def retrieve_group_b(query: str, k: int = 10) -> List[Dict]:
-    """檢索B組（條文+章節結構 - 對照組）"""
+    """檢索B組（條文+章節結構 - 對照組），使用 hybrid-rrf-retrieve 端點"""
     try:
-        # 使用experimental-groups-batch-retrieve API
         response = requests.post(
-            f"{API_BASE_URL}/experimental-groups-batch-retrieve",
+            f"{API_BASE_URL}/hybrid-rrf-retrieve",
             json={
                 "query": query,
                 "k": k,
-                "groups_to_test": ["group_b"]
+                "experimental_group": "group_b"
             },
             timeout=60
         )
         if response.status_code == 200:
             data = response.json()
-            # 提取group_b的結果
-            if "results" in data and "group_b" in data["results"]:
-                group_data = data["results"]["group_b"]
-                fused_results = group_data.get("fused_results", [])
-                return fused_results
-            return []
+            # hybrid-rrf-retrieve 返回格式：{"results": [...], ...}
+            return data.get("results", [])
         else:
             print(f"⚠️ B組檢索失敗: {response.status_code} - {response.text}")
             return []
@@ -246,26 +241,21 @@ def retrieve_group_b(query: str, k: int = 10) -> List[Dict]:
         return []
 
 def retrieve_group_c(query: str, k: int = 10) -> List[Dict]:
-    """檢索C組（條文+細節層次 - 實驗組）"""
+    """檢索C組（條文+細節層次 - 實驗組），使用 hybrid-rrf-retrieve 端點"""
     try:
-        # 使用experimental-groups-batch-retrieve API
         response = requests.post(
-            f"{API_BASE_URL}/experimental-groups-batch-retrieve",
+            f"{API_BASE_URL}/hybrid-rrf-retrieve",
             json={
                 "query": query,
                 "k": k,
-                "groups_to_test": ["group_c"]
+                "experimental_group": "group_c"
             },
             timeout=60
         )
         if response.status_code == 200:
             data = response.json()
-            # 提取group_c的結果
-            if "results" in data and "group_c" in data["results"]:
-                group_data = data["results"]["group_c"]
-                fused_results = group_data.get("fused_results", [])
-                return fused_results
-            return []
+            # hybrid-rrf-retrieve 返回格式：{"results": [...], ...}
+            return data.get("results", [])
         else:
             print(f"⚠️ C組檢索失敗: {response.status_code} - {response.text}")
             return []

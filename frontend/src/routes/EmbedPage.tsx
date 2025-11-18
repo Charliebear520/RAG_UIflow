@@ -46,6 +46,16 @@ const EXPERIMENTAL_GROUPS = {
 
 type ExperimentalGroup = "group_a" | "group_b" | "group_c" | "group_d" | "group_e";
 
+type SubsectionSummaryStatus = {
+  chunk_id: string;
+  title: string;
+  subsection_no?: string;
+  has_summary: boolean;
+  summary?: string;
+  last_updated?: string;
+  level: string;
+};
+
 type SectionSummaryStatus = {
   chunk_id: string;
   title: string;
@@ -53,6 +63,8 @@ type SectionSummaryStatus = {
   has_summary: boolean;
   summary?: string;
   last_updated?: string;
+  level: string;
+  subsections: SubsectionSummaryStatus[];
 };
 
 type ChapterSummaryStatus = {
@@ -61,6 +73,7 @@ type ChapterSummaryStatus = {
   has_summary: boolean;
   summary?: string;
   last_updated?: string;
+  level: string;
   sections: SectionSummaryStatus[];
 };
 
@@ -76,11 +89,14 @@ type SummaryStatusResponse = {
   }>;
   chapters: ChapterSummaryStatus[];
   orphan_sections: SectionSummaryStatus[];
+  orphan_subsections?: SubsectionSummaryStatus[];
   stats: {
     total_chapters: number;
     total_sections: number;
+    total_subsections?: number;
     summarized_chapters: number;
     summarized_sections: number;
+    summarized_subsections?: number;
   };
 };
 
@@ -145,7 +161,7 @@ export function EmbedPage() {
         include_sections: true,
       });
       setSummaryMessage(
-        `法規 ${res.documents_updated || 0} / 章 ${res.chapters_updated || 0} / 節 ${res.sections_updated || 0}`
+        `法規 ${res.documents_updated || 0} / 章 ${res.chapters_updated || 0} / 節 ${res.sections_updated || 0} / 款 ${res.subsections_updated || 0}`
       );
       await fetchSummaryStatus();
     } catch (error) {
@@ -208,7 +224,10 @@ export function EmbedPage() {
   const groupESummaryMissing =
     !!groupESummaryStats &&
     (groupESummaryStats.total_chapters > groupESummaryStats.summarized_chapters ||
-      groupESummaryStats.total_sections > groupESummaryStats.summarized_sections);
+      groupESummaryStats.total_sections > groupESummaryStats.summarized_sections ||
+      (groupESummaryStats.total_subsections !== undefined &&
+        (groupESummaryStats.total_subsections >
+          (groupESummaryStats.summarized_subsections || 0))));
   const groupESummaryReady =
     !!groupESummaryStats &&
     groupESummaryStats.total_chapters > 0 &&
@@ -503,7 +522,7 @@ export function EmbedPage() {
                         >
                           {summaryActionLoading
                             ? "LLM 摘要生成中..."
-                            : "一鍵生成章 / 節摘要"}
+                            : "一鍵生成章 / 節 / 款摘要"}
                         </button>
                       </div>
 
@@ -527,6 +546,13 @@ export function EmbedPage() {
                               {summaryStatus.stats.total_sections}（已完成{" "}
                               {summaryStatus.stats.summarized_sections}）
                             </div>
+                            {summaryStatus.stats.total_subsections !== undefined && (
+                              <div>
+                                <strong>款：</strong>
+                                {summaryStatus.stats.total_subsections}（已完成{" "}
+                                {summaryStatus.stats.summarized_subsections || 0}）
+                              </div>
+                            )}
                             {summaryStatus.stats.total_chapters === 0 && (
                               <div className="text-warning mt-2">
                                 尚未偵測到章節分塊，請確認已完成多層級分塊。
@@ -534,7 +560,7 @@ export function EmbedPage() {
                             )}
                             {groupESummaryMissing && summaryStatus.stats.total_chapters > 0 && (
                               <div className="text-danger mt-2">
-                                尚有章或節未生成摘要，建議先補齊再執行實驗組E的 Embedding。
+                                尚有章、節或款未生成摘要，建議先補齊再執行實驗組E的 Embedding。
                               </div>
                             )}
                           </div>
@@ -583,52 +609,113 @@ export function EmbedPage() {
                                 {chapter.sections && chapter.sections.length > 0 && (
                                   <div className="list-group list-group-flush">
                                     {chapter.sections.map((section) => (
-                                      <div
-                                        key={section.chunk_id}
-                                        className="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2"
-                                      >
-                                        <div>
-                                          <div className="fw-semibold">
-                                            {section.title || "節"}
+                                      <div key={section.chunk_id}>
+                                        <div className="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2">
+                                          <div className="flex-grow-1">
+                                            <div className="fw-semibold">
+                                              {section.title || "節"}
+                                            </div>
+                                            <small className="text-muted d-block">
+                                              chunk_id: <code>{section.chunk_id}</code>
+                                            </small>
+                                            {section.summary ? (
+                                              <p className="mb-0 small text-muted">
+                                                {section.summary}
+                                              </p>
+                                            ) : (
+                                              <p className="mb-0 small text-muted">
+                                                尚未生成摘要。
+                                              </p>
+                                            )}
                                           </div>
-                                          <small className="text-muted d-block">
-                                            chunk_id: <code>{section.chunk_id}</code>
-                                          </small>
-                                          {section.summary ? (
-                                            <p className="mb-0 small text-muted">
-                                              {section.summary}
-                                            </p>
-                                          ) : (
-                                            <p className="mb-0 small text-muted">
-                                              尚未生成摘要。
-                                            </p>
-                                          )}
-                                        </div>
-                                        <div className="d-flex align-items-center gap-2">
-                                          <span
-                                            className={`badge ${
-                                              section.has_summary
-                                                ? "bg-success"
-                                                : "bg-warning text-dark"
-                                            }`}
-                                          >
-                                            {section.has_summary ? "已生成" : "未生成"}
-                                          </span>
-                                          {!section.has_summary && (
-                                            <button
-                                              type="button"
-                                              className="btn btn-outline-secondary btn-sm"
-                                              onClick={() =>
-                                                handleGenerateChunkSummary(section.chunk_id)
-                                              }
-                                              disabled={chunkSummaryLoading === section.chunk_id}
+                                          <div className="d-flex align-items-center gap-2">
+                                            <span
+                                              className={`badge ${
+                                                section.has_summary
+                                                  ? "bg-success"
+                                                  : "bg-warning text-dark"
+                                              }`}
                                             >
-                                              {chunkSummaryLoading === section.chunk_id
-                                                ? "生成中..."
-                                                : "生成節摘要"}
-                                            </button>
-                                          )}
+                                              {section.has_summary ? "已生成" : "未生成"}
+                                            </span>
+                                            {!section.has_summary && (
+                                              <button
+                                                type="button"
+                                                className="btn btn-outline-secondary btn-sm"
+                                                onClick={() =>
+                                                  handleGenerateChunkSummary(section.chunk_id)
+                                                }
+                                                disabled={chunkSummaryLoading === section.chunk_id}
+                                              >
+                                                {chunkSummaryLoading === section.chunk_id
+                                                  ? "生成中..."
+                                                  : "生成節摘要"}
+                                              </button>
+                                            )}
+                                          </div>
                                         </div>
+                                        {section.subsections && section.subsections.length > 0 && (
+                                          <div className="list-group list-group-flush ps-4 border-start border-secondary border-2">
+                                            {section.subsections.map((subsection) => (
+                                              <div
+                                                key={subsection.chunk_id}
+                                                className="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2"
+                                              >
+                                                <div className="flex-grow-1">
+                                                  <div className="fw-semibold small">
+                                                    {subsection.subsection_no && (
+                                                      <span className="text-muted me-1">
+                                                        {subsection.subsection_no}
+                                                      </span>
+                                                    )}
+                                                    {subsection.title || "款"}
+                                                  </div>
+                                                  <small className="text-muted d-block">
+                                                    chunk_id: <code>{subsection.chunk_id}</code>
+                                                  </small>
+                                                  {subsection.summary ? (
+                                                    <p className="mb-0 small text-muted">
+                                                      {subsection.summary}
+                                                    </p>
+                                                  ) : (
+                                                    <p className="mb-0 small text-muted">
+                                                      尚未生成摘要。
+                                                    </p>
+                                                  )}
+                                                </div>
+                                                <div className="d-flex align-items-center gap-2">
+                                                  <span
+                                                    className={`badge ${
+                                                      subsection.has_summary
+                                                        ? "bg-success"
+                                                        : "bg-warning text-dark"
+                                                    }`}
+                                                  >
+                                                    {subsection.has_summary ? "已生成" : "未生成"}
+                                                  </span>
+                                                  {!subsection.has_summary && (
+                                                    <button
+                                                      type="button"
+                                                      className="btn btn-outline-info btn-sm"
+                                                      onClick={() =>
+                                                        handleGenerateChunkSummary(
+                                                          subsection.chunk_id
+                                                        )
+                                                      }
+                                                      disabled={
+                                                        chunkSummaryLoading === subsection.chunk_id
+                                                      }
+                                                    >
+                                                      {chunkSummaryLoading === subsection.chunk_id
+                                                        ? "生成中..."
+                                                        : "生成款摘要"}
+                                                    </button>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
                                       </div>
                                     ))}
                                   </div>
@@ -676,6 +763,58 @@ export function EmbedPage() {
                                       </div>
                                       {section.summary ? (
                                         <p className="mb-0 small text-muted">{section.summary}</p>
+                                      ) : (
+                                        <p className="mb-0 small text-muted">
+                                          尚未生成摘要。
+                                        </p>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </details>
+                            )}
+                          {summaryStatus.orphan_subsections &&
+                            summaryStatus.orphan_subsections.length > 0 && (
+                              <details className="mt-3">
+                                <summary className="fw-semibold">
+                                  未配對節的款（{summaryStatus.orphan_subsections.length}）
+                                </summary>
+                                <div className="list-group mt-2">
+                                  {summaryStatus.orphan_subsections.map((subsection) => (
+                                    <div key={subsection.chunk_id} className="list-group-item">
+                                      <div className="d-flex justify-content-between align-items-center">
+                                        <div>
+                                          <div className="fw-semibold small">
+                                            {subsection.subsection_no && (
+                                              <span className="text-muted me-1">
+                                                {subsection.subsection_no}
+                                              </span>
+                                            )}
+                                            {subsection.title || "款"}
+                                          </div>
+                                          <small className="text-muted">
+                                            chunk_id: <code>{subsection.chunk_id}</code>
+                                          </small>
+                                        </div>
+                                        {!subsection.has_summary && (
+                                          <button
+                                            type="button"
+                                            className="btn btn-outline-info btn-sm"
+                                            onClick={() =>
+                                              handleGenerateChunkSummary(subsection.chunk_id)
+                                            }
+                                            disabled={chunkSummaryLoading === subsection.chunk_id}
+                                          >
+                                            {chunkSummaryLoading === subsection.chunk_id
+                                              ? "生成中..."
+                                              : "生成款摘要"}
+                                          </button>
+                                        )}
+                                      </div>
+                                      {subsection.summary ? (
+                                        <p className="mb-0 small text-muted">
+                                          {subsection.summary}
+                                        </p>
                                       ) : (
                                         <p className="mb-0 small text-muted">
                                           尚未生成摘要。

@@ -10,7 +10,7 @@ RQ4 評估腳本
 import json
 import requests
 import sys
-from typing import Dict, List, Set, Tuple, Any
+from typing import Dict, List, Set, Tuple, Any, Optional
 from collections import defaultdict
 import time
 
@@ -23,20 +23,83 @@ GROUP_LABELS = {
     "group_e": "實驗組（E組：LLM章節導向）",
 }
 
+
+def summarize_retrieved_chunks(
+    results: List[Dict[str, Any]], limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """整理檢索結果中的chunk資訊，方便輸出或記錄"""
+    summary = []
+    for res in results[: limit or len(results)]:
+        metadata = (
+            res.get("original_metadata")
+            or res.get("enhanced_metadata")
+            or res.get("metadata")
+            or {}
+        )
+        identifiers = extract_chunk_identifiers(res)
+        display_id = res.get("chunk_id") or next(iter(identifiers), None)
+        if not display_id:
+            display_id = metadata.get("chunk_id") or metadata.get("id") or "UNKNOWN_CHUNK_ID"
+        summary.append(
+            {
+                "chunk_id": res.get("chunk_id"),
+                "display_id": display_id,
+                "doc_id": res.get("doc_id"),
+                "level": res.get("level"),
+                "chapter": metadata.get("chapter"),
+                "section": metadata.get("section"),
+                "article": metadata.get("article"),
+                "score": res.get("hybrid_score")
+                or res.get("rrf_score")
+                or res.get("similarity"),
+            }
+        )
+    return summary
+
+
+def print_llm_selected_chapters(llm_stage: Dict[str, Any]):
+    if not llm_stage:
+        print("      ⚠️ 沒有收到LLM章節選擇資料")
+        return
+    details = llm_stage.get("selection_details", [])
+    if not details:
+        print("      ⚠️ LLM未返回章節列表")
+        return
+    print("      📘 LLM最終選擇章節：")
+    for detail in details:
+        chapter_title = detail.get("chapter_title") or detail.get("chapter_key") or detail.get("chunk_id") or "未知章節"
+        chunk_id = detail.get("chunk_id")
+        chapter_label = f"{chapter_title} [{chunk_id}]" if chunk_id else chapter_title
+        reason = detail.get("reason") or ""
+        print(f"         - {chapter_label}")
+        if reason:
+            print(f"           └─ 理由: {reason}")
+        sections = detail.get("sections") or []
+        for section in sections:
+            section_title = section.get("section_title") or section.get("section_key") or section.get("chunk_id") or "節"
+            section_chunk = section.get("chunk_id")
+            section_label = f"{section_title} [{section_chunk}]" if section_chunk else section_title
+            section_reason = section.get("reason")
+            print(f"           • 節: {section_label}")
+            if section_reason:
+                print(f"             └─ 理由: {section_reason}")
+            subsections = section.get("subsections") or []
+            for subsection in subsections:
+                sub_title = subsection.get("subsection_title") or subsection.get("subsection_key") or subsection.get("chunk_id") or "款"
+                sub_chunk = subsection.get("chunk_id")
+                sub_label = f"{sub_title} [{sub_chunk}]" if sub_chunk else sub_title
+                sub_reason = subsection.get("reason")
+                print(f"             - 款: {sub_label}")
+                if sub_reason:
+                    print(f"               └─ 理由: {sub_reason}")
+
 def load_ground_truth(file_path: str = "QA/ground_truth.json") -> List[Dict]:
     """載入ground truth數據"""
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def get_available_doc_id() -> str:
-    """獲取可用的doc_id（用於group_e）
-    
-    為了確保與 chapter_summaries.json 完全一致，這裡固定使用已知的 doc_id。
-    如需切換到其他法規，只需修改這個常數即可。
-    """
-    known_correct_doc_id = "71c23286-d3fb-4982-a2e2-33a931687c5d"
-    print(f"   使用固定 doc_id（來自 chapter_summaries.json）: {known_correct_doc_id}")
-    return known_correct_doc_id
+# 注意：get_available_doc_id 函數已廢棄
+# group_e 現在使用標準 hybrid-rrf-retrieve 端點，不再需要特殊的doc_id處理
 
 def extract_chunk_identifiers(result: Dict) -> Set[str]:
     """
@@ -227,59 +290,68 @@ def _cn_to_int_str(cn_str: str) -> str:
     return result if result else cn_str
 
 def retrieve_experimental_groups(query: str, k: int, groups: List[str], doc_id: str = None) -> Dict[str, Any]:
-    """一次性檢索多個實驗組"""
+    """一次性檢索多個實驗組，使用 hybrid-rrf-retrieve 端點"""
+    # 從API獲取實驗組配置信息
     try:
-        payload = {
-            "query": query,
-            "k": k,
-            "groups_to_test": groups
-        }
-        # 如果包含group_e，必須提供doc_id
-        if "group_e" in groups:
-            if not doc_id:
-                print(f"⚠️ group_e需要doc_id，但未提供，跳過group_e檢索")
-                # 從groups中移除group_e
-                groups = [g for g in groups if g != "group_e"]
-                payload["groups_to_test"] = groups
-            else:
-                payload["doc_id"] = doc_id
-        
-        if not groups:
-            return {}
-        
-        response = requests.post(
-            f"{API_BASE_URL}/experimental-groups-batch-retrieve",
-            json=payload,
-            timeout=120  # 增加超時時間，因為group_e需要LLM調用
-        )
-        if response.status_code == 200:
-            data = response.json()
-            results = data.get("results", {})
-            
-            # 檢查group_e的結果，如果有錯誤則打印詳細信息
-            if "group_e" in groups and "group_e" in results:
-                group_e_data = results.get("group_e", {})
-                if group_e_data.get("error"):
-                    print(f"    ⚠️ group_e檢索錯誤: {group_e_data.get('error')}")
-                elif len(group_e_data.get("fused_results", [])) == 0:
-                    # 檢查LLM階段是否成功
-                    llm_stage = group_e_data.get("llm_stage", {})
-                    if not llm_stage:
-                        print(f"    ⚠️ group_e未返回LLM階段信息，可能LLM調用失敗")
-                    elif llm_stage.get("fallback_used"):
-                        print(f"    ⚠️ group_e使用了fallback模式（LLM選擇過於嚴苛）")
-            
-            return results
+        config_response = requests.get(f"{API_BASE_URL}/granularity-combinations", timeout=5)
+        if config_response.status_code == 200:
+            config_data = config_response.json()
+            GRANULARITY_COMBINATIONS = config_data.get("combinations", {})
         else:
-            error_text = response.text
-            print(f"⚠️ 實驗組檢索失敗: {response.status_code}")
-            print(f"   錯誤詳情: {error_text[:200]}")
-            return {}
-    except Exception as e:
-        print(f"❌ 實驗組檢索異常: {e}")
-        import traceback
-        traceback.print_exc()
-        return {}
+            GRANULARITY_COMBINATIONS = {}
+    except:
+        GRANULARITY_COMBINATIONS = {}
+    
+    # group_e 現在使用 hybrid-rrf-retrieve 端點，並在內部進行LLM章節選擇
+    results = {}
+    for group in groups:
+        try:
+            payload = {
+                "query": query,
+                "k": k,
+                "experimental_group": group
+            }
+            # 如果有doc_id（例如group_e），可以傳遞給API
+            if doc_id:
+                payload["doc_id"] = doc_id
+            
+            response = requests.post(
+                f"{API_BASE_URL}/hybrid-rrf-retrieve",
+                json=payload,
+                timeout=120  # group_e需要LLM調用，增加超時時間
+            )
+            if response.status_code == 200:
+                data = response.json()
+                # hybrid-rrf-retrieve 返回格式：{"results": [...], "query": ..., "final_results": ..., ...}
+                # 轉換為與 experimental-groups-batch-retrieve 相同的格式
+                results[group] = {
+                    "group_info": GRANULARITY_COMBINATIONS.get(group, {}),
+                    "fused_results": data.get("results", []),
+                    "total_results": data.get("final_results", 0),
+                    "fusion_method": data.get("fusion_method", "RRF"),
+                    "llm_stage": data.get("llm_stage"),                 # 實驗組E的LLM階段信息
+                    "embedding_stats": data.get("embedding_stats"),     # 各層次候選/入選統計
+                    "level_distribution": data.get("level_distribution") # 最終結果的層次分佈
+                }
+            else:
+                print(f"⚠️ {group} 檢索失敗: {response.status_code} - {response.text[:200]}")
+                results[group] = {
+                    "group_info": GRANULARITY_COMBINATIONS.get(group, {}),
+                    "error": f"HTTP {response.status_code}: {response.text[:100]}",
+                    "fused_results": [],
+                    "total_results": 0
+                }
+        except Exception as e:
+            print(f"❌ {group} 檢索異常: {e}")
+            import traceback
+            traceback.print_exc()
+            results[group] = {
+                "group_info": GRANULARITY_COMBINATIONS.get(group, {}),
+                "error": str(e),
+                "fused_results": [],
+                "total_results": 0
+            }
+    return results
 
 def calculate_metrics(
     retrieved_results: List[Dict],
@@ -362,10 +434,8 @@ def evaluate_rq4():
     ground_truth_data = load_ground_truth()
     print(f"✅ 載入 {len(ground_truth_data)} 道題目")
     
-    # 獲取doc_id（用於group_e）
-    print("\n🔍 獲取doc_id（用於group_e檢索）...")
-    doc_id = get_available_doc_id()
-    print(f"✅ 使用doc_id: {doc_id}")
+    # 注意：group_e 現在使用標準 hybrid-rrf-retrieve 端點，不再需要特殊的doc_id處理
+    doc_id = None  # group_e現在不需要特殊的doc_id
     
     # 檢查API連接
     print("\n🔌 檢查API連接...")
@@ -402,6 +472,16 @@ def evaluate_rq4():
         print(f"查詢: {query_text[:60]}...")
         print(f"Ground Truth - E: {gt_e}, C: {gt_c}")
         
+        # 初始化單題結果容器
+        item_result = {
+            "query_id": query_id,
+            "query_text": query_text,
+            "query_type": query_type,
+            "ground_truth": ground_truth,
+        }
+        for group in GROUPS_TO_EVALUATE:
+            item_result[group] = {}
+        
         # 檢索C/D/E組
         print("  🔍 檢索實驗組 (C/D/E)...")
         group_payloads = retrieve_experimental_groups(
@@ -414,31 +494,49 @@ def evaluate_rq4():
             group_data = group_payloads.get(group, {})
             fused = group_data.get("fused_results", [])
             error = group_data.get("error")
+            retrieved_summary = summarize_retrieved_chunks(fused)
+            item_result[group]["llm_stage"] = group_data.get("llm_stage")
+            item_result[group]["retrieved_chunks"] = retrieved_summary
+            item_result[group]["embedding_stats"] = group_data.get("embedding_stats")
+            item_result[group]["level_distribution"] = group_data.get("level_distribution")
+
             if error:
                 print(f"    - {GROUP_LABELS[group]} 檢索失敗: {error}")
-            else:
-                print(f"    - {GROUP_LABELS[group]} 返回 {len(fused)} 個結果")
-                # 如果是group_e，顯示LLM選擇的章節信息
-                if group == "group_e" and group_data.get("llm_stage"):
-                    llm_stage = group_data.get("llm_stage", {})
-                    selection_details = llm_stage.get("selection_details", [])
-                    if selection_details:
-                        print(f"      LLM選擇了 {len(selection_details)} 個章節")
-                        for detail in selection_details[:3]:  # 只顯示前3個
-                            print(f"        - {detail.get('chapter_title', 'N/A')}")
-                    else:
-                        print(f"      ⚠️ LLM未選擇任何章節")
+                continue
+
+            print(f"    - {GROUP_LABELS[group]} 返回 {len(fused)} 個結果")
+
+            # 額外顯示最終結果的層次分佈，幫助診斷 C 組與 D 組是否真的只用到不同層次
+            level_dist = group_data.get("level_distribution")
+            if level_dist:
+                print("      📊 最終結果層次分佈:")
+                for level_name, count in level_dist.items():
+                    print(f"         - {level_name}: {count}")
+
+            if group == "group_e":
+                print_llm_selected_chapters(group_data.get("llm_stage"))
+                if retrieved_summary:
+                    print("      📦 實際參與檢索的 chunks:")
+                    for idx, chunk in enumerate(retrieved_summary, 1):
+                        chunk_id = chunk.get("display_id") or chunk.get("chunk_id") or "UNKNOWN_CHUNK_ID"
+                        print(f"         {idx:02d}. {chunk_id}")
+                embedding_stats = group_data.get("embedding_stats")
+                if embedding_stats:
+                    print("      🧬 各層次候選/入選（vector / bm25）：")
+                    for level_name in sorted(embedding_stats.keys()):
+                        stats = embedding_stats[level_name] or {}
+                        v_cand = stats.get("vector_candidates", 0)
+                        v_kept = stats.get("vector_retained", 0)
+                        b_cand = stats.get("bm25_candidates", 0)
+                        b_kept = stats.get("bm25_retained", 0)
+                        print(
+                            f"         - {level_name}: "
+                            f"vector {v_kept}/{v_cand}, bm25 {b_kept}/{b_cand}"
+                        )
+                else:
+                    print("      ⚠️ 未提供 embedding 層級統計")
         
         # 計算各K值的指標
-        item_result = {
-            "query_id": query_id,
-            "query_text": query_text,
-            "query_type": query_type,
-            "ground_truth": ground_truth,
-        }
-        for group in GROUPS_TO_EVALUATE:
-            item_result[group] = {}
-        
         for k in k_values:
             summaries = []
             for group in GROUPS_TO_EVALUATE:

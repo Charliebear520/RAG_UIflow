@@ -217,28 +217,59 @@ def _cn_to_int_str(cn_str: str) -> str:
     return result if result else cn_str
 
 def retrieve_experimental_groups(query: str, k: int, groups: List[str]) -> Dict[str, Any]:
-    """一次性檢索多個實驗組"""
+    """一次性檢索多個實驗組，使用 hybrid-rrf-retrieve 端點"""
+    # 從API獲取實驗組配置信息
     try:
-        response = requests.post(
-            f"{API_BASE_URL}/experimental-groups-batch-retrieve",
-            json={
-                "query": query,
-                "k": k,
-                "groups_to_test": groups
-            },
-            timeout=90
-        )
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("results", {})
+        config_response = requests.get(f"{API_BASE_URL}/granularity-combinations", timeout=5)
+        if config_response.status_code == 200:
+            config_data = config_response.json()
+            GRANULARITY_COMBINATIONS = config_data.get("combinations", {})
         else:
-            print(f"⚠️ 實驗組檢索失敗: {response.status_code} - {response.text}")
-            return {}
-    except Exception as e:
-        print(f"❌ 實驗組檢索異常: {e}")
-        import traceback
-        traceback.print_exc()
-        return {}
+            GRANULARITY_COMBINATIONS = {}
+    except:
+        GRANULARITY_COMBINATIONS = {}
+    
+    results = {}
+    for group in groups:
+        try:
+            response = requests.post(
+                f"{API_BASE_URL}/hybrid-rrf-retrieve",
+                json={
+                    "query": query,
+                    "k": k,
+                    "experimental_group": group
+                },
+                timeout=90
+            )
+            if response.status_code == 200:
+                data = response.json()
+                # hybrid-rrf-retrieve 返回格式：{"results": [...], "query": ..., "final_results": ..., ...}
+                # 轉換為與 experimental-groups-batch-retrieve 相同的格式
+                results[group] = {
+                    "group_info": GRANULARITY_COMBINATIONS.get(group, {}),
+                    "fused_results": data.get("results", []),
+                    "total_results": data.get("final_results", 0),
+                    "fusion_method": data.get("fusion_method", "RRF")
+                }
+            else:
+                print(f"⚠️ {group} 檢索失敗: {response.status_code} - {response.text}")
+                results[group] = {
+                    "group_info": GRANULARITY_COMBINATIONS.get(group, {}),
+                    "error": f"HTTP {response.status_code}: {response.text[:100]}",
+                    "fused_results": [],
+                    "total_results": 0
+                }
+        except Exception as e:
+            print(f"❌ {group} 檢索異常: {e}")
+            import traceback
+            traceback.print_exc()
+            results[group] = {
+                "group_info": GRANULARITY_COMBINATIONS.get(group, {}),
+                "error": str(e),
+                "fused_results": [],
+                "total_results": 0
+            }
+    return results
 
 def calculate_metrics(
     retrieved_results: List[Dict],

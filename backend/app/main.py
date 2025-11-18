@@ -204,6 +204,8 @@ class EmbedRequest(BaseModel):
 class RetrieveRequest(BaseModel):
     query: str
     k: int = 5
+    experimental_group: Optional[str] = None  # 可選的實驗組參數: "group_a", "group_b", "group_c", "group_d", "group_e"
+    doc_id: Optional[str] = None  # 可選的文檔ID（實驗組E使用）
 
 
 class GenerateRequest(BaseModel):
@@ -2575,24 +2577,182 @@ def _build_chapter_section_catalog(
 def _extract_json_block(text: str) -> Optional[str]:
     if not text:
         return None
+    
+    # 首先尝试提取markdown代码块中的JSON
+    markdown_patterns = [
+        r"```json\s*(\{[\s\S]*?\})\s*```",
+        r"```\s*(\{[\s\S]*?\})\s*```",
+        r"```json\s*(\{[\s\S]*)\s*```",  # 更宽松的模式，处理未闭合的情况
+        r"```\s*(\{[\s\S]*)\s*```",
+    ]
+    for pattern in markdown_patterns:
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            candidate = match.group(1).strip()
+            # 尝试确保JSON闭合
+            if candidate.count('{') > candidate.count('}'):
+                # 添加缺失的闭合括号
+                candidate += '}' * (candidate.count('{') - candidate.count('}'))
+            return candidate
+    
+    # 如果没有markdown代码块，尝试找到第一个完整的JSON对象
+    # 使用更智能的方法：找到第一个 {，然后找到匹配的 }
+    brace_count = 0
+    start_idx = -1
+    in_string = False
+    escape_next = False
+    
+    for i, char in enumerate(text):
+        if escape_next:
+            escape_next = False
+            continue
+        
+        if char == '\\':
+            escape_next = True
+            continue
+        
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        
+        if in_string:
+            continue
+        
+        if char == '{':
+            if brace_count == 0:
+                start_idx = i
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+            if brace_count == 0 and start_idx != -1:
+                # 找到了完整的JSON对象
+                return text[start_idx:i+1]
+    
+    # 如果找不到完整的JSON对象，尝试提取部分（从第一个 { 开始到文本结束，然后尝试闭合）
+    if start_idx != -1:
+        partial = text[start_idx:]
+        # 尝试闭合未闭合的括号
+        open_count = partial.count('{')
+        close_count = partial.count('}')
+        if open_count > close_count:
+            partial += '}' * (open_count - close_count)
+        return partial
+    
+    # 如果找不到完整的JSON对象，尝试简单的正则匹配
     match = re.search(r"\{[\s\S]*\}", text)
     if match:
         return match.group(0)
     return None
 
 
-def _safe_parse_json(text: str) -> Dict[str, Any]:
+def _fix_json_common_issues(text: str) -> str:
+    """修复常见的JSON问题"""
+    # 移除尾随逗号
+    text = re.sub(r',(\s*[}\]])', r'\1', text)
+    
+    # 移除单行注释（虽然JSON不支持，但LLM可能会添加）
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # 移除 // 注释，但要小心不要移除字符串中的 //
+        if '//' in line:
+            # 简单处理：如果 "//" 不在引号内，移除它之后的内容
+            in_string = False
+            escape_next = False
+            comment_idx = -1
+            for i, char in enumerate(line):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == '\\':
+                    escape_next = True
+                    continue
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                if not in_string and line[i:i+2] == '//':
+                    comment_idx = i
+                    break
+            if comment_idx != -1:
+                line = line[:comment_idx].rstrip()
+        cleaned_lines.append(line)
+    text = '\n'.join(cleaned_lines)
+    
+    # 修复未转义的控制字符（简单处理）
+    # 移除控制字符（除了 \n, \r, \t）
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+    
+    # 确保字符串闭合（简单处理未闭合的字符串）
+    # 这里不做太复杂的处理，避免破坏有效JSON
+    
+    return text
+
+
+def _safe_parse_json(text: str, strict: bool = True) -> Dict[str, Any]:
+    """安全解析JSON，支持多种容错策略"""
     if not text:
         return {}
+    
+    # 先清理文本
+    text = text.strip()
+    
+    # 移除可能的前缀文字（如 "这是JSON："）
+    # 查找第一个 {
+    first_brace = text.find('{')
+    if first_brace > 0:
+        # 检查前缀是否看起来像说明文字
+        prefix = text[:first_brace].strip()
+        if len(prefix) < 100 and not prefix.startswith('{'):
+            text = text[first_brace:]
+    
+    # 尝试直接解析
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        snippet = _extract_json_block(text)
-        if snippet:
+        pass
+    
+    # 尝试提取JSON块
+    snippet = _extract_json_block(text)
+    if snippet:
+        # 尝试1: 直接解析
+        try:
+            return json.loads(snippet)
+        except json.JSONDecodeError:
+            pass
+        
+        # 尝试2: 修复常见问题后解析
+        snippet_fixed = _fix_json_common_issues(snippet)
+        try:
+            return json.loads(snippet_fixed)
+        except json.JSONDecodeError:
+            pass
+        
+        # 尝试3: 如果strict=False，尝试更宽松的解析
+        if not strict:
+            # 尝试使用ast.literal_eval作为最后手段（但这不适用于所有JSON）
+            # 或者尝试修复更多问题
+            # 移除未闭合的字符串（简单处理）
+            lines = snippet_fixed.split('\n')
+            fixed_lines = []
+            for line in lines:
+                # 如果行以未闭合的引号结束，尝试闭合它
+                stripped = line.rstrip()
+                if stripped.count('"') % 2 != 0 and not stripped.endswith('"'):
+                    # 尝试添加闭合引号
+                    if ':' in stripped and '"' in stripped:
+                        # 可能是字符串值未闭合
+                        last_colon = stripped.rfind(':')
+                        after_colon = stripped[last_colon+1:].strip()
+                        if after_colon.startswith('"') and not after_colon.endswith('"'):
+                            line = stripped + '"'
+                fixed_lines.append(line)
+            snippet_fixed = '\n'.join(fixed_lines)
+            
             try:
-                return json.loads(snippet)
+                return json.loads(snippet_fixed)
             except json.JSONDecodeError:
-                return {}
+                pass
+    
     return {}
 
 
@@ -2604,40 +2764,90 @@ async def _llm_select_relevant_chapters(
     if not catalog:
         return {}
     
+    def _combine_summary(routing: Optional[str], general: Optional[str]) -> str:
+        routing_text = (routing or "").strip()
+        general_text = (general or "").strip()
+        parts = []
+        if routing_text:
+            parts.append(f"[Routing] {routing_text}")
+        if general_text and general_text != routing_text:
+            parts.append(f"[General] {general_text}")
+        if not parts and (routing_text or general_text):
+            parts.append(routing_text or general_text)
+        return "\n".join(parts)
+    
     llm_payload = []
     for entry in catalog:
+        sections_with_subsections = []
+        for section in entry.get("sections", []):
+            section_summary_text = _combine_summary(
+                section.get("routing_summary"),
+                section.get("general_summary") or section.get("summary")
+            )
+            section_entry = {
+                    "chunk_id": section.get("chunk_id"),
+                    "section_title": section.get("section_title"),
+                    "summary": section_summary_text,
+                "subsections": [
+                    {
+                        "chunk_id": subsection.get("chunk_id"),
+                        "subsection_title": subsection.get("subsection_title"),
+                        "subsection_no": subsection.get("subsection_no"),
+                        "summary": _combine_summary(
+                            subsection.get("routing_summary"),
+                            subsection.get("general_summary") or subsection.get("summary")
+                        ),
+                    }
+                    for subsection in section.get("subsections", [])
+                ]
+            }
+            sections_with_subsections.append(section_entry)
+        
+        chapter_summary_text = _combine_summary(
+            entry.get("routing_summary"),
+            entry.get("general_summary") or entry.get("summary")
+        )
         llm_payload.append({
             "chunk_id": entry.get("chunk_id"),
             "chapter_title": entry.get("chapter_title"),
             "law_name": entry.get("law_name"),
-            "summary": entry.get("routing_summary") or entry.get("summary"),
-            "sections": [
-                {
-                    "chunk_id": section.get("chunk_id"),
-                    "section_title": section.get("section_title"),
-                    "summary": section.get("routing_summary") or section.get("summary"),
-                }
-                for section in entry.get("sections", [])
-            ]
+            "summary": chapter_summary_text,
+            "sections": sections_with_subsections
         })
     catalog_text = json.dumps(llm_payload, ensure_ascii=False, indent=2)
     instruction = (
-        "你是法律檢索專家。請閱讀查詢與章節摘要，挑選最相關的章節，"
-        "必要時列出特別關鍵的節。只輸出JSON，格式為：\n"
-        "{{\n"
+        "你是一位臺灣法律檢索專家。請根據查詢與章/節摘要，精確挑選最能解題的章，"
+        "並視需要列出對應的節或節下的款。\n\n"
+        "請遵循以下規則：\n"
+        "1. 每個章的 reason 要說明該章的法律職能、涵蓋的條文與查詢間的具體關聯。\n"
+        "2. 若僅章內局部條文相關，必須在 sections/subsections 中列出並交代理由；"
+        "若整個章皆必要，可省略 sections，但要說明原因。\n"
+        "3. 理由需專業且具體，可引用條號或關鍵概念，避免籠統描述。\n"
+        "4. 章數量不限，但請保持聚焦（通常 1~{max_selected_chapters} 個章即可）。\n\n"
+        "**重要：你必須只輸出純JSON格式，不要使用markdown代碼塊，不要添加任何前綴或後綴文字，直接輸出JSON對象。**\n\n"
+        "輸出格式如下（請確保是有效的JSON）：\n"
+        '{{\n'
         '  "chapters": [\n'
-        "    {{\n"
+        '    {{\n'
         '      "chapter_title": "...",\n'
         '      "chapter_key": "...",\n'
+        '      "chunk_id": "...",\n'
         '      "reason": "...",\n'
         '      "sections": [\n'
-        '        {{"section_title": "...", "section_key": "...", "reason": "..."}}\n'
-        "      ]\n"
-        "    }}\n"
-        "  ],\n"
-        '  "thinking": "..." \n'
-        "}}\n"
-        "章節數量不超過 {max_selected_chapters}。"
+        '        {{\n'
+        '          "section_title": "...",\n'
+        '          "section_key": "...",\n'
+        '          "chunk_id": "...",\n'
+        '          "reason": "...",\n'
+        '          "subsections": [\n'
+        '            {{"subsection_title": "...", "subsection_key": "...", "subsection_no": "...", "chunk_id": "...", "reason": "..."}}\n'
+        '          ]\n'
+        '        }}\n'
+        '      ]\n'
+        '    }}\n'
+        '  ],\n'
+        '  "thinking": "..."\n'
+        '}}'
     ).format(max_selected_chapters=max_selected_chapters)
     
     prompt = [
@@ -2648,50 +2858,311 @@ async def _llm_select_relevant_chapters(
         }
     ]
     
-    try:
-        response = await gemini_chat(prompt, model=DEFAULT_THINKING_MODEL)
-    except Exception as e:
-        error_msg = f"LLM 章節選擇失敗: {str(e)}"
-        print(f"⚠️ {error_msg}")
-        raise RuntimeError(error_msg)
+    # 重试机制：最多尝试2次
+    max_retries = 2
+    last_error = None
     
-    parsed = _safe_parse_json(response)
-    if not parsed or not parsed.get("chapters"):
-        error_msg = "LLM 返回結果無效或缺少章節信息"
-        print(f"⚠️ {error_msg}")
-        print(f"   LLM 原始響應（前500字符）: {response[:500] if response else 'None'}")
-        print(f"   解析後的結果: {parsed}")
-        raise ValueError(error_msg)
+    for attempt in range(max_retries):
+        try:
+            response = await gemini_chat(prompt, model=DEFAULT_THINKING_MODEL)
+            if not response:
+                raise ValueError("LLM 返回空響應")
+            
+            # 第一次尝试：严格模式解析
+            parsed = _safe_parse_json(response, strict=True)
+            
+            # 如果严格模式失败，尝试宽松模式
+            if not parsed and attempt < max_retries - 1:
+                print(f"⚠️ 嚴格模式解析失敗，嘗試寬鬆模式解析... (嘗試 {attempt + 1}/{max_retries})")
+                parsed = _safe_parse_json(response, strict=False)
+            
+            if not parsed:
+                error_msg = f"LLM 返回結果無法解析為JSON (嘗試 {attempt + 1}/{max_retries})"
+                print(f"⚠️ {error_msg}")
+                print(f"   LLM 原始響應（前1500字符）: {response[:1500] if response else 'None'}")
+                if response and len(response) > 1500:
+                    print(f"   ... (總共 {len(response)} 字符)")
+                    # 也显示最后500字符，可能JSON在后面
+                    print(f"   LLM 原始響應（最後500字符）: ...{response[-500:]}")
+                
+                # 即使JSON解析失败，尝试fallback：从文本中提取chunk_id
+                print(f"   🔄 嘗試使用fallback方式從文本中提取章節信息...")
+                fallback_result = _extract_chunk_ids_from_text(response, catalog)
+                if fallback_result and fallback_result.get("chapters"):
+                    print(f"   ✅ Fallback成功！從文本中提取到 {len(fallback_result['chapters'])} 個章節")
+                    return fallback_result
+                else:
+                    print(f"   ⚠️ Fallback失敗，無法從文本中提取章節信息")
+                
+                if attempt < max_retries - 1:
+                    # 重试前，尝试改进prompt
+                    print(f"   ⏳ 等待 {1.0 * (attempt + 1)} 秒後重試...")
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                    # 在prompt中再次强调JSON格式要求
+                    prompt[0]["content"] += "\n\n⚠️ 重要提醒：請確保輸出的是有效的、完整的JSON格式，不要使用markdown代碼塊，不要添加任何前綴或後綴文字。"
+                    continue
+                else:
+                    # 最后一次尝试fallback
+                    fallback_result = _extract_chunk_ids_from_text(response, catalog)
+                    if fallback_result and fallback_result.get("chapters"):
+                        print(f"   ✅ 最後嘗試Fallback成功！從文本中提取到 {len(fallback_result['chapters'])} 個章節")
+                        return fallback_result
+                    raise ValueError(error_msg)
+            
+            # 验证解析结果
+            if not parsed.get("chapters"):
+                error_msg = "LLM 返回結果缺少章節信息（chapters字段為空或不存在）"
+                print(f"⚠️ {error_msg}")
+                print(f"   LLM 原始響應（前1500字符）: {response[:1500] if response else 'None'}")
+                if response and len(response) > 1500:
+                    print(f"   ... (總共 {len(response)} 字符)")
+                print(f"   解析後的結果鍵: {list(parsed.keys())}")
+                if parsed:
+                    try:
+                        parsed_str = json.dumps(parsed, ensure_ascii=False, indent=2)
+                        print(f"   解析後的完整結果（前2000字符）: {parsed_str[:2000]}")
+                        if len(parsed_str) > 2000:
+                            print(f"   ... (總共 {len(parsed_str)} 字符)")
+                    except:
+                        print(f"   解析後的結果（無法序列化）: {str(parsed)[:1000]}")
+                
+                # 尝试fallback：从原始响应中提取chunk_id
+                print(f"   🔄 嘗試使用fallback方式從文本中提取章節信息...")
+                fallback_result = _extract_chunk_ids_from_text(response, catalog)
+                if fallback_result and fallback_result.get("chapters"):
+                    print(f"   ✅ Fallback成功！從文本中提取到 {len(fallback_result['chapters'])} 個章節")
+                    return fallback_result
+                else:
+                    print(f"   ⚠️ Fallback失敗，無法從文本中提取章節信息")
+                
+                if attempt < max_retries - 1:
+                    print(f"   ⏳ 等待 {1.0 * (attempt + 1)} 秒後重試...")
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                    prompt[0]["content"] += "\n\n⚠️ 重要提醒：請確保在JSON中包含 'chapters' 字段，且該字段是一個非空數組。"
+                    continue
+                else:
+                    # 最后一次尝试fallback
+                    fallback_result = _extract_chunk_ids_from_text(response, catalog)
+                    if fallback_result and fallback_result.get("chapters"):
+                        print(f"   ✅ 最後嘗試Fallback成功！從文本中提取到 {len(fallback_result['chapters'])} 個章節")
+                        return fallback_result
+                    raise ValueError(error_msg)
+            
+            # 驗證 chapters 是否為空列表
+            chapters = parsed.get("chapters", [])
+            if not isinstance(chapters, list):
+                error_msg = f"LLM 返回的 chapters 類型錯誤（期望列表，實際: {type(chapters).__name__}）"
+                print(f"⚠️ {error_msg}")
+                print(f"   LLM 原始響應（前1500字符）: {response[:1500] if response else 'None'}")
+                print(f"   chapters 的實際值: {chapters}")
+                
+                # 尝试fallback
+                print(f"   🔄 嘗試使用fallback方式從文本中提取章節信息...")
+                fallback_result = _extract_chunk_ids_from_text(response, catalog)
+                if fallback_result and fallback_result.get("chapters"):
+                    print(f"   ✅ Fallback成功！從文本中提取到 {len(fallback_result['chapters'])} 個章節")
+                    return fallback_result
+                
+                if attempt < max_retries - 1:
+                    print(f"   ⏳ 等待 {1.0 * (attempt + 1)} 秒後重試...")
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                    prompt[0]["content"] += "\n\n⚠️ 重要提醒：請確保 'chapters' 字段是一個數組 []，而不是其他類型。"
+                    continue
+                else:
+                    # 最后一次尝试fallback
+                    fallback_result = _extract_chunk_ids_from_text(response, catalog)
+                    if fallback_result and fallback_result.get("chapters"):
+                        print(f"   ✅ 最後嘗試Fallback成功！從文本中提取到 {len(fallback_result['chapters'])} 個章節")
+                        return fallback_result
+                    raise ValueError(error_msg)
+            
+            if len(chapters) == 0:
+                error_msg = "LLM 返回的 chapters 為空列表"
+                print(f"⚠️ {error_msg}")
+                print(f"   LLM 原始響應（前1500字符）: {response[:1500] if response else 'None'}")
+                try:
+                    parsed_str = json.dumps(parsed, ensure_ascii=False, indent=2)
+                    print(f"   解析後的完整結果（前2000字符）: {parsed_str[:2000]}")
+                except:
+                    print(f"   解析後的結果（無法序列化）: {str(parsed)[:1000]}")
+                
+                # 尝试fallback
+                print(f"   🔄 嘗試使用fallback方式從文本中提取章節信息...")
+                fallback_result = _extract_chunk_ids_from_text(response, catalog)
+                if fallback_result and fallback_result.get("chapters"):
+                    print(f"   ✅ Fallback成功！從文本中提取到 {len(fallback_result['chapters'])} 個章節")
+                    return fallback_result
+                
+                if attempt < max_retries - 1:
+                    print(f"   ⏳ 等待 {1.0 * (attempt + 1)} 秒後重試...")
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                    prompt[0]["content"] += "\n\n⚠️ 重要提醒：請確保 'chapters' 數組中至少包含一個章節對象。"
+                    continue
+                else:
+                    # 最后一次尝试fallback
+                    fallback_result = _extract_chunk_ids_from_text(response, catalog)
+                    if fallback_result and fallback_result.get("chapters"):
+                        print(f"   ✅ 最後嘗試Fallback成功！從文本中提取到 {len(fallback_result['chapters'])} 個章節")
+                        return fallback_result
+                    raise ValueError(error_msg)
+            
+            # 所有验证通过
+            if attempt > 0:
+                print(f"✅ 重試成功，在第 {attempt + 1} 次嘗試時解析成功")
+            return parsed
+            
+        except (RuntimeError, ValueError) as e:
+            last_error = e
+            error_msg = f"LLM 章節選擇失敗（嘗試 {attempt + 1}/{max_retries}）: {str(e)}"
+            print(f"⚠️ {error_msg}")
+            
+            if attempt < max_retries - 1:
+                print(f"   ⏳ 等待 {1.0 * (attempt + 1)} 秒後重試...")
+                await asyncio.sleep(1.0 * (attempt + 1))
+                # 改进prompt，更明确地要求JSON格式
+                if "JSON" not in prompt[0]["content"] or "markdown" not in prompt[0]["content"].lower():
+                    prompt[0]["content"] += "\n\n⚠️ 重要提醒：必須只輸出純JSON格式，不要使用 ```json 或 ``` 代碼塊，不要添加任何前綴或後綴文字。"
+                continue
+            else:
+                raise RuntimeError(error_msg)
+        except Exception as e:
+            last_error = e
+            error_msg = f"LLM 章節選擇發生意外錯誤（嘗試 {attempt + 1}/{max_retries}）: {str(e)}"
+            print(f"❌ {error_msg}")
+            if attempt < max_retries - 1:
+                print(f"   ⏳ 等待 {1.0 * (attempt + 1)} 秒後重試...")
+                await asyncio.sleep(1.0 * (attempt + 1))
+                continue
+            else:
+                raise RuntimeError(error_msg)
     
-    # 驗證 chapters 是否為空列表
-    chapters = parsed.get("chapters", [])
-    if not isinstance(chapters, list) or len(chapters) == 0:
-        error_msg = f"LLM 返回的 chapters 為空或格式錯誤（期望非空列表，實際: {type(chapters).__name__}）"
-        print(f"⚠️ {error_msg}")
-        print(f"   LLM 原始響應（前500字符）: {response[:500] if response else 'None'}")
-        raise ValueError(error_msg)
-    
-    return parsed
+    # 所有重试都失败
+    if last_error:
+        raise RuntimeError(f"LLM 章節選擇失敗（已重試 {max_retries} 次）: {str(last_error)}")
+    raise RuntimeError(f"LLM 章節選擇失敗（已重試 {max_retries} 次）：未知錯誤")
 
 
-def _fallback_catalog_selection(catalog: List[Dict[str, Any]], top_n: int = 3) -> Dict[str, Any]:
-    selected = []
-    for entry in catalog[:top_n]:
-        selected.append({
-            "chapter_title": entry.get("chapter_title"),
-            "chapter_key": entry.get("chapter_key"),
-            "chunk_id": entry.get("chunk_id"),
-            "sections": entry.get("sections", [])[:1],
-            "reason": "依預設順序選取（LLM未提供結果）"
+def _extract_chunk_ids_from_text(text: str, catalog: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Fallback: 从文本中提取chunk_id，即使JSON解析失败也能工作"""
+    if not text or not catalog:
+        return {}
+    
+    # 构建catalog中所有可能的chunk_id映射
+    all_chunk_ids = {}
+    all_chapter_titles = {}
+    all_section_titles = {}
+    all_subsection_titles = {}
+    
+    for entry in catalog:
+        chunk_id = entry.get("chunk_id") or ""
+        chapter_title = entry.get("chapter_title") or ""
+        if chunk_id:
+            all_chunk_ids[chunk_id] = {
+                "type": "chapter",
+                "chapter_title": chapter_title,
+                "chapter_key": entry.get("chapter_key", ""),
+            }
+            all_chapter_titles[chapter_title.lower()] = chunk_id
+        
+        for section in entry.get("sections", []):
+            sec_chunk_id = section.get("chunk_id") or ""
+            section_title = section.get("section_title") or ""
+            if sec_chunk_id:
+                all_chunk_ids[sec_chunk_id] = {
+                    "type": "section",
+                    "section_title": section_title,
+                    "section_key": section.get("section_key", ""),
+                    "chapter_chunk_id": chunk_id,
+                }
+                all_section_titles[section_title.lower()] = sec_chunk_id
+            
+            for subsection in section.get("subsections", []):
+                sub_chunk_id = subsection.get("chunk_id") or ""
+                subsection_title = subsection.get("subsection_title") or ""
+                if sub_chunk_id:
+                    all_chunk_ids[sub_chunk_id] = {
+                        "type": "subsection",
+                        "subsection_title": subsection_title,
+                        "subsection_key": subsection.get("subsection_key", ""),
+                        "subsection_no": subsection.get("subsection_no", ""),
+                        "section_chunk_id": sec_chunk_id,
+                        "chapter_chunk_id": chunk_id,
+                    }
+                    all_subsection_titles[subsection_title.lower()] = sub_chunk_id
+    
+    # 尝试从文本中提取chunk_id
+    found_chapters = {}
+    found_sections = {}
+    found_subsections = {}
+    
+    # 方法1: 直接搜索chunk_id（格式通常是 doc_id_chapter_xxx 或类似）
+    chunk_id_pattern = r'["\']?chunk_id["\']?\s*:\s*["\']([^"\']+)["\']'
+    for match in re.finditer(chunk_id_pattern, text, re.IGNORECASE):
+        chunk_id = match.group(1).strip()
+        if chunk_id in all_chunk_ids:
+            info = all_chunk_ids[chunk_id]
+            if info["type"] == "chapter":
+                found_chapters[chunk_id] = info
+            elif info["type"] == "section":
+                found_sections[chunk_id] = info
+            elif info["type"] == "subsection":
+                found_subsections[chunk_id] = info
+    
+    # 方法2: 通过标题匹配（如果chunk_id提取失败）
+    if not found_chapters and not found_sections and not found_subsections:
+        text_lower = text.lower()
+        # 尝试匹配章节标题
+        for title, chunk_id in all_chapter_titles.items():
+            if title and title in text_lower:
+                found_chapters[chunk_id] = all_chunk_ids[chunk_id]
+        
+        for title, chunk_id in all_section_titles.items():
+            if title and title in text_lower:
+                found_sections[chunk_id] = all_chunk_ids[chunk_id]
+        
+        for title, chunk_id in all_subsection_titles.items():
+            if title and title in text_lower:
+                found_subsections[chunk_id] = all_chunk_ids[chunk_id]
+    
+    # 如果没有找到任何chunk_id，返回空字典
+    if not found_chapters and not found_sections and not found_subsections:
+        return {}
+    
+    # 构建类似正常解析结果的结构
+    chapters = []
+    for chunk_id, info in found_chapters.items():
+        # 收集该章节下的节和款
+        sections = []
+        for sec_chunk_id, sec_info in found_sections.items():
+            if sec_info.get("chapter_chunk_id") == chunk_id:
+                subsections = []
+                for sub_chunk_id, sub_info in found_subsections.items():
+                    if sub_info.get("section_chunk_id") == sec_chunk_id:
+                        subsections.append({
+                            "subsection_title": sub_info.get("subsection_title", ""),
+                            "subsection_key": sub_info.get("subsection_key", ""),
+                            "subsection_no": sub_info.get("subsection_no", ""),
+                            "chunk_id": sub_chunk_id,
+                        })
+                
+                sections.append({
+                    "section_title": sec_info.get("section_title", ""),
+                    "section_key": sec_info.get("section_key", ""),
+                    "chunk_id": sec_chunk_id,
+                    "subsections": subsections,
+                })
+        
+        chapters.append({
+            "chapter_title": info.get("chapter_title", ""),
+            "chapter_key": info.get("chapter_key", ""),
+            "chunk_id": chunk_id,
+            "sections": sections,
         })
-    return {
-        "chapters": selected,
-        "thinking": "LLM選擇失敗，採用預設章節",
-        "_fallback": True
-    }
+    
+    return {"chapters": chapters, "thinking": "使用fallback提取方式從文本中提取章節信息"}
 
 
-def _prepare_selection_sets(llm_result: Dict[str, Any], fallback_catalog: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _prepare_selection_sets(llm_result: Dict[str, Any]) -> Dict[str, Any]:
     if not llm_result or not llm_result.get("chapters"):
         raise ValueError("LLM 結果無效或缺少章節信息，無法處理")
     
@@ -2699,8 +3170,12 @@ def _prepare_selection_sets(llm_result: Dict[str, Any], fallback_catalog: List[D
     chapter_titles = set()
     section_keys = set()
     section_titles = set()
+    subsection_keys = set()
+    subsection_titles = set()
+    subsection_nos = set()
     chapter_chunk_ids = set()
     section_chunk_ids = set()
+    subsection_chunk_ids = set()
     structured_details = []
     
     for chapter in llm_result.get("chapters", []):
@@ -2728,12 +3203,39 @@ def _prepare_selection_sets(llm_result: Dict[str, Any], fallback_catalog: List[D
                 section_keys.add(section_key)
             if sec_chunk_id:
                 section_chunk_ids.add(sec_chunk_id)
-            detail["sections"].append({
+            
+            section_detail = {
                 "section_title": section_title,
                 "section_key": section_key,
                 "chunk_id": sec_chunk_id,
-                "reason": section.get("reason", "")
-            })
+                "reason": section.get("reason", ""),
+                "subsections": []
+            }
+            
+            # 處理節下的款（subsections）
+            for subsection in section.get("subsections", []):
+                subsection_title = subsection.get("subsection_title") or ""
+                subsection_key = subsection.get("subsection_key") or _normalize_label(subsection_title)
+                subsection_no = subsection.get("subsection_no") or ""
+                sub_chunk_id = subsection.get("chunk_id") or ""
+                
+                subsection_titles.add(subsection_title.strip())
+                if subsection_key:
+                    subsection_keys.add(subsection_key)
+                if subsection_no:
+                    subsection_nos.add(subsection_no)
+                if sub_chunk_id:
+                    subsection_chunk_ids.add(sub_chunk_id)
+                
+                section_detail["subsections"].append({
+                    "subsection_title": subsection_title,
+                    "subsection_key": subsection_key,
+                    "subsection_no": subsection_no,
+                    "chunk_id": sub_chunk_id,
+                    "reason": subsection.get("reason", "")
+                })
+            
+            detail["sections"].append(section_detail)
         structured_details.append(detail)
     
     return {
@@ -2741,8 +3243,12 @@ def _prepare_selection_sets(llm_result: Dict[str, Any], fallback_catalog: List[D
         "chapter_keys": chapter_keys,
         "section_titles": section_titles,
         "section_keys": section_keys,
+        "subsection_titles": subsection_titles,
+        "subsection_keys": subsection_keys,
+        "subsection_nos": subsection_nos,
         "chapter_chunk_ids": chapter_chunk_ids,
         "section_chunk_ids": section_chunk_ids,
+        "subsection_chunk_ids": subsection_chunk_ids,
         "details": structured_details,
         "thinking": llm_result.get("thinking", ""),
         "fallback_used": bool(llm_result.get("_fallback"))
@@ -2750,22 +3256,133 @@ def _prepare_selection_sets(llm_result: Dict[str, Any], fallback_catalog: List[D
 
 
 def _chunk_matches_selection(metadata: Dict[str, Any], selection: Dict[str, Any]) -> bool:
-    chapter = _normalize_label(metadata.get("chapter"))
-    section = _normalize_label(metadata.get("section"))
+    """
+    判斷一個chunk是否落在LLM選中的章/節/款範圍內。
+
+    核心原則（對應論文中的實驗組E設計）：
+    - 先看 chunk_id 是否直接被選中（章/節/款 chunk 本身）。
+    - 再看 chunk 所屬的「章」是否被選中：
+        * 如果該章沒有指定任何節/款 → 整章底下所有層級（章、節、條、項、款、目）都應該參與檢索。
+        * 如果該章有指定節 → 只包含這些節及其底下（條、項、款、目）。
+        * 如果節裡又指定了款 → 只包含這些款及其底下。
+    - 不同章之間的節/款選擇是「獨立」的，不能用某一章的節/款去限制另一章。
+    """
+    chapter_label = _normalize_label(metadata.get("chapter"))
+    section_label = _normalize_label(metadata.get("section"))
+    subsection_label = _normalize_label(metadata.get("subsection"))
+    chapter_raw = (metadata.get("chapter") or "").strip()
+    section_raw = (metadata.get("section") or "").strip()
+    subsection_no = (metadata.get("subsection_no") or "").strip()
     chunk_id = (metadata.get("chunk_id") or "").strip()
-    if selection.get("chapter_chunk_ids") or selection.get("section_chunk_ids"):
+    
+    # 1. 優先通過 chunk_id 直接匹配（章 / 節 / 款本身的 chunk）
+    if selection.get("chapter_chunk_ids") or selection.get("section_chunk_ids") or selection.get("subsection_chunk_ids"):
         if chunk_id and (
             chunk_id in selection.get("chapter_chunk_ids", set())
             or chunk_id in selection.get("section_chunk_ids", set())
+            or chunk_id in selection.get("subsection_chunk_ids", set())
         ):
             return True
-    if not selection["chapter_keys"] and not selection["section_keys"]:
+    
+    # 2. 如果 selection 完全沒有任何鍵，視為不加限制（保險起見）
+    if (not selection.get("chapter_keys") 
+        and not selection.get("section_keys") 
+        and not selection.get("subsection_keys")):
         return True
-    if chapter and (chapter in selection["chapter_keys"] or metadata.get("chapter", "").strip() in selection["chapter_titles"]):
+    
+    # 3. 根據「章」找到對應的 LLM 選擇明細（per-chapter 控制）
+    chapter_detail = None
+    for ch in selection.get("details", []):
+        ch_title = (ch.get("chapter_title") or "").strip()
+        ch_key = _normalize_label(ch.get("chapter_key") or ch_title)
+        if ((chapter_label and chapter_label == ch_key) or
+            (chapter_raw and chapter_raw == ch_title)):
+            chapter_detail = ch
+            break
+    
+    if not chapter_detail:
+        # 這個 chunk 不屬於任何被 LLM 選中的章
+        return False
+    
+    # 4. 判斷「這一章」是否有指定節/款
+    chapter_sections = chapter_detail.get("sections") or []
+    if not chapter_sections:
+        # 只選了章，沒有指定任何節/款 → 整章底下所有層級都應該參與檢索
         return True
-    if section and (section in selection["section_keys"] or metadata.get("section", "").strip() in selection["section_titles"]):
-        return True
-    return False
+    
+    # 為當前章建立局部的 section / subsection 索引
+    section_keys = set()
+    section_titles = set()
+    subsection_keys = set()
+    subsection_titles = set()
+    subsection_nos = set()
+    
+    for sec in chapter_sections:
+        sec_title = (sec.get("section_title") or "").strip()
+        sec_key = _normalize_label(sec.get("section_key") or sec_title)
+        if sec_key:
+            section_keys.add(sec_key)
+        if sec_title:
+            section_titles.add(sec_title)
+        
+        for sub in sec.get("subsections") or []:
+            sub_title = (sub.get("subsection_title") or "").strip()
+            sub_key = _normalize_label(sub.get("subsection_key") or sub_title)
+            sub_no = (sub.get("subsection_no") or "").strip()
+            if sub_key:
+                subsection_keys.add(sub_key)
+            if sub_title:
+                subsection_titles.add(sub_title)
+            if sub_no:
+                subsection_nos.add(sub_no)
+    
+    # 5. 如果這一章有指定節/款，則需要檢查當前 chunk 是否落在「被點名的節」之下
+    if section_keys or section_titles or subsection_keys or subsection_titles:
+        # 先判斷 chunk 是否屬於某個被選中的節
+        in_selected_section = False
+        matched_section = None
+        for sec in chapter_sections:
+            sec_title = (sec.get("section_title") or "").strip()
+            sec_key = _normalize_label(sec.get("section_key") or sec_title)
+            if ((section_label and section_label == sec_key) or
+                (section_raw and section_raw == sec_title)):
+                in_selected_section = True
+                matched_section = sec
+                break
+        
+        if not in_selected_section:
+            # 例如：只選了 Chap_3_Sec_1，則 Chap_3 底下其他節（及其條/項）不應該被包含
+            return False
+        
+        # 6. 在該節內，若沒有指定款 → 整節底下（條／項／款／目）都應被包含
+        subsections = matched_section.get("subsections") or []
+        if not subsections:
+            return True
+        
+        # 7. 該節有指定款 → 只包含這些款及其底下
+        if subsection_label or subsection_no:
+            for sub in subsections:
+                sub_title = (sub.get("subsection_title") or "").strip()
+                sub_key = _normalize_label(sub.get("subsection_key") or sub_title)
+                sub_no = (sub.get("subsection_no") or "").strip()
+                if ((subsection_label and subsection_label == sub_key) or
+                    (subsection_label and sub_title and (metadata.get("subsection") or "").strip() == sub_title) or
+                    (subsection_no and sub_no and subsection_no == sub_no)):
+                    return True
+            
+            # 條／項 層級可能只有 subsection_no，沒有subsection文字
+            if subsection_no and subsection_no in subsection_nos:
+                return True
+            
+            # 在被選中的節內，但沒有命中任何被點名的款 → 不包含
+            return False
+        
+        # 有指定款集合，但當前 chunk 沒有任何款資訊（理論上少見），保守起見排除
+        return False
+    
+    # 8. 這一章雖然在 LLM 結果中帶有 sections 結構，但實際沒有有效的 section/subsection key，
+    #    保守起見視為「整章包含」以避免誤刪。
+    return True
 
 
 def _load_chapter_summary_cache() -> Dict[str, Any]:
@@ -2842,14 +3459,23 @@ async def _summarize_chunk_content(title: str, level: str, law_name: str, conten
     if not text:
         return ""
     excerpt = text[:4000]
+    
+    level_name_map = {
+        "法規": "法規",
+        "章": "章",
+        "節": "節",
+        "款": "款（節下的款）"
+    }
+    level_name = level_name_map.get(level, level)
+    
     system_prompt = (
-        "你是一名臺灣法律編輯，負責為章或節生成高度濃縮的摘要。"
-        "摘要需使用繁體中文，重點描述該章節規範的主題、適用對象或範圍。"
+        "你是一名臺灣法律編輯，負責為章、節或款生成高度濃縮的摘要。"
+        "摘要需使用繁體中文，重點描述該章節款規範的主題、適用對象或範圍。"
         "請避免列舉條號，只需2~3句話。"
     )
     user_prompt = (
         f"法規：{law_name}\n"
-        f"層級：{level}\n"
+        f"層級：{level_name}\n"
         f"標題：{title}\n"
         f"內容：\n{excerpt}\n\n"
         "請輸出2~3句簡潔摘要。"
@@ -2936,6 +3562,7 @@ async def ensure_chapter_summaries(
     total_new_documents = 0
     total_new_chapters = 0
     total_new_sections = 0
+    total_new_subsections = 0
     total_processed = 0
     max_items = max_items if isinstance(max_items, int) and max_items > 0 else None
     
@@ -3035,6 +3662,9 @@ async def ensure_chapter_summaries(
             if max_items and total_processed >= max_items:
                 break
         
+        # 構建節的映射，用於後續查找父節
+        section_map: Dict[str, Dict[str, Any]] = {}
+        
         if (include_sections or target_chunk_ids) and (not max_items or total_processed < max_items):
             for section_chunk in sections:
                 if max_items and total_processed >= max_items:
@@ -3049,6 +3679,9 @@ async def ensure_chapter_summaries(
                 chapter_key = _normalize_label(metadata.get("chapter") or "")
                 parent_chapter = chapter_map.get(chapter_key)
                 parent_chunk_id = parent_chapter["chunk_id"] if parent_chapter else None
+                section_key = _normalize_label(section_title)
+                section_map[section_key] = {"chunk_id": chunk_id, "metadata": metadata, "chapter_key": chapter_key}
+                
                 if target_chunk_ids:
                     if chunk_id not in target_chunk_ids:
                         continue
@@ -3071,7 +3704,7 @@ async def ensure_chapter_summaries(
                     "title": section_title,
                     "level": "section",
                     "chapter_key": chapter_key,
-                    "section_key": _normalize_label(section_title),
+                    "section_key": section_key,
                     "parent_chapter_id": parent_chunk_id,
                     "parent_chapter_key": chapter_key,
                     "summary": summary,
@@ -3082,16 +3715,137 @@ async def ensure_chapter_summaries(
                 }
                 total_new_sections += 1
                 total_processed += 1
+        
+        # 處理「節下的款」（subsection）層級
+        total_new_subsections = 0
+        if (include_sections or target_chunk_ids) and (not max_items or total_processed < max_items) and doc.json_data:
+            # 從結構化JSON數據中提取subsection（節下的款）
+            json_data = doc.json_data
+            laws = json_data.get("laws", []) if isinstance(json_data, dict) and "laws" in json_data else [json_data] if isinstance(json_data, dict) else []
+            
+            for law_data in laws:
+                if max_items and total_processed >= max_items:
+                    break
+
+                chapters_data = law_data.get("chapters", []) or []
+                for chapter_data in chapters_data:
+                    if max_items and total_processed >= max_items:
+                        break
+                    
+                    chapter_title = chapter_data.get("chapter", "")
+                    chapter_key = _normalize_label(chapter_title)
+                    
+                    sections_data = chapter_data.get("sections", [])
+                    for section_data in sections_data:
+                        if max_items and total_processed >= max_items:
+                            break
+                        
+                        section_title = section_data.get("section", "")
+                        section_key = _normalize_label(section_title)
+                        parent_section = section_map.get(section_key)
+                        
+                        if not parent_section:
+                            continue
+                        
+                        parent_section_chunk_id = parent_section["chunk_id"]
+                        
+                        # 提取節下的款（subsections）
+                        subsections_data = section_data.get("subsections", [])
+                        for subsection_data in subsections_data:
+                            if max_items and total_processed >= max_items:
+                                break
+                            
+                            subsection_title = subsection_data.get("subsection", "")
+                            if not subsection_title or subsection_title in {"未分類款", "未分類"}:
+                                continue
+                            
+                            # 構建subsection的內容（包含該款下的所有條文）
+                            subsection_content_parts = [subsection_title]
+                            
+                            # 收集該款下的條文內容
+                            articles_data = subsection_data.get("articles", [])
+                            for article_data in articles_data:
+                                article_title = article_data.get("article", "")
+                                article_content = article_data.get("content", "")
+                                if article_title:
+                                    subsection_content_parts.append(f"{article_title}")
+                                if article_content:
+                                    subsection_content_parts.append(article_content.strip())
+                                
+                                # 也包含條文下的項、款、目
+                                paragraphs_data = article_data.get("paragraphs", [])
+                                for para_data in paragraphs_data:
+                                    para_content = para_data.get("content", "")
+                                    if para_content:
+                                        subsection_content_parts.append(para_content.strip())
+                                    
+                                    subparagraphs_data = para_data.get("subparagraphs", [])
+                                    for subpara_data in subparagraphs_data:
+                                        subpara_content = subpara_data.get("content", "")
+                                        if subpara_content:
+                                            subsection_content_parts.append(subpara_content.strip())
+                                        
+                                        items_data = subpara_data.get("items", [])
+                                        for item_data in items_data:
+                                            item_content = item_data.get("content", "")
+                                            if item_content:
+                                                subsection_content_parts.append(item_content.strip())
+                            
+                            subsection_content = "\n".join(subsection_content_parts)
+                            
+                            # 生成subsection的chunk_id
+                            subsection_no = subsection_data.get("subsection_no", "")
+                            subsection_chunk_id = f"Sub_{section_key}_{subsection_no}" if subsection_no else f"Sub_{section_key}_{_normalize_label(subsection_title)}"
+                            
+                            if target_chunk_ids and subsection_chunk_id not in target_chunk_ids:
+                                continue
+                            
+                            entry_key = f"{doc.id}:{subsection_chunk_id}"
+                            content_hash = hashlib.md5(subsection_content.encode("utf-8", "ignore")).hexdigest()
+                            existing = cache["entries"].get(entry_key)
+                            if existing and existing.get("content_hash") == content_hash:
+                                continue
+                            
+                            # 生成subsection摘要
+                            summary = await _summarize_chunk_content(subsection_title, "款", law_name, subsection_content)
+                            routing_summary = await _generate_routing_summary(subsection_chunk_id, subsection_title, subsection_content)
+                            
+                            subsection_key = _normalize_label(subsection_title)
+                            cache["entries"][entry_key] = {
+                                "chunk_id": subsection_chunk_id,
+                                "doc_id": doc.id,
+                                "doc_name": doc.filename,
+                                "law_name": law_name,
+                                "title": subsection_title,
+                                "level": "subsection",
+                                "chapter_key": chapter_key,
+                                "section_key": section_key,
+                                "subsection_key": subsection_key,
+                                "subsection_no": subsection_no,
+                                "parent_chapter_id": chapter_map.get(chapter_key, {}).get("chunk_id") if chapter_key in chapter_map else None,
+                                "parent_chapter_key": chapter_key,
+                                "parent_section_id": parent_section_chunk_id,
+                                "parent_section_key": section_key,
+                                "summary": summary,
+                                "routing_summary": routing_summary,
+                                "content_hash": content_hash,
+                                "word_count": len(subsection_content),
+                                "last_updated": datetime.now().isoformat(),
+                            }
+                            total_new_subsections += 1
+                            total_processed += 1
+        
         if max_items and total_processed >= max_items:
             break
     
-    if total_new_documents or total_new_chapters or total_new_sections:
+    if total_new_documents or total_new_chapters or total_new_sections or total_new_subsections:
         _save_chapter_summary_cache()
     
     return {
         "documents_updated": total_new_documents,
         "chapters_updated": total_new_chapters,
         "sections_updated": total_new_sections,
+        "subsections_updated": total_new_subsections,
         "total_entries": len(_get_chapter_summary_entries()),
         "doc_id": doc_id,
     }
@@ -3145,11 +3899,20 @@ async def _build_chapter_section_catalog(
     
     chapters = [e for e in entries if e.get("level") == "chapter"]
     sections = [e for e in entries if e.get("level") == "section"]
+    subsections = [e for e in entries if e.get("level") == "subsection"]
+    
+    # 構建父子關係映射
     sections_by_parent: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for section in sections:
         parent_id = section.get("parent_chapter_id") or section.get("parent_chapter_key")
         if parent_id:
             sections_by_parent[parent_id].append(section)
+    
+    subsections_by_parent: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for subsection in subsections:
+        parent_id = subsection.get("parent_section_id") or subsection.get("parent_section_key")
+        if parent_id:
+            subsections_by_parent[parent_id].append(subsection)
     
     catalog: List[Dict[str, Any]] = []
     chapters_sorted = sorted(
@@ -3161,14 +3924,19 @@ async def _build_chapter_section_catalog(
     )
     
     for chapter in chapters_sorted:
+        routing_summary = chapter.get("routing_summary") or ""
+        general_summary = chapter.get("summary") or ""
+        display_summary = routing_summary or general_summary
+        
         chapter_entry = {
             "doc_id": chapter.get("doc_id"),
             "law_name": chapter.get("law_name"),
             "chapter_title": chapter.get("title"),
             "chapter_key": chapter.get("chapter_key"),
             "chunk_id": chapter.get("chunk_id"),
-            "summary": chapter.get("routing_summary") or chapter.get("summary"),
-            "routing_summary": chapter.get("routing_summary") or chapter.get("summary"),
+            "summary": display_summary,
+            "routing_summary": routing_summary or general_summary,
+            "general_summary": general_summary or routing_summary,
             "last_updated": chapter.get("last_updated"),
             "section_count": 0,
             "sections": [],
@@ -3179,17 +3947,48 @@ async def _build_chapter_section_catalog(
         section_list = sorted(section_list, key=lambda s: s.get("title") or "")
         if max_sections_per_chapter:
             section_list = section_list[:max_sections_per_chapter]
-        chapter_entry["sections"] = [
-            {
+        
+        # 為每個節添加其下的款（subsections）
+        section_entries = []
+        for section in section_list:
+            section_id = section.get("chunk_id") or section.get("section_key")
+            subsection_list = subsections_by_parent.get(section_id, [])
+            subsection_list = sorted(subsection_list, key=lambda s: (s.get("subsection_no") or "", s.get("title") or ""))
+            
+            section_routing_summary = section.get("routing_summary") or ""
+            section_general_summary = section.get("summary") or ""
+            section_display_summary = section_routing_summary or section_general_summary
+            
+            section_entry = {
                 "chunk_id": section.get("chunk_id"),
                 "section_title": section.get("title"),
                 "section_key": section.get("section_key"),
-                    "summary": section.get("routing_summary") or section.get("summary"),
-                    "routing_summary": section.get("routing_summary") or section.get("summary"),
+                "summary": section_display_summary,
+                "routing_summary": section_routing_summary or section_general_summary,
+                "general_summary": section_general_summary or section_routing_summary,
                 "last_updated": section.get("last_updated"),
+                "subsection_count": len(subsection_list),
+                "subsections": [],
             }
-            for section in section_list
-        ]
+            
+            for subsection in subsection_list:
+                subsection_routing_summary = subsection.get("routing_summary") or ""
+                subsection_general_summary = subsection.get("summary") or ""
+                subsection_display_summary = subsection_routing_summary or subsection_general_summary
+                
+                section_entry["subsections"].append({
+                    "chunk_id": subsection.get("chunk_id"),
+                    "subsection_title": subsection.get("title"),
+                    "subsection_key": subsection.get("subsection_key"),
+                    "subsection_no": subsection.get("subsection_no"),
+                    "summary": subsection_display_summary,
+                    "routing_summary": subsection_routing_summary or subsection_general_summary,
+                    "general_summary": subsection_general_summary or subsection_routing_summary,
+                    "last_updated": subsection.get("last_updated"),
+                })
+            section_entries.append(section_entry)
+        
+        chapter_entry["sections"] = section_entries
         catalog.append(chapter_entry)
         if limit_chapters and len(catalog) >= limit_chapters:
             break
@@ -3197,6 +3996,9 @@ async def _build_chapter_section_catalog(
     return catalog
 
 
+# 注意：GROUP_E_LEVELS 和 GROUP_E_LEVEL_WEIGHTS 已廢棄
+# 實驗組E現在使用和A、B、C、D相同的檢索方式，無權重設置
+# 保留以下定義僅用於向後兼容（如果其他地方還有引用）
 GROUP_E_LEVELS = ["basic_unit", "basic_unit_component", "enumeration"]
 GROUP_E_LEVEL_WEIGHTS = {
     "basic_unit": 1.0,
@@ -3253,6 +4055,10 @@ async def _retrieve_level_with_selection(
     selection: Dict[str, Any],
     k: int
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    注意：此函數已廢棄，實驗組E現在使用標準檢索方式
+    保留此函數僅用於向後兼容（如果其他地方還有引用）
+    """
     candidate_pack = _prepare_candidate_indices(level_name, selection)
     if not candidate_pack:
         return [], {"candidates": 0, "selected": 0}
@@ -3263,7 +4069,8 @@ async def _retrieve_level_with_selection(
     
     sims = cosine_similarity([query_vector], vectors)[0]
     order = np.argsort(sims)[::-1][:k]
-    weight = GROUP_E_LEVEL_WEIGHTS.get(level_name, 1.0)
+    # 移除權重應用，使用原始相似度
+    # weight = GROUP_E_LEVEL_WEIGHTS.get(level_name, 1.0)
     
     results = []
     for rank_idx in order:
@@ -3271,7 +4078,7 @@ async def _retrieve_level_with_selection(
         chunk_id = metadata.get("chunk_id") or candidate_pack["doc_ids"][rank_idx]
         result = {
             "content": candidate_pack["chunks"][rank_idx],
-            "similarity": float(sims[rank_idx]) * weight,
+            "similarity": float(sims[rank_idx]),  # 使用原始相似度，不應用權重
             "raw_similarity": float(sims[rank_idx]),
             "doc_id": candidate_pack["doc_ids"][rank_idx],
             "chunk_id": chunk_id,
@@ -3283,14 +4090,14 @@ async def _retrieve_level_with_selection(
     contribution = {
         "candidates": len(candidate_pack["metadata"]),
         "selected": len(results),
-        "weight": weight
+        "weight": 1.0  # 權重固定為1.0
     }
     return results, contribution
 
 
 async def _run_experimental_group_e_pipeline(query: str, k: int, doc_id: Optional[str] = None) -> Dict[str, Any]:
     # 強制使用已知的正確 doc_id（與 chapter_summaries.json 一致）
-    KNOWN_GROUP_E_DOC_ID = "71c23286-d3fb-4982-a2e2-33a931687c5d"
+    KNOWN_GROUP_E_DOC_ID = "310e4850-2ab1-437c-842d-c02792c982cb"
     if not doc_id or doc_id != KNOWN_GROUP_E_DOC_ID:
         original_doc_id = doc_id
         print(
@@ -3307,19 +4114,16 @@ async def _run_experimental_group_e_pipeline(query: str, k: int, doc_id: Optiona
     if not catalog:
         raise HTTPException(status_code=400, detail=f"無法為 doc_id={doc_id} 構建章節目錄，請確認該文檔是否有章節摘要")
     
-    # 嘗試使用 LLM 選擇章節，失敗時使用 fallback
+    # 嘗試使用 LLM 選擇章節，失敗時直接回報錯誤
     llm_raw = None
     fallback_used = False
     try:
         llm_raw = await _llm_select_relevant_chapters(query, catalog)
-        selection = _prepare_selection_sets(llm_raw, catalog)
+        selection = _prepare_selection_sets(llm_raw)
     except (RuntimeError, ValueError) as e:
-        error_msg = str(e)
-        print(f"⚠️ LLM 章節選擇失敗，使用 fallback 機制: {error_msg}")
-        # 使用 fallback 機制：選擇前3個章節
-        llm_raw = _fallback_catalog_selection(catalog, top_n=3)
-        selection = _prepare_selection_sets(llm_raw, catalog)
-        fallback_used = True
+        error_msg = f"LLM 章節選擇失敗: {e}"
+        print(f"❌ {error_msg}")
+        raise HTTPException(status_code=500, detail=error_msg)
     
     query_vector = await _embed_query_vector(query)
     if query_vector is None:
@@ -3335,20 +4139,7 @@ async def _run_experimental_group_e_pipeline(query: str, k: int, doc_id: Optiona
         level_contributions[level_name] = contribution
     
     if not combined_results:
-        # 如果選擇過於嚴苛，放寬限制重新檢索
-        relaxed_selection = {
-            "chapter_titles": set(),
-            "chapter_keys": set(),
-            "section_titles": set(),
-            "section_keys": set()
-        }
-        fallback_used = True  # 標記使用了完全放寬的 fallback
-        for level_name in GROUP_E_LEVELS:
-            level_results, contribution = await _retrieve_level_with_selection(query_vector, level_name, relaxed_selection, k)
-            if level_results:
-                combined_results.extend(level_results)
-                level_contributions[level_name] = contribution
-    
+        raise HTTPException(status_code=404, detail="LLM 選擇的章節未找到任何候選，請重新提問或檢查摘要")
     combined_results.sort(key=lambda x: x["similarity"], reverse=True)
     fused_results = combined_results[:k]
     
@@ -4806,6 +5597,8 @@ async def multi_level_embed(req: Dict[str, Any]):
     for level_idx, level_name in enumerate(six_levels):
         level_chunks = []
         level_doc_ids = []
+        level_chunk_ids = []
+        level_chunk_metadatas: Dict[str, Dict[str, Any]] = {}
         
         # 收集該層次的所有chunks
         for doc_id, multi_chunks in all_multi_level_chunks.items():
@@ -4816,15 +5609,21 @@ async def multi_level_embed(req: Dict[str, Any]):
                 for chunk_data in multi_chunks[level_name]:
                     if not (isinstance(chunk_data, dict) and 'content' in chunk_data):
                         continue
+                    metadata = (chunk_data.get("metadata") or {}).copy()
+                    chunk_id = chunk_data.get("chunk_id") or metadata.get("chunk_id")
+                    if not chunk_id:
+                        chunk_id = _ensure_chunk_id_for_metadata(chunk_data, metadata, level_name)
+                    else:
+                        chunk_data["chunk_id"] = chunk_id
+                    metadata["chunk_id"] = chunk_id
+                    metadata.setdefault("doc_id", doc_id)
                     if selection_filter and level_name in GROUP_E_LEVELS:
-                        metadata = (chunk_data.get("metadata") or {}).copy()
-                        chunk_id = chunk_data.get("chunk_id")
-                        if chunk_id and not metadata.get("chunk_id"):
-                            metadata["chunk_id"] = chunk_id
                         if not _chunk_matches_selection(metadata, selection_filter):
                             continue
                     level_chunks.append(chunk_data['content'])
                     level_doc_ids.append(doc_id)
+                    level_chunk_ids.append(chunk_id)
+                    level_chunk_metadatas[chunk_id] = metadata
         
         if not level_chunks:
             print(f"⚠️ 層次 '{level_name}' 沒有可用的chunks")
@@ -4889,19 +5688,21 @@ async def multi_level_embed(req: Dict[str, Any]):
             
             # 新增：存儲到FAISS和BM25
             # 確保chunk_id包含層次信息，避免跨層次重複
-            level_chunk_ids = [f"{level_name}_{doc_id}_{i}" for i, doc_id in enumerate(level_doc_ids)]
             faiss_store.add_multi_level_vectors(level_name, vectors, level_chunk_ids, level_doc_ids, level_chunks)
             bm25_index.build_multi_level_index(level_name, level_chunks, level_chunk_ids, level_doc_ids)
             
             # 新增：批量增強該層次的metadata（可選）
             level_enhanced_metadata = {}
+            for chunk_id in level_chunk_ids:
+                base_metadata = level_chunk_metadatas.get(chunk_id, {}).copy()
+                faiss_store.set_multi_level_enhanced_metadata(level_name, chunk_id, base_metadata)
             if req.get("enable_metadata_enhancement", True):
                 print(f"🔧 開始增強層次 '{level_name}' 的metadata...")
                 level_chunks_data = [
                     {
                         "chunk_id": level_chunk_ids[i],
                         "content": level_chunks[i],
-                        "metadata": {}
+                        "metadata": level_chunk_metadatas.get(level_chunk_ids[i], {}).copy()
                     }
                     for i in range(len(level_chunks))
                 ]
@@ -4909,7 +5710,9 @@ async def multi_level_embed(req: Dict[str, Any]):
                 
                 # 設置增強metadata到FAISS存儲
                 for chunk_id, enhanced_metadata in level_enhanced_metadata.items():
-                    faiss_store.set_multi_level_enhanced_metadata(level_name, chunk_id, enhanced_metadata)
+                    merged_metadata = level_chunk_metadatas.get(chunk_id, {}).copy()
+                    merged_metadata.update(enhanced_metadata or {})
+                    faiss_store.set_multi_level_enhanced_metadata(level_name, chunk_id, merged_metadata)
             else:
                 print(f"⚠️ 跳過層次 '{level_name}' 的metadata增強")
             
@@ -6970,9 +7773,160 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
             content={"error": error_msg}
         )
     
+    # 如果指定了實驗組，確保加載對應的實驗組數據並重建索引
+    if req.experimental_group and req.experimental_group in GRANULARITY_COMBINATIONS:
+        print(f"🔍 檢查實驗組 {req.experimental_group} 的embedding數據...")
+        
+        # 檢查實驗組數據是否存在
+        if req.experimental_group in store.experimental_group_embeddings:
+            print(f"✅ 找到實驗組 {req.experimental_group} 的embedding數據")
+            
+            # 加載實驗組數據到當前激活狀態
+            if store.load_experimental_group_embeddings(req.experimental_group):
+                print(f"✅ 已加載實驗組 {req.experimental_group} 的embedding數據")
+                group_data = store.experimental_group_embeddings[req.experimental_group]
+                loaded_levels = list(group_data.get("multi_level_embeddings", {}).keys())
+                print(f"   加載的層次: {loaded_levels}")
+                
+                # 重建FAISS和BM25索引（僅針對該實驗組的層次）
+                print(f"🔧 重建實驗組 {req.experimental_group} 的FAISS和BM25索引...")
+                
+                # 清除現有的多層級索引（只清除多層級，保留標準索引）
+                if faiss_store.multi_level_indices:
+                    faiss_store.multi_level_indices.clear()
+                    faiss_store.multi_level_chunk_ids.clear()
+                    faiss_store.multi_level_chunk_doc_ids.clear()
+                    faiss_store.multi_level_chunks_flat.clear()
+                    faiss_store.multi_level_enhanced_metadata.clear()
+                    faiss_store.multi_level_index_info.clear()
+                    print(f"   ✅ 已清除現有的多層級FAISS索引")
+                
+                if bm25_index.multi_level_bm25_indices:
+                    bm25_index.multi_level_bm25_indices.clear()
+                    bm25_index.multi_level_chunk_ids.clear()
+                    bm25_index.multi_level_chunk_doc_ids.clear()
+                    bm25_index.multi_level_chunks_flat.clear()
+                    bm25_index.multi_level_index_info.clear()
+                    print(f"   ✅ 已清除現有的多層級BM25索引")
+                
+                # 為該實驗組的每個層次重建索引
+                available_levels = store.get_available_levels()
+                print(f"   將為以下層次重建索引: {available_levels}")
+                
+                for level_name in available_levels:
+                    level_data = store.get_multi_level_embeddings(level_name)
+                    if level_data and level_data.get('embeddings'):
+                        vectors = level_data['embeddings']
+                        chunks = level_data.get('chunks', [])
+                        doc_ids = level_data.get('doc_ids', [])
+                        
+                        if not vectors or not chunks:
+                            print(f"   ⚠️ 層次 '{level_name}' 缺少數據，跳過")
+                            continue
+                        
+                        # 獲取該層次的chunk_ids
+                        # 嘗試從doc.multi_level_chunks中獲取chunk_id（最可靠的方法）
+                        level_chunk_ids = []
+                        doc_id_set = set(doc_ids)
+                        matched_docs = {doc_id: store.docs.get(doc_id) for doc_id in doc_id_set if store.docs.get(doc_id)}
+                        
+                        # 通過content匹配來找到對應的chunk_id
+                        chunk_content_to_id = {}
+                        for doc_id, doc in matched_docs.items():
+                            if hasattr(doc, 'multi_level_chunks') and doc.multi_level_chunks and level_name in doc.multi_level_chunks:
+                                doc_level_chunks = doc.multi_level_chunks[level_name]
+                                for chunk_data in doc_level_chunks:
+                                    chunk_content = chunk_data.get('content', '')
+                                    chunk_id = chunk_data.get('chunk_id') or chunk_data.get('metadata', {}).get('chunk_id')
+                                    if chunk_content and chunk_id:
+                                        chunk_content_to_id[chunk_content] = chunk_id
+                        
+                        # 從chunks中匹配chunk_id
+                        for i, chunk_content in enumerate(chunks):
+                            doc_id = doc_ids[i] if i < len(doc_ids) else 'unknown'
+                            # 嘗試精確匹配
+                            if chunk_content in chunk_content_to_id:
+                                level_chunk_ids.append(chunk_content_to_id[chunk_content])
+                            # 嘗試前200字符匹配（考慮可能的微小差異）
+                            elif len(chunk_content) > 100:
+                                matched = False
+                                for stored_content, stored_id in chunk_content_to_id.items():
+                                    if len(stored_content) > 100 and chunk_content[:200] == stored_content[:200]:
+                                        level_chunk_ids.append(stored_id)
+                                        matched = True
+                                        break
+                                if not matched:
+                                    # 如果無法匹配，生成chunk_id
+                                    level_chunk_ids.append(f"{doc_id}_{level_name}_{i}")
+                            else:
+                                # 如果無法匹配，生成chunk_id
+                                level_chunk_ids.append(f"{doc_id}_{level_name}_{i}")
+                        
+                        # 確保chunk_ids數量匹配
+                        if len(level_chunk_ids) != len(vectors):
+                            print(f"   ⚠️ chunk_ids數量不匹配: {len(level_chunk_ids)} vs {len(vectors)}，重新生成...")
+                            level_chunk_ids = [f"{doc_ids[i] if i < len(doc_ids) else 'unknown'}_{level_name}_{i}" for i in range(len(vectors))]
+                        
+                        # 重建FAISS索引
+                        faiss_store.add_multi_level_vectors(level_name, vectors, level_chunk_ids, doc_ids, chunks)
+                        
+                        # 重建BM25索引
+                        bm25_index.build_multi_level_index(level_name, chunks, level_chunk_ids, doc_ids)
+                        
+                        print(f"   ✅ 重建層次 '{level_name}': {len(vectors)} 個向量, {len(chunks)} 個文檔")
+                    else:
+                        print(f"   ⚠️ 層次 '{level_name}' 沒有embedding數據，跳過")
+                
+                # 保存索引
+                faiss_store.save_data()
+                bm25_index.save_data()
+                
+                # 驗證索引
+                final_faiss_levels = faiss_store.get_available_levels()
+                final_bm25_levels = bm25_index.get_available_levels()
+                print(f"✅ 實驗組 {req.experimental_group} 的索引重建完成")
+                print(f"   FAISS索引包含層次: {final_faiss_levels}")
+                print(f"   BM25索引包含層次: {final_bm25_levels}")
+                
+                # 驗證是否匹配期望的層次
+                expected_levels = set(GRANULARITY_COMBINATIONS[req.experimental_group]["levels"])
+                actual_faiss_levels = set(final_faiss_levels)
+                actual_bm25_levels = set(final_bm25_levels)
+                
+                if expected_levels != actual_faiss_levels:
+                    missing = expected_levels - actual_faiss_levels
+                    extra = actual_faiss_levels - expected_levels
+                    if missing:
+                        print(f"   ⚠️ FAISS索引缺少層次: {missing}")
+                    if extra:
+                        print(f"   ⚠️ FAISS索引包含額外層次: {extra}")
+                
+                if expected_levels != actual_bm25_levels:
+                    missing = expected_levels - actual_bm25_levels
+                    extra = actual_bm25_levels - expected_levels
+                    if missing:
+                        print(f"   ⚠️ BM25索引缺少層次: {missing}")
+                    if extra:
+                        print(f"   ⚠️ BM25索引包含額外層次: {extra}")
+            else:
+                print(f"⚠️ 警告：實驗組 {req.experimental_group} 的embedding數據加載失敗")
+        else:
+            print(f"⚠️ 警告：實驗組 {req.experimental_group} 的embedding數據不存在")
+            print(f"   已保存的實驗組: {store.list_experimental_groups()}")
+            print(f"   將使用當前激活的embedding數據（可能不匹配）")
+    
     # 檢查是否有FAISS和BM25索引（標準或多層次）
     faiss_available = faiss_store.has_vectors() or faiss_store.has_multi_level_vectors()
     bm25_available = bm25_index.has_index() or bm25_index.has_multi_level_index()
+    
+    # 顯示當前可用的層次（用於診斷）
+    if faiss_store.has_multi_level_vectors():
+        current_levels = faiss_store.get_available_levels()
+        print(f"📊 當前FAISS索引包含的層次: {current_levels}")
+    if bm25_index.has_multi_level_index():
+        current_bm25_levels = bm25_index.get_available_levels()
+        print(f"📊 當前BM25索引包含的層次: {current_bm25_levels}")
+    
     print(f"📊 索引狀態: FAISS={faiss_available}, BM25={bm25_available}")
     
     # 如果索引不可用，嘗試自動重新加載
@@ -7041,6 +7995,257 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
         )
     
     try:
+        # 實驗組E特殊處理：先進行LLM章節選擇（章、節、款）
+        selection = None
+        llm_stage = None
+        embedding_stats: Dict[str, Dict[str, int]] = {}
+
+        def _ensure_embedding_entry(level_label: str):
+            if level_label not in embedding_stats:
+                embedding_stats[level_label] = {
+                    "vector_candidates": 0,
+                    "vector_retained": 0,
+                    "bm25_candidates": 0,
+                    "bm25_retained": 0
+                }
+        if req.experimental_group == "group_e":
+            print("🎯 實驗組E：先進行LLM章節選擇，然後只在篩選後的chunks中進行向量相似度檢索...")
+            try:
+                # 獲取doc_id（從查詢請求或默認使用已知的doc_id）
+                # 注意：如果沒有傳入doc_id，使用已知的doc_id（與chapter_summaries.json一致）
+                KNOWN_GROUP_E_DOC_ID = "310e4850-2ab1-437c-842d-c02792c982cb"
+                doc_id = getattr(req, 'doc_id', None) or KNOWN_GROUP_E_DOC_ID
+                
+                catalog = await _build_chapter_section_catalog(
+                    doc_id=doc_id,
+                    limit_chapters=24,
+                    max_sections_per_chapter=3
+                )
+                if not catalog:
+                    raise HTTPException(status_code=400, detail=f"doc_id={doc_id} 缺少章節摘要，無法進行章節過濾")
+                
+                llm_raw = await _llm_select_relevant_chapters(req.query, catalog)
+                selection = _prepare_selection_sets(llm_raw)
+                llm_stage = {
+                    "selection_details": selection.get("details", []),
+                    "thinking": selection.get("thinking", ""),
+                    "fallback_used": False,
+                    "raw_response": llm_raw
+                }
+                print(f"✅ LLM章節選擇完成，選中 {len(selection.get('chapter_chunk_ids', set()))} 個章節，"
+                      f"{len(selection.get('section_chunk_ids', set()))} 個節，"
+                      f"{len(selection.get('subsection_chunk_ids', set()))} 個款")
+                
+                # 生成查詢向量
+                query_embedding_start = time.time()
+                if USE_GEMINI_EMBEDDING and GOOGLE_API_KEY:
+                    query_vector = (await embed_gemini([req.query]))[0]
+                    if not query_vector or len(query_vector) != EMBEDDING_DIMENSION:
+                        raise ValueError(f"Query vector dimension mismatch: expected {EMBEDDING_DIMENSION}, got {len(query_vector) if query_vector else 0}")
+                    query_embedding_time = time.time() - query_embedding_start
+                    print(f"✅ 使用Gemini生成查詢向量，維度: {len(query_vector)}")
+                    print(f"⏱️  查詢 Embedding 花費時間: {query_embedding_time:.3f} 秒")
+                else:
+                    raise RuntimeError(
+                        f"Gemini embedding未啟用或API key未設置。"
+                        f"USE_GEMINI_EMBEDDING={USE_GEMINI_EMBEDDING}, GOOGLE_API_KEY={'已設置' if GOOGLE_API_KEY else '未設置'}"
+                    )
+                
+                # 檢查是否有多層次索引
+                if not faiss_store.has_multi_level_vectors():
+                    raise HTTPException(status_code=400, detail="多層次索引不可用，實驗組E需要多層次向量索引")
+                
+                # 實驗組E：從所有層次中提取符合LLM選擇的chunks，然後計算向量相似度
+                print("📊 實驗組E：從多層次索引中提取符合LLM選擇的chunks...")
+                available_levels = faiss_store.get_available_levels()
+                print(f"🔍 可用層次: {available_levels}")
+                
+                # 使用實驗組D的層次配置（完整多層次：章、節、條、項、款、目）
+                group_e_levels = ["document_component", "basic_unit_hierarchy", 
+                                  "basic_unit", "basic_unit_component", "enumeration"]
+                filtered_levels = [l for l in group_e_levels if l in available_levels]
+                
+                if not filtered_levels:
+                    raise HTTPException(status_code=400, detail=f"實驗組E需要的層次 {group_e_levels} 在索引中不可用")
+                
+                print(f"🎯 實驗組E檢索層次: {filtered_levels}")
+                
+                # 收集所有符合LLM選擇的chunks
+                filtered_chunks = []  # 存儲 (chunk_info, level_name, vector) 元組
+                
+                similarity_start = time.time()
+                for level_name in filtered_levels:
+                    print(f"   📋 處理層次 '{level_name}'...")
+                    try:
+                        # 獲取該層次的所有chunks和vectors
+                        level_data = store.get_multi_level_embeddings(level_name)
+                        if not level_data:
+                            print(f"   ⚠️ 層次 '{level_name}' 沒有embedding數據")
+                            continue
+                        
+                        vectors = level_data["embeddings"]
+                        chunks = level_data["chunks"]
+                        doc_ids = level_data["doc_ids"]
+                        
+                        # 遍歷該層次的所有chunks，過濾出符合LLM選擇的
+                        for idx, (doc_id, chunk_content) in enumerate(zip(doc_ids, chunks)):
+                            # 獲取metadata
+                            metadata = _get_chunk_metadata_by_content(doc_id, level_name, chunk_content)
+                            if not metadata:
+                                continue
+                            
+                            # 檢查是否符合LLM選擇
+                            if not _chunk_matches_selection(metadata, selection):
+                                continue
+                            
+                            # 獲取chunk的完整信息
+                            chunk_id = metadata.get('chunk_id', f"{doc_id}_{level_name}_{idx}")
+                            chunk_info = {
+                                'chunk_id': chunk_id,
+                                'doc_id': doc_id,
+                                'content': chunk_content,
+                                'metadata': metadata,
+                                'level': level_name,
+                                'chunk_index': idx
+                            }
+                            
+                            # 獲取對應的向量
+                            vector = vectors[idx]
+                            filtered_chunks.append((chunk_info, level_name, vector))
+                        
+                        print(f"   ✅ 層次 '{level_name}' 處理完成")
+                        
+                    except Exception as e:
+                        print(f"   ⚠️ 層次 '{level_name}' 處理失敗: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        continue
+                
+                if not filtered_chunks:
+                    print("⚠️ 沒有找到任何符合LLM選擇的chunks")
+                    return {
+                        "results": [],
+                        "query": req.query,
+                        "final_results": 0,
+                        "fusion_method": "vector_only",
+                        "llm_stage": llm_stage,
+                        "embedding_stats": {},
+                        "level_distribution": {},
+                        "timing": {
+                            "total_time": round(time.time() - retrieval_start_time, 3),
+                            "query_embedding_time": round(query_embedding_time, 3),
+                            "similarity_time": 0.0
+                        },
+                        "warning": "No chunks matched LLM selection"
+                    }
+                
+                print(f"✅ 總共找到 {len(filtered_chunks)} 個符合LLM選擇的chunks")
+                
+                # 計算向量相似度
+                print("📊 計算向量相似度...")
+                
+                import numpy as np
+                query_vector_np = np.array([query_vector])
+                chunk_vectors = np.array([vec for _, _, vec in filtered_chunks])
+                
+                # 批量計算相似度
+                similarities = cosine_similarity(query_vector_np, chunk_vectors)[0]
+                
+                # 構建結果列表（先按相似度排序）
+                results_with_scores = []
+                for (chunk_info, level_name, _), similarity in zip(filtered_chunks, similarities):
+                    results_with_scores.append({
+                        'chunk_id': chunk_info['chunk_id'],
+                        'doc_id': chunk_info['doc_id'],
+                        'content': chunk_info['content'],
+                        'metadata': chunk_info.get('metadata', {}),
+                        'level': level_name,
+                        'chunk_index': chunk_info.get('chunk_index', 0),
+                        'vector_score': float(similarity),
+                        'similarity': float(similarity),  # 用於排序
+                        'bm25_rank': None,
+                        'bm25_score': 0.0
+                    })
+                
+                # 按相似度排序並取top-k
+                results_with_scores.sort(key=lambda x: x['similarity'], reverse=True)
+                final_results = results_with_scores[:req.k]
+                
+                # 為最終結果分配rank
+                for rank, result in enumerate(final_results, start=1):
+                    result['vector_rank'] = rank
+                
+                similarity_time = time.time() - similarity_start
+                total_time = time.time() - retrieval_start_time
+                
+                print(f"✅ 實驗組E檢索完成，返回 {len(final_results)} 個結果")
+                print(f"⏱️  相似度計算花費時間: {similarity_time:.3f} 秒")
+                print(f"⏱️  總花費時間: {total_time:.3f} 秒")
+                print(f"{'='*60}")
+                
+                # 生成層級描述
+                for result in final_results:
+                    doc_id = result.get('doc_id', 'unknown')
+                    level = result.get('level', 'basic_unit')
+                    content = result.get('content', '')
+                    original_metadata = result.get('metadata', {})
+                    
+                    if original_metadata:
+                        hierarchical_desc = generate_hierarchical_description_from_metadata(
+                            doc_id, original_metadata, content, store
+                        )
+                        result['hierarchical_description'] = hierarchical_desc
+                    else:
+                        chunk_index = result.get('chunk_index', 0)
+                        result['hierarchical_description'] = generate_hierarchical_description(
+                            doc_id, level, chunk_index, store
+                        )
+                
+                # 統計層次分佈
+                level_distribution = {}
+                for result in final_results:
+                    level = result.get('level', 'unknown')
+                    level_distribution[level] = level_distribution.get(level, 0) + 1
+                
+                # 統計信息
+                embedding_stats = {}
+                for level_name in filtered_levels:
+                    # 統計該層次在過濾後的chunks中的數量
+                    level_count = len([c for c, _, _ in filtered_chunks if c['level'] == level_name])
+                    # 統計該層次在最終結果中的數量
+                    level_retained = len([r for r in final_results if r.get('level') == level_name])
+                    embedding_stats[level_name] = {
+                        "vector_candidates": level_count,
+                        "vector_retained": level_retained,
+                        "bm25_candidates": 0,
+                        "bm25_retained": 0
+                    }
+                    print(f"   📊 層次 '{level_name}': 候選 {level_count} 個，入選 {level_retained} 個")
+                
+                return {
+                    "results": final_results,
+                    "query": req.query,
+                    "final_results": len(final_results),
+                    "fusion_method": "vector_only",
+                    "llm_stage": llm_stage,
+                    "embedding_stats": embedding_stats,
+                    "level_distribution": level_distribution,
+                    "timing": {
+                        "total_time": round(total_time, 3),
+                        "query_embedding_time": round(query_embedding_time, 3),
+                        "similarity_time": round(similarity_time, 3)
+                    }
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                error_msg = f"實驗組E檢索失敗: {e}"
+                print(f"❌ {error_msg}")
+                import traceback
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=error_msg)
+        
         # 1. 向量檢索 - 生成查詢向量
         print("📊 執行向量檢索...")
         # 記錄查詢 embedding 開始時間
@@ -7111,12 +8316,23 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
         # 只有在沒有多層次索引時才使用標準索引
         if use_multi_level_index:
             # 多層次索引檢索：檢索所有層次並合併（實驗組B、C、D）
-            print(f"✅ 使用多層次索引進行檢索（實驗組B/C/D）")
+            print(f"✅ 使用多層次索引進行檢索")
             available_levels = faiss_store.get_available_levels()
             print(f"🔍 多層次索引可用層次: {available_levels}")
             
-            # 根據可用層次推斷實驗組並過濾層次
-            filtered_levels = available_levels.copy()
+            # 如果明確指定了實驗組，使用該實驗組的層級配置
+            if req.experimental_group and req.experimental_group in GRANULARITY_COMBINATIONS:
+                combination = GRANULARITY_COMBINATIONS[req.experimental_group]
+                selected_levels = combination["levels"]
+                # 過濾出可用且屬於該實驗組的層級
+                filtered_levels = [l for l in selected_levels if l in available_levels]
+                print(f"🎯 明確指定實驗組: {req.experimental_group} ({combination['name']})，檢索層級: {filtered_levels}")
+                if len(filtered_levels) < len(selected_levels):
+                    missing_levels = [l for l in selected_levels if l not in available_levels]
+                    print(f"⚠️ 警告：實驗組 {req.experimental_group} 需要層級 {selected_levels}，但缺少: {missing_levels}")
+            else:
+                # 根據可用層次推斷實驗組並過濾層次（向後兼容）
+                filtered_levels = available_levels.copy()
             level_set = set(available_levels)
             
             print(f"📊 開始推斷實驗組，可用層次: {available_levels}, level_set: {level_set}")
@@ -7159,10 +8375,26 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                 # 無法確定實驗組，使用所有可用層次
                 print(f"⚠️ 無法推斷實驗組，使用所有可用層次: {filtered_levels}")
             
+            # 診斷信息：顯示實際檢索的層次
+            if req.experimental_group in ["group_c", "group_d"]:
+                expected_levels = GRANULARITY_COMBINATIONS.get(req.experimental_group, {}).get("levels", [])
+                print(f"🔍 實驗組 {req.experimental_group} 向量檢索診斷:")
+                print(f"   期望層次: {expected_levels}")
+                print(f"   實際檢索層次: {filtered_levels}")
+                missing_levels = [l for l in expected_levels if l not in filtered_levels]
+                if missing_levels:
+                    print(f"   ⚠️ 缺少層次: {missing_levels}")
+                extra_levels = [l for l in filtered_levels if l not in expected_levels]
+                if extra_levels:
+                    print(f"   ⚠️ 額外層次: {extra_levels}")
+            
             for level_name in filtered_levels:
                 try:
                     level_indices, level_scores = faiss_store.search_multi_level(level_name, query_vector, req.k * 10)
                     print(f"   ✅ 層次 '{level_name}' 返回 {len(level_indices)} 個候選")
+                    _ensure_embedding_entry(level_name)
+                    embedding_stats[level_name]["vector_candidates"] += len(level_indices)
+                    vector_kept = 0
                     
                     # 為該層次的結果分配rank
                     for rank, (idx, score) in enumerate(zip(level_indices, level_scores), start=1):
@@ -7218,6 +8450,18 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                                             except (ValueError, IndexError, AttributeError) as e:
                                                 print(f"⚠️ 解析chunk_id失敗: {chunk_id}, 錯誤: {e}")
                                 
+                                # 實驗組E：根據LLM選擇的章節過濾（檢查所有層級，包括章、節層級）
+                                if req.experimental_group == "group_e" and selection:
+                                    # 合併所有metadata源來檢查匹配
+                                    combined_metadata = {}
+                                    combined_metadata.update(original_metadata)
+                                    combined_metadata.update(enhanced_metadata)
+                                    combined_metadata['chunk_id'] = chunk_id
+                                    
+                                    if not _chunk_matches_selection(combined_metadata, selection):
+                                        continue  # 跳過不符合選擇的chunk
+                                vector_kept += 1
+                                
                                 all_candidates[chunk_id] = {
                                     'chunk_id': chunk_id,
                                     'doc_id': doc_id,
@@ -7231,19 +8475,35 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                                     'bm25_rank': None,
                                     'bm25_score': 0.0
                                 }
+                    embedding_stats[level_name]["vector_retained"] += vector_kept
                 except Exception as e:
                     print(f"   ⚠️ 層次 '{level_name}' 檢索失敗: {e}")
         elif use_standard_index:
             # 標準索引檢索（實驗組A）
+            if req.experimental_group and req.experimental_group != "group_a":
+                print(f"⚠️ 警告：指定了實驗組 {req.experimental_group}，但只有標準索引（實驗組A）可用")
             print(f"✅ 使用標準索引進行檢索（實驗組A）")
             vector_indices, vector_scores = faiss_store.search(query_vector, req.k * 10)
             print(f"✅ 標準向量檢索返回 {len(vector_indices)} 個候選")
+            level_label = "standard"
+            _ensure_embedding_entry(level_label)
+            embedding_stats[level_label]["vector_candidates"] += len(vector_indices)
+            vector_kept = 0
             
             # 為向量結果分配rank
             for rank, (idx, score) in enumerate(zip(vector_indices, vector_scores), start=1):
                 chunk_info = faiss_store.get_chunk_by_index(idx)
                 if chunk_info and 'chunk_id' in chunk_info:
                     chunk_id = chunk_info['chunk_id']
+                    
+                    # 實驗組E：根據LLM選擇的章節過濾
+                    if req.experimental_group == "group_e" and selection:
+                        combined_metadata = chunk_info.get('enhanced_metadata', {}).copy()
+                        combined_metadata['chunk_id'] = chunk_id
+                        if not _chunk_matches_selection(combined_metadata, selection):
+                            continue  # 跳過不符合選擇的chunk
+                    
+                    vector_kept += 1
                     all_candidates[chunk_id] = {
                         'chunk_id': chunk_id,
                         'doc_id': chunk_info.get('doc_id', 'unknown'),
@@ -7256,6 +8516,7 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                         'bm25_rank': None,
                         'bm25_score': 0.0
                     }
+            embedding_stats[level_label]["vector_retained"] += vector_kept
         else:
             print("⚠️ FAISS索引不可用，跳過向量檢索")
         
@@ -7276,37 +8537,109 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
             print(f"🔍 多層次BM25索引可用層次: {available_bm25_levels}")
             
             # 使用與向量檢索相同的過濾邏輯
-            # 優先檢測實驗組C：包含basic_unit_component和enumeration，但不應該包含basic_unit_hierarchy
-            bm25_levels = available_bm25_levels.copy()
-            bm25_level_set = set(available_bm25_levels)
+            if req.experimental_group and req.experimental_group in GRANULARITY_COMBINATIONS:
+                # 如果明確指定了實驗組，使用該實驗組的層級配置
+                combination = GRANULARITY_COMBINATIONS[req.experimental_group]
+                selected_levels = combination["levels"]
+                bm25_levels = [l for l in selected_levels if l in available_bm25_levels]
+                print(f"🎯 BM25檢索：明確指定實驗組: {req.experimental_group}，檢索層級: {bm25_levels}")
+            else:
+                # 使用與向量檢索完全相同的推斷邏輯（向後兼容）
+                bm25_levels = available_bm25_levels.copy()
+                bm25_level_set = set(available_bm25_levels)
+                
+                if "basic_unit_component" in bm25_level_set and "enumeration" in bm25_level_set:
+                    # 實驗組C：必須過濾掉basic_unit_hierarchy和其他不應該有的層次
+                    bm25_levels = [l for l in available_bm25_levels if l in ["basic_unit", "basic_unit_component", "enumeration"]]
+                    if "basic_unit_hierarchy" in bm25_level_set or "document" in bm25_level_set or "document_component" in bm25_level_set:
+                        removed_levels = [l for l in bm25_level_set if l not in ["basic_unit", "basic_unit_component", "enumeration"]]
+                        print(f"🎯 BM25檢索：檢測到實驗組C特徵，過濾掉不應有的層次: {removed_levels}")
+                        print(f"   ✅ BM25只檢索: {bm25_levels}")
+                elif bm25_level_set == {"basic_unit"}:
+                    bm25_levels = ["basic_unit"]
+                elif bm25_level_set == {"basic_unit_hierarchy", "basic_unit"}:
+                    bm25_levels = ["basic_unit_hierarchy", "basic_unit"]
+                elif len(bm25_level_set) == 6 or ("document" in bm25_level_set and len(bm25_level_set) >= 4):
+                    bm25_levels = available_bm25_levels
+                elif "basic_unit_hierarchy" in bm25_level_set and "basic_unit" in bm25_level_set:
+                    bm25_levels = ["basic_unit_hierarchy", "basic_unit"]
             
-            # 使用與向量檢索完全相同的推斷邏輯
-            if "basic_unit_component" in bm25_level_set and "enumeration" in bm25_level_set:
-                # 實驗組C：必須過濾掉basic_unit_hierarchy和其他不應該有的層次
-                bm25_levels = [l for l in available_bm25_levels if l in ["basic_unit", "basic_unit_component", "enumeration"]]
-                if "basic_unit_hierarchy" in bm25_level_set or "document" in bm25_level_set or "document_component" in bm25_level_set:
-                    removed_levels = [l for l in bm25_level_set if l not in ["basic_unit", "basic_unit_component", "enumeration"]]
-                    print(f"🎯 BM25檢索：檢測到實驗組C特徵，過濾掉不應有的層次: {removed_levels}")
-                    print(f"   ✅ BM25只檢索: {bm25_levels}")
-            elif bm25_level_set == {"basic_unit"}:
-                bm25_levels = ["basic_unit"]
-            elif bm25_level_set == {"basic_unit_hierarchy", "basic_unit"}:
-                bm25_levels = ["basic_unit_hierarchy", "basic_unit"]
-            elif len(bm25_level_set) == 6 or ("document" in bm25_level_set and len(bm25_level_set) >= 4):
-                bm25_levels = available_bm25_levels
-            elif "basic_unit_hierarchy" in bm25_level_set and "basic_unit" in bm25_level_set:
-                bm25_levels = ["basic_unit_hierarchy", "basic_unit"]
+            # 診斷信息：顯示BM25實際檢索的層次
+            if req.experimental_group in ["group_c", "group_d"]:
+                expected_levels = GRANULARITY_COMBINATIONS.get(req.experimental_group, {}).get("levels", [])
+                print(f"🔍 實驗組 {req.experimental_group} BM25檢索診斷:")
+                print(f"   期望層次: {expected_levels}")
+                print(f"   實際檢索層次: {bm25_levels}")
+                missing_levels = [l for l in expected_levels if l not in bm25_levels]
+                if missing_levels:
+                    print(f"   ⚠️ 缺少層次: {missing_levels}")
+                extra_levels = [l for l in bm25_levels if l not in expected_levels]
+                if extra_levels:
+                    print(f"   ⚠️ 額外層次: {extra_levels}")
             
             for level_name in bm25_levels:
                 try:
-                    level_indices, level_scores = bm25_index.search_multi_level(level_name, req.query, req.k * 10)
-                    print(f"   ✅ 層次 '{level_name}' BM25返回 {len(level_indices)} 個候選")
+                    # 獲取該層次的實際文檔數量
+                    level_doc_count = 0
+                    if hasattr(bm25_index, 'multi_level_chunks_flat') and bm25_index.multi_level_chunks_flat:
+                        level_doc_count = len(bm25_index.multi_level_chunks_flat.get(level_name, []))
+                    elif hasattr(bm25_index, 'multi_level_bm25_indices') and level_name in bm25_index.multi_level_bm25_indices:
+                        # 從BM25索引中獲取文檔數量
+                        bm25_obj = bm25_index.multi_level_bm25_indices[level_name]
+                        if hasattr(bm25_obj, 'doc_freqs'):
+                            level_doc_count = len(bm25_obj.doc_freqs)
+                    
+                    requested_k = req.k * 10
+                    level_indices, level_scores = bm25_index.search_multi_level(level_name, req.query, requested_k)
+                    actual_returned = len(level_indices)
+                    
+                    # 顯示詳細信息
+                    if level_doc_count > 0:
+                        print(f"   ✅ 層次 '{level_name}' BM25返回 {actual_returned} 個候選（請求: {requested_k}，實際文檔數: {level_doc_count}）")
+                        if actual_returned == requested_k and actual_returned >= level_doc_count:
+                            print(f"      ⚠️ 注意：返回數量等於請求數量且大於等於實際文檔數，可能所有文檔都被返回")
+                    else:
+                        print(f"   ✅ 層次 '{level_name}' BM25返回 {actual_returned} 個候選（請求: {requested_k}）")
+                    
+                    _ensure_embedding_entry(level_name)
+                    embedding_stats[level_name]["bm25_candidates"] += actual_returned
+                    bm25_kept = 0
                     
                     # 為該層次的結果分配rank並合併
                     for rank, (idx, score) in enumerate(zip(level_indices, level_scores), start=1):
                         chunk_info = bm25_index.get_multi_level_chunk_by_index(level_name, idx)
                         if chunk_info and 'chunk_id' in chunk_info:
                             chunk_id = chunk_info['chunk_id']
+                            
+                            # 實驗組E：根據LLM選擇的章節過濾（檢查所有層級）
+                            if req.experimental_group == "group_e" and selection:
+                                # 嘗試從doc的multi_level_chunks中獲取metadata
+                                doc_id = chunk_info.get('doc_id', 'unknown')
+                                original_metadata = {}
+                                doc = store.docs.get(doc_id) if doc_id != 'unknown' else None
+                                if doc and hasattr(doc, 'multi_level_chunks') and doc.multi_level_chunks:
+                                    if level_name in doc.multi_level_chunks:
+                                        doc_level_chunks = doc.multi_level_chunks[level_name]
+                                        content = chunk_info.get('content', '')
+                                        for chunk_data in doc_level_chunks:
+                                            chunk_content = chunk_data.get('content', '')
+                                            if chunk_content == content or (
+                                                len(chunk_content) > 100 and 
+                                                len(content) > 100 and
+                                                chunk_content[:200] == content[:200]
+                                            ):
+                                                original_metadata = chunk_data.get('metadata', {})
+                                                break
+                                
+                                combined_metadata = {}
+                                combined_metadata.update(original_metadata)
+                                combined_metadata.update(chunk_info.get('enhanced_metadata', {}))
+                                combined_metadata['chunk_id'] = chunk_id
+                                
+                                if not _chunk_matches_selection(combined_metadata, selection):
+                                    continue  # 跳過不符合選擇的chunk
+                            bm25_kept += 1
+                            
                             if chunk_id in all_candidates:
                                 all_candidates[chunk_id]['bm25_rank'] = rank
                                 all_candidates[chunk_id]['bm25_score'] = float(score)
@@ -7323,18 +8656,32 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                                     'bm25_rank': rank,
                                     'bm25_score': float(score)
                                 }
+                    embedding_stats[level_name]["bm25_retained"] += bm25_kept
                 except Exception as e:
                     print(f"   ⚠️ 層次 '{level_name}' BM25檢索失敗: {e}")
         elif bm25_index.has_index():
             # 標準BM25檢索
             bm25_indices, bm25_scores = bm25_index.search(req.query, req.k * 10)
             print(f"✅ 標準BM25檢索返回 {len(bm25_indices)} 個候選")
+            level_label = "standard"
+            _ensure_embedding_entry(level_label)
+            embedding_stats[level_label]["bm25_candidates"] += len(bm25_indices)
+            bm25_kept = 0
             
             # 為BM25結果分配rank並合併
             for rank, (idx, score) in enumerate(zip(bm25_indices, bm25_scores), start=1):
                 chunk_info = bm25_index.get_chunk_by_index(idx)
                 if chunk_info and 'chunk_id' in chunk_info:
                     chunk_id = chunk_info['chunk_id']
+                    
+                    # 實驗組E：根據LLM選擇的章節過濾
+                    if req.experimental_group == "group_e" and selection:
+                        combined_metadata = chunk_info.get('enhanced_metadata', {}).copy()
+                        combined_metadata['chunk_id'] = chunk_id
+                        if not _chunk_matches_selection(combined_metadata, selection):
+                            continue  # 跳過不符合選擇的chunk
+                    
+                    bm25_kept += 1
                     if chunk_id in all_candidates:
                         all_candidates[chunk_id]['bm25_rank'] = rank
                         all_candidates[chunk_id]['bm25_score'] = float(score)
@@ -7351,6 +8698,7 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                             'bm25_rank': rank,
                             'bm25_score': float(score)
                         }
+            embedding_stats[level_label]["bm25_retained"] += bm25_kept
         else:
             print("⚠️ BM25索引不可用，跳過BM25檢索")
         
@@ -7399,6 +8747,16 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
         final_results = sorted(all_candidates.values(), key=lambda x: x['rrf_score'], reverse=True)
         final_results = final_results[:req.k]
         
+        # 統計最終結果中來自不同層次的分佈（用於診斷C組和D組差異）
+        level_distribution = {}
+        for result in final_results:
+            level = result.get('level', 'unknown')
+            level_distribution[level] = level_distribution.get(level, 0) + 1
+        
+        if req.experimental_group in ["group_c", "group_d"]:
+            print(f"📊 實驗組 {req.experimental_group} 最終結果的層次分佈: {level_distribution}")
+            print(f"   總共 {len(final_results)} 個結果，來自 {len(level_distribution)} 個不同層次")
+        
         # 生成層級描述
         for result in final_results:
             if 'doc_id' in result:
@@ -7437,12 +8795,14 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
         print(f"    - RRF融合: {fusion_time:.3f} 秒")
         print(f"{'='*60}")
         
-        return {
+        result = {
             "results": final_results,
             "query": req.query,
             "final_results": len(final_results),
             "fusion_method": "RRF",
             "k_rrf": k_rrf,
+            "embedding_stats": embedding_stats,
+            "level_distribution": level_distribution,  # 添加層次分佈統計
             "timing": {
                 "total_time": round(total_retrieval_time, 3),
                 "query_embedding_time": round(query_embedding_time, 3),
@@ -7451,6 +8811,12 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                 "fusion_time": round(fusion_time, 3)
             }
         }
+        
+        # 實驗組E：添加LLM階段信息
+        if req.experimental_group == "group_e" and llm_stage:
+            result["llm_stage"] = llm_stage
+        
+        return result
         
     except Exception as e:
         print(f"❌ HybridRAG(RRF)檢索失敗: {e}")
@@ -7631,28 +8997,101 @@ async def gemini_chat(messages: List[Dict[str, str]], model: Optional[str] = Non
         "Content-Type": "application/json"
     }
     
+    # 重试配置
+    max_retries = 3
+    retryable_status_codes = {429, 500, 502, 503, 504}  # 可重试的HTTP状态码
+    base_delay = 1.0  # 基础延迟（秒）
+    
     async with httpx.AsyncClient(timeout=120) as client:  # 增加超时时间
-        r = await client.post(url, headers=headers, json=payload)
-        r.raise_for_status()
-        data = r.json()
-        # Extract response from new format
-        if "candidates" in data and data["candidates"]:
-            candidate = data["candidates"][0]
-            
-            # 检查是否因为token限制而截断
-            finish_reason = candidate.get("finishReason", "")
-            if finish_reason == "MAX_TOKENS":
-                print("⚠️ 警告：答案可能因token限制而被截断")
-            
-            if "content" in candidate and "parts" in candidate["content"]:
-                answer_text = candidate["content"]["parts"][0].get("text", "").strip()
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                r = await client.post(url, headers=headers, json=payload)
                 
-                # 如果答案被截断，添加提示
-                if finish_reason == "MAX_TOKENS" and answer_text:
-                    answer_text += "\n\n（注意：答案可能因长度限制而被截断，如需完整答案请重新提问或分段询问）"
+                # 检查状态码
+                if r.status_code in retryable_status_codes:
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt)  # 指数退避
+                        error_detail = f"HTTP {r.status_code}"
+                        try:
+                            error_json = r.json()
+                            if "error" in error_json:
+                                error_detail += f": {error_json['error'].get('message', '')}"
+                        except:
+                            error_detail += f": {r.text[:200]}"
+                        
+                        print(f"⚠️ Gemini API 錯誤 ({attempt + 1}/{max_retries}): {error_detail}，等待 {delay:.1f} 秒後重試...")
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        # 最后一次重试失败
+                        error_detail = f"HTTP {r.status_code}"
+                        try:
+                            error_json = r.json()
+                            if "error" in error_json:
+                                error_detail += f": {error_json['error'].get('message', '')}"
+                        except:
+                            error_detail += f": {r.text[:200]}"
+                        # 使用 RuntimeError 包装详细错误信息
+                        raise RuntimeError(f"Gemini API 請求失敗（已重試 {max_retries} 次）: {error_detail}")
                 
-                return answer_text
-        return "No response generated"
+                r.raise_for_status()
+                data = r.json()
+                
+                # Extract response from new format
+                if "candidates" in data and data["candidates"]:
+                    candidate = data["candidates"][0]
+                    
+                    # 检查是否因为token限制而截断
+                    finish_reason = candidate.get("finishReason", "")
+                    if finish_reason == "MAX_TOKENS":
+                        print("⚠️ 警告：答案可能因token限制而被截断")
+                    
+                    if "content" in candidate and "parts" in candidate["content"]:
+                        answer_text = candidate["content"]["parts"][0].get("text", "").strip()
+                        
+                        # 如果答案被截断，添加提示
+                        if finish_reason == "MAX_TOKENS" and answer_text:
+                            answer_text += "\n\n（注意：答案可能因长度限制而被截断，如需完整答案请重新提问或分段询问）"
+                        
+                        return answer_text
+                return "No response generated"
+                
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                if e.response.status_code in retryable_status_codes:
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt)
+                        print(f"⚠️ Gemini API HTTP錯誤 ({attempt + 1}/{max_retries}): {e.response.status_code} - {str(e)}，等待 {delay:.1f} 秒後重試...")
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        print(f"❌ Gemini API 請求失敗（已重試 {max_retries} 次）: {e}")
+                        raise
+                else:
+                    # 不可重试的错误，直接抛出
+                    print(f"❌ Gemini API 不可重試的錯誤: {e}")
+                    raise
+            except httpx.RequestError as e:
+                # 网络错误，可以重试
+                last_error = e
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    print(f"⚠️ Gemini API 網絡錯誤 ({attempt + 1}/{max_retries}): {str(e)}，等待 {delay:.1f} 秒後重試...")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    print(f"❌ Gemini API 網絡請求失敗（已重試 {max_retries} 次）: {e}")
+                    raise
+            except Exception as e:
+                # 其他错误，直接抛出
+                print(f"❌ Gemini API 未知錯誤: {e}")
+                raise
+        
+        # 如果所有重试都失败
+        if last_error:
+            raise last_error
+        raise RuntimeError("Gemini API 請求失敗：未知錯誤")
 
 
 def simple_extractive_answer(query: str, contexts: List[str]) -> str:
@@ -11079,7 +12518,7 @@ async def route_group_e_chapters(req: Dict[str, Any]):
         )
     try:
         llm_raw = await _llm_select_relevant_chapters(query, catalog)
-        selection = _prepare_selection_sets(llm_raw, catalog)
+        selection = _prepare_selection_sets(llm_raw)
     except (RuntimeError, ValueError) as e:
         error_msg = str(e)
         print(f"❌ 實驗組E章節路由失敗: {error_msg}")
@@ -11187,6 +12626,8 @@ async def get_chapter_summary_status(doc_id: Optional[str] = None):
     total_sections = 0
     summarized_sections = 0
     orphan_sections: List[Dict[str, Any]] = []
+    section_index_by_id: Dict[str, Dict[str, Any]] = {}
+    section_index_by_key: Dict[str, Dict[str, Any]] = {}
     
     for section_chunk in sections_raw:
         if not isinstance(section_chunk, dict):
@@ -11194,6 +12635,7 @@ async def get_chapter_summary_status(doc_id: Optional[str] = None):
         metadata = (section_chunk.get("metadata") or {}).copy()
         section_title = metadata.get("section") or metadata.get("title") or "節"
         chunk_id = _ensure_chunk_id_for_metadata(section_chunk, metadata, "section")
+        section_key = _normalize_label(section_title) or chunk_id.lower()
         chapter_label = metadata.get("chapter") or ""
         parent_chunk_id = metadata.get("parent_chunk_id") or metadata.get("parent_id")
         entry = summary_map.get(chunk_id) or {}
@@ -11209,7 +12651,10 @@ async def get_chapter_summary_status(doc_id: Optional[str] = None):
             "summary": entry.get("routing_summary") or entry.get("summary") or "",
             "last_updated": entry.get("last_updated"),
             "level": "section",
+            "subsections": [],
         }
+        section_index_by_id[chunk_id] = section_entry
+        section_index_by_key[section_key] = section_entry
         parent = None
         if parent_chunk_id and parent_chunk_id in chapter_index_by_id:
             parent = chapter_index_by_id[parent_chunk_id]
@@ -11222,11 +12667,49 @@ async def get_chapter_summary_status(doc_id: Optional[str] = None):
         else:
             orphan_sections.append(section_entry)
     
+    # 處理「節下的款」（subsections）層級
+    subsection_entries = _get_chapter_summary_entries(doc_id, level="subsection")
+    total_subsections = 0
+    summarized_subsections = 0
+    orphan_subsections: List[Dict[str, Any]] = []
+    
+    for subsection_entry in subsection_entries:
+        chunk_id = subsection_entry.get("chunk_id")
+        parent_section_id = subsection_entry.get("parent_section_id")
+        parent_section_key = subsection_entry.get("parent_section_key")
+        has_summary = bool(subsection_entry.get("summary") or subsection_entry.get("routing_summary"))
+        total_subsections += 1
+        if has_summary:
+            summarized_subsections += 1
+        
+        subsection_status = {
+            "chunk_id": chunk_id,
+            "title": subsection_entry.get("title") or "",
+            "subsection_no": subsection_entry.get("subsection_no") or "",
+            "has_summary": has_summary,
+            "summary": subsection_entry.get("routing_summary") or subsection_entry.get("summary") or "",
+            "last_updated": subsection_entry.get("last_updated"),
+            "level": "subsection",
+        }
+        
+        parent_section = None
+        if parent_section_id and parent_section_id in section_index_by_id:
+            parent_section = section_index_by_id[parent_section_id]
+        elif parent_section_key and parent_section_key in section_index_by_key:
+            parent_section = section_index_by_key[parent_section_key]
+        
+        if parent_section:
+            parent_section["subsections"].append(subsection_status)
+        else:
+            orphan_subsections.append(subsection_status)
+    
     stats = {
         "total_chapters": len(chapter_entries),
         "total_sections": total_sections,
+        "total_subsections": total_subsections,
         "summarized_chapters": summarized_chapters,
         "summarized_sections": summarized_sections,
+        "summarized_subsections": summarized_subsections,
     }
     
     return {
@@ -11235,6 +12718,7 @@ async def get_chapter_summary_status(doc_id: Optional[str] = None):
         "document_chunks": document_status,
         "chapters": chapter_entries,
         "orphan_sections": orphan_sections,
+        "orphan_subsections": orphan_subsections,
         "stats": stats,
     }
 
@@ -11331,7 +12815,7 @@ async def experimental_groups_batch_retrieve(req: Dict[str, Any]):
     # 臨時策略（為了讓當前 RQ 實驗穩定可跑）：
     # 只要要測 group_e，就強制使用目前 chapter_summaries.json 對應的 doc_id，
     # 避免前端或其他客戶端傳入沒有章節摘要的 doc_id。
-    KNOWN_GROUP_E_DOC_ID = "71c23286-d3fb-4982-a2e2-33a931687c5d"
+    KNOWN_GROUP_E_DOC_ID = "310e4850-2ab1-437c-842d-c02792c982cb"
     if "group_e" in groups_to_test:
         original_doc_id = doc_id
         if doc_id != KNOWN_GROUP_E_DOC_ID:
@@ -11377,19 +12861,6 @@ async def experimental_groups_batch_retrieve(req: Dict[str, Any]):
     
     for group_key in groups_to_test:
         if group_key not in GRANULARITY_COMBINATIONS:
-            continue
-        
-        if group_key == "group_e":
-            try:
-                results[group_key] = await _run_experimental_group_e_pipeline(query, k, doc_id=doc_id)
-            except Exception as e:
-                print(f"⚠️ 實驗組E檢索失敗: {e}")
-                results[group_key] = {
-                    "group_info": GRANULARITY_COMBINATIONS[group_key],
-                    "error": str(e),
-                    "fused_results": [],
-                    "total_results": 0
-                }
             continue
             
         combination = GRANULARITY_COMBINATIONS[group_key]
