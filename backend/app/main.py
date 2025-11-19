@@ -3731,6 +3731,8 @@ async def ensure_chapter_summaries(
                 for chapter_data in chapters_data:
                     if max_items and total_processed >= max_items:
                         break
+                    if max_items and total_processed >= max_items:
+                        break
                     
                     chapter_title = chapter_data.get("chapter", "")
                     chapter_key = _normalize_label(chapter_title)
@@ -7774,7 +7776,9 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
         )
     
     # 如果指定了實驗組，確保加載對應的實驗組數據並重建索引
-    if req.experimental_group and req.experimental_group in GRANULARITY_COMBINATIONS:
+    # 注意：group_e 不需要單獨的 embedding 數據，它使用與 group_d 相同的層次
+    # group_e 的特殊處理在後面單獨處理，這裡先跳過
+    if req.experimental_group and req.experimental_group in GRANULARITY_COMBINATIONS and req.experimental_group != "group_e":
         print(f"🔍 檢查實驗組 {req.experimental_group} 的embedding數據...")
         
         # 檢查實驗組數據是否存在
@@ -7786,7 +7790,18 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                 print(f"✅ 已加載實驗組 {req.experimental_group} 的embedding數據")
                 group_data = store.experimental_group_embeddings[req.experimental_group]
                 loaded_levels = list(group_data.get("multi_level_embeddings", {}).keys())
+                expected_levels = GRANULARITY_COMBINATIONS[req.experimental_group]["levels"]
                 print(f"   加載的層次: {loaded_levels}")
+                print(f"   期望的層次: {expected_levels}")
+                
+                # 驗證層次是否匹配
+                if set(loaded_levels) != set(expected_levels):
+                    missing = set(expected_levels) - set(loaded_levels)
+                    extra = set(loaded_levels) - set(expected_levels)
+                    if missing:
+                        print(f"   ⚠️ 警告：缺少層次: {missing}")
+                    if extra:
+                        print(f"   ⚠️ 警告：額外層次: {extra}")
                 
                 # 重建FAISS和BM25索引（僅針對該實驗組的層次）
                 print(f"🔧 重建實驗組 {req.experimental_group} 的FAISS和BM25索引...")
@@ -7810,10 +7825,23 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                     print(f"   ✅ 已清除現有的多層級BM25索引")
                 
                 # 為該實驗組的每個層次重建索引
+                # 使用實驗組配置的層次，而不是當前激活的層次（避免層次不匹配問題）
+                expected_levels = GRANULARITY_COMBINATIONS[req.experimental_group]["levels"]
                 available_levels = store.get_available_levels()
-                print(f"   將為以下層次重建索引: {available_levels}")
                 
-                for level_name in available_levels:
+                # 過濾出既在配置中又在數據中存在的層次
+                levels_to_build = [level for level in expected_levels if level in available_levels]
+                missing_levels = [level for level in expected_levels if level not in available_levels]
+                
+                if missing_levels:
+                    print(f"   ⚠️ 警告：實驗組 {req.experimental_group} 配置的層次 {missing_levels} 在數據中不存在")
+                if not levels_to_build:
+                    print(f"   ❌ 錯誤：實驗組 {req.experimental_group} 沒有任何可用層次數據")
+                    raise HTTPException(status_code=400, detail=f"實驗組 {req.experimental_group} 缺少必需的層次數據")
+                
+                print(f"   將為以下層次重建索引: {levels_to_build}")
+                
+                for level_name in levels_to_build:
                     level_data = store.get_multi_level_embeddings(level_name)
                     if level_data and level_data.get('embeddings'):
                         vectors = level_data['embeddings']
@@ -8010,6 +8038,16 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                 }
         if req.experimental_group == "group_e":
             print("🎯 實驗組E：先進行LLM章節選擇，然後只在篩選後的chunks中進行向量相似度檢索...")
+            print("ℹ️  實驗組E使用與實驗組D相同的層次配置，不需要單獨的embedding數據")
+            
+            # 實驗組E使用與實驗組D相同的層次，嘗試加載group_d的embedding數據
+            # 如果group_d的數據不存在，則使用當前激活的embedding數據
+            if "group_d" in store.experimental_group_embeddings:
+                print("📦 實驗組E：使用實驗組D的embedding數據（相同層次配置）")
+                store.load_experimental_group_embeddings("group_d")
+            else:
+                print("📦 實驗組E：使用當前激活的embedding數據")
+            
             try:
                 # 獲取doc_id（從查詢請求或默認使用已知的doc_id）
                 # 注意：如果沒有傳入doc_id，使用已知的doc_id（與chapter_summaries.json一致）
@@ -8052,13 +8090,11 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                     )
                 
                 # 檢查是否有多層次索引
-                if not faiss_store.has_multi_level_vectors():
-                    raise HTTPException(status_code=400, detail="多層次索引不可用，實驗組E需要多層次向量索引")
-                
-                # 實驗組E：從所有層次中提取符合LLM選擇的chunks，然後計算向量相似度
-                print("📊 實驗組E：從多層次索引中提取符合LLM選擇的chunks...")
-                available_levels = faiss_store.get_available_levels()
-                print(f"🔍 可用層次: {available_levels}")
+                # 實驗組E直接從store的embedding數據中提取，不需要FAISS索引
+                # 因為我們會直接計算向量相似度，而不是使用FAISS檢索
+                print("📊 實驗組E：從多層次embedding數據中提取符合LLM選擇的chunks...")
+                available_levels = store.get_available_levels()
+                print(f"🔍 可用的embedding層次: {available_levels}")
                 
                 # 使用實驗組D的層次配置（完整多層次：章、節、條、項、款、目）
                 group_e_levels = ["document_component", "basic_unit_hierarchy", 
@@ -8076,51 +8112,50 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                 similarity_start = time.time()
                 for level_name in filtered_levels:
                     print(f"   📋 處理層次 '{level_name}'...")
+                    # 獲取該層次的所有chunks和vectors
                     try:
-                        # 獲取該層次的所有chunks和vectors
                         level_data = store.get_multi_level_embeddings(level_name)
-                        if not level_data:
-                            print(f"   ⚠️ 層次 '{level_name}' 沒有embedding數據")
-                            continue
-                        
-                        vectors = level_data["embeddings"]
-                        chunks = level_data["chunks"]
-                        doc_ids = level_data["doc_ids"]
-                        
-                        # 遍歷該層次的所有chunks，過濾出符合LLM選擇的
-                        for idx, (doc_id, chunk_content) in enumerate(zip(doc_ids, chunks)):
-                            # 獲取metadata
-                            metadata = _get_chunk_metadata_by_content(doc_id, level_name, chunk_content)
-                            if not metadata:
-                                continue
-                            
-                            # 檢查是否符合LLM選擇
-                            if not _chunk_matches_selection(metadata, selection):
-                                continue
-                            
-                            # 獲取chunk的完整信息
-                            chunk_id = metadata.get('chunk_id', f"{doc_id}_{level_name}_{idx}")
-                            chunk_info = {
-                                'chunk_id': chunk_id,
-                                'doc_id': doc_id,
-                                'content': chunk_content,
-                                'metadata': metadata,
-                                'level': level_name,
-                                'chunk_index': idx
-                            }
-                            
-                            # 獲取對應的向量
-                            vector = vectors[idx]
-                            filtered_chunks.append((chunk_info, level_name, vector))
-                        
-                        print(f"   ✅ 層次 '{level_name}' 處理完成")
-                        
                     except Exception as e:
-                        print(f"   ⚠️ 層次 '{level_name}' 處理失敗: {e}")
+                        print(f"   ⚠️ 層次 '{level_name}' 取得embedding數據失敗: {e}")
                         import traceback
                         traceback.print_exc()
                         continue
-                
+                    if not level_data:
+                        print(f"   ⚠️ 層次 '{level_name}' 沒有embedding數據")
+                        continue
+
+                    vectors = level_data["embeddings"]
+                    chunks = level_data["chunks"]
+                    doc_ids = level_data["doc_ids"]
+                    
+                    # 遍歷該層次的所有chunks，過濾出符合LLM選擇的
+                    for idx, (doc_id, chunk_content) in enumerate(zip(doc_ids, chunks)):
+                        # 獲取metadata
+                        metadata = _get_chunk_metadata_by_content(doc_id, level_name, chunk_content)
+                        if not metadata:
+                            continue
+                        
+                        # 檢查是否符合LLM選擇
+                        if not _chunk_matches_selection(metadata, selection):
+                            continue
+                        
+                        # 獲取chunk的完整信息
+                        chunk_id = metadata.get('chunk_id', f"{doc_id}_{level_name}_{idx}")
+                        chunk_info = {
+                            'chunk_id': chunk_id,
+                            'doc_id': doc_id,
+                            'content': chunk_content,
+                            'metadata': metadata,
+                            'level': level_name,
+                            'chunk_index': idx
+                        }
+                        
+                        # 獲取對應的向量
+                        vector = vectors[idx]
+                        filtered_chunks.append((chunk_info, level_name, vector))
+                    
+                    print(f"   ✅ 層次 '{level_name}' 處理完成")
+
                 if not filtered_chunks:
                     print("⚠️ 沒有找到任何符合LLM選擇的chunks")
                     return {
@@ -8236,7 +8271,6 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                         "similarity_time": round(similarity_time, 3)
                     }
                 }
-                
             except HTTPException:
                 raise
             except Exception as e:

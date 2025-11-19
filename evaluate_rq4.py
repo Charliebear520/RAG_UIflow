@@ -93,7 +93,7 @@ def print_llm_selected_chapters(llm_stage: Dict[str, Any]):
                 if sub_reason:
                     print(f"               └─ 理由: {sub_reason}")
 
-def load_ground_truth(file_path: str = "QA/ground_truth.json") -> List[Dict]:
+def load_ground_truth(file_path: str = "QA/ground_truth_new.json") -> List[Dict]:
     """載入ground truth數據"""
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
@@ -311,14 +311,17 @@ def retrieve_experimental_groups(query: str, k: int, groups: List[str], doc_id: 
                 "k": k,
                 "experimental_group": group
             }
-            # 如果有doc_id（例如group_e），可以傳遞給API
-            if doc_id:
+            # 只有 group_e 需要 doc_id，C/D 組不需要
+            if doc_id and group == "group_e":
                 payload["doc_id"] = doc_id
+            
+            # 根據實驗組設置不同的超時時間
+            timeout = 120 if group == "group_e" else 90
             
             response = requests.post(
                 f"{API_BASE_URL}/hybrid-rrf-retrieve",
                 json=payload,
-                timeout=120  # group_e需要LLM調用，增加超時時間
+                timeout=timeout
             )
             if response.status_code == 200:
                 data = response.json()

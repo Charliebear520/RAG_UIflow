@@ -15,14 +15,14 @@ RQ3: 針對不同類型的法律查詢（如主題型 vs. 細節型），是否�
 import json
 import requests
 import sys
-from typing import Dict, List, Set, Tuple, Any
+from typing import Dict, List, Set, Tuple, Any, Optional
 from collections import defaultdict
 import time
 
 # API配置
 API_BASE_URL = "http://localhost:8000/api"
 
-def load_ground_truth(file_path: str = "QA/ground_truth.json") -> List[Dict]:
+def load_ground_truth(file_path: str = "QA/ground_truth_new.json") -> List[Dict]:
     """載入ground truth數據"""
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
@@ -215,7 +215,39 @@ def _cn_to_int_str(cn_str: str) -> str:
     
     return result if result else cn_str
 
-def retrieve_group_b(query: str, k: int = 10) -> List[Dict]:
+def summarize_retrieved_chunks(
+    results: List[Dict[str, Any]], limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """整理檢索結果中的chunk資訊，方便輸出或記錄"""
+    summary = []
+    for res in results[: limit or len(results)]:
+        metadata = (
+            res.get("original_metadata")
+            or res.get("enhanced_metadata")
+            or res.get("metadata")
+            or {}
+        )
+        identifiers = extract_chunk_identifiers(res)
+        display_id = res.get("chunk_id") or next(iter(identifiers), None)
+        if not display_id:
+            display_id = metadata.get("chunk_id") or metadata.get("id") or "UNKNOWN_CHUNK_ID"
+        summary.append(
+            {
+                "chunk_id": res.get("chunk_id"),
+                "display_id": display_id,
+                "doc_id": res.get("doc_id"),
+                "level": res.get("level"),
+                "chapter": metadata.get("chapter"),
+                "section": metadata.get("section"),
+                "article": metadata.get("article"),
+                "score": res.get("hybrid_score")
+                or res.get("rrf_score")
+                or res.get("similarity"),
+            }
+        )
+    return summary
+
+def retrieve_group_b(query: str, k: int = 10) -> Dict[str, Any]:
     """檢索B組（條文+章節結構 - 對照組），使用 hybrid-rrf-retrieve 端點"""
     try:
         response = requests.post(
@@ -230,17 +262,32 @@ def retrieve_group_b(query: str, k: int = 10) -> List[Dict]:
         if response.status_code == 200:
             data = response.json()
             # hybrid-rrf-retrieve 返回格式：{"results": [...], ...}
-            return data.get("results", [])
+            return {
+                "results": data.get("results", []),
+                "level_distribution": data.get("level_distribution"),
+                "embedding_stats": data.get("embedding_stats"),
+                "error": None
+            }
         else:
             print(f"⚠️ B組檢索失敗: {response.status_code} - {response.text}")
-            return []
+            return {
+                "results": [],
+                "level_distribution": None,
+                "embedding_stats": None,
+                "error": f"HTTP {response.status_code}: {response.text[:100]}"
+            }
     except Exception as e:
         print(f"❌ B組檢索異常: {e}")
         import traceback
         traceback.print_exc()
-        return []
+        return {
+            "results": [],
+            "level_distribution": None,
+            "embedding_stats": None,
+            "error": str(e)
+        }
 
-def retrieve_group_c(query: str, k: int = 10) -> List[Dict]:
+def retrieve_group_c(query: str, k: int = 10) -> Dict[str, Any]:
     """檢索C組（條文+細節層次 - 實驗組），使用 hybrid-rrf-retrieve 端點"""
     try:
         response = requests.post(
@@ -255,15 +302,30 @@ def retrieve_group_c(query: str, k: int = 10) -> List[Dict]:
         if response.status_code == 200:
             data = response.json()
             # hybrid-rrf-retrieve 返回格式：{"results": [...], ...}
-            return data.get("results", [])
+            return {
+                "results": data.get("results", []),
+                "level_distribution": data.get("level_distribution"),
+                "embedding_stats": data.get("embedding_stats"),
+                "error": None
+            }
         else:
             print(f"⚠️ C組檢索失敗: {response.status_code} - {response.text}")
-            return []
+            return {
+                "results": [],
+                "level_distribution": None,
+                "embedding_stats": None,
+                "error": f"HTTP {response.status_code}: {response.text[:100]}"
+            }
     except Exception as e:
         print(f"❌ C組檢索異常: {e}")
         import traceback
         traceback.print_exc()
-        return []
+        return {
+            "results": [],
+            "level_distribution": None,
+            "embedding_stats": None,
+            "error": str(e)
+        }
 
 def calculate_metrics(
     retrieved_results: List[Dict],
@@ -379,13 +441,105 @@ def evaluate_rq2_rq3():
         
         # 檢索B組（對照組）
         print("  🔍 檢索B組（條文+章節結構 - 對照組）...")
-        results_b = retrieve_group_b(query_text, k=max(k_values))
-        print(f"  ✅ B組返回 {len(results_b)} 個結果")
+        group_b_data = retrieve_group_b(query_text, k=max(k_values))
+        results_b = group_b_data.get("results", [])
+        error_b = group_b_data.get("error")
+        
+        if error_b:
+            print(f"  ❌ B組檢索失敗: {error_b}")
+        else:
+            print(f"  ✅ B組返回 {len(results_b)} 個結果")
+            
+            # 顯示層次分佈
+            level_dist_b = group_b_data.get("level_distribution")
+            if level_dist_b:
+                print(f"      📊 B組（條文+章節結構）檢索結果層次分佈:")
+                for level_name, count in sorted(level_dist_b.items()):
+                    print(f"         - {level_name}: {count} 個chunks")
+            else:
+                print(f"      ⚠️ B組未提供層次分佈信息")
+            
+            # 顯示各層次的候選/入選統計
+            embedding_stats_b = group_b_data.get("embedding_stats")
+            if embedding_stats_b:
+                print(f"      🧬 B組（條文+章節結構）各層次候選/入選統計（vector / bm25）:")
+                for level_name in sorted(embedding_stats_b.keys()):
+                    stats = embedding_stats_b[level_name] or {}
+                    v_cand = stats.get("vector_candidates", 0)
+                    v_kept = stats.get("vector_retained", 0)
+                    b_cand = stats.get("bm25_candidates", 0)
+                    b_kept = stats.get("bm25_retained", 0)
+                    print(
+                        f"         - {level_name}: "
+                        f"vector {v_kept}/{v_cand}, bm25 {b_kept}/{b_cand}"
+                    )
+            
+            # 顯示檢索到的chunks詳細信息（Top-10）
+            if results_b:
+                retrieved_summary_b = summarize_retrieved_chunks(results_b, limit=10)
+                print(f"      📦 B組（條文+章節結構）檢索到的Chunks (Top-10):")
+                for idx, chunk in enumerate(retrieved_summary_b, 1):
+                    chunk_id = chunk.get("display_id") or chunk.get("chunk_id") or "UNKNOWN_CHUNK_ID"
+                    level = chunk.get("level") or "unknown"
+                    article = chunk.get("article") or ""
+                    score = chunk.get("score")
+                    score_str = f", 分數: {score:.4f}" if score is not None else ""
+                    article_str = f" ({article[:30]}...)" if article else ""
+                    print(f"         {idx:02d}. [{level}] {chunk_id}{article_str}{score_str}")
+                
+                if len(results_b) > 10:
+                    print(f"         ... 還有 {len(results_b) - 10} 個chunks未顯示")
         
         # 檢索C組（實驗組）
         print("  🔍 檢索C組（條文+細節層次 - 實驗組）...")
-        results_c = retrieve_group_c(query_text, k=max(k_values))
-        print(f"  ✅ C組返回 {len(results_c)} 個結果")
+        group_c_data = retrieve_group_c(query_text, k=max(k_values))
+        results_c = group_c_data.get("results", [])
+        error_c = group_c_data.get("error")
+        
+        if error_c:
+            print(f"  ❌ C組檢索失敗: {error_c}")
+        else:
+            print(f"  ✅ C組返回 {len(results_c)} 個結果")
+            
+            # 顯示層次分佈
+            level_dist_c = group_c_data.get("level_distribution")
+            if level_dist_c:
+                print(f"      📊 C組（條文+細節層次）檢索結果層次分佈:")
+                for level_name, count in sorted(level_dist_c.items()):
+                    print(f"         - {level_name}: {count} 個chunks")
+            else:
+                print(f"      ⚠️ C組未提供層次分佈信息")
+            
+            # 顯示各層次的候選/入選統計
+            embedding_stats_c = group_c_data.get("embedding_stats")
+            if embedding_stats_c:
+                print(f"      🧬 C組（條文+細節層次）各層次候選/入選統計（vector / bm25）:")
+                for level_name in sorted(embedding_stats_c.keys()):
+                    stats = embedding_stats_c[level_name] or {}
+                    v_cand = stats.get("vector_candidates", 0)
+                    v_kept = stats.get("vector_retained", 0)
+                    b_cand = stats.get("bm25_candidates", 0)
+                    b_kept = stats.get("bm25_retained", 0)
+                    print(
+                        f"         - {level_name}: "
+                        f"vector {v_kept}/{v_cand}, bm25 {b_kept}/{b_cand}"
+                    )
+            
+            # 顯示檢索到的chunks詳細信息（Top-10）
+            if results_c:
+                retrieved_summary_c = summarize_retrieved_chunks(results_c, limit=10)
+                print(f"      📦 C組（條文+細節層次）檢索到的Chunks (Top-10):")
+                for idx, chunk in enumerate(retrieved_summary_c, 1):
+                    chunk_id = chunk.get("display_id") or chunk.get("chunk_id") or "UNKNOWN_CHUNK_ID"
+                    level = chunk.get("level") or "unknown"
+                    article = chunk.get("article") or ""
+                    score = chunk.get("score")
+                    score_str = f", 分數: {score:.4f}" if score is not None else ""
+                    article_str = f" ({article[:30]}...)" if article else ""
+                    print(f"         {idx:02d}. [{level}] {chunk_id}{article_str}{score_str}")
+                
+                if len(results_c) > 10:
+                    print(f"         ... 還有 {len(results_c) - 10} 個chunks未顯示")
         
         # 計算各K值的指標
         item_result = {
@@ -393,8 +547,16 @@ def evaluate_rq2_rq3():
             "query_text": query_text,
             "query_type": query_type,
             "ground_truth": ground_truth,
-            "group_b": {},
-            "group_c": {}
+            "group_b": {
+                "retrieved_chunks": summarize_retrieved_chunks(results_b),
+                "level_distribution": group_b_data.get("level_distribution"),
+                "embedding_stats": group_b_data.get("embedding_stats")
+            },
+            "group_c": {
+                "retrieved_chunks": summarize_retrieved_chunks(results_c),
+                "level_distribution": group_c_data.get("level_distribution"),
+                "embedding_stats": group_c_data.get("embedding_stats")
+            }
         }
         
         for k in k_values:

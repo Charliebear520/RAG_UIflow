@@ -188,7 +188,7 @@
   {
     "query_id": "Q10_Type_B",
     "query_text": "錄音、錄影帶販售店，因販售需要，於店內藉錄音、錄影器材播放該錄音、錄影帶，有無涉及著作財產權人權利行使問題?",
-    "query_type": "主題型",
+    "query_type": "細節型",
     "ground_truth": {
       "E": [
         "Art_3_P1_C8",

@@ -10,20 +10,19 @@ RQ1 評估腳本
 import json
 import requests
 import sys
-from typing import Dict, List, Set, Tuple, Any
+from typing import Dict, List, Set, Tuple, Any, Optional
 from collections import defaultdict
 import time
 
 # API配置
 API_BASE_URL = "http://localhost:8000/api"
-GROUPS_TO_EVALUATE = ["group_a", "group_d", "group_e"]
+GROUPS_TO_EVALUATE = ["group_a", "group_d"]
 GROUP_LABELS = {
     "group_a": "A組（僅條文層）",
     "group_d": "D組（完整多層次）",
-    "group_e": "E組（LLM章節導向）",
 }
 
-def load_ground_truth(file_path: str = "QA/ground_truth.json") -> List[Dict]:
+def load_ground_truth(file_path: str = "QA/ground_truth_new.json") -> List[Dict]:
     """載入ground truth數據"""
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
@@ -216,6 +215,38 @@ def _cn_to_int_str(cn_str: str) -> str:
     
     return result if result else cn_str
 
+def summarize_retrieved_chunks(
+    results: List[Dict[str, Any]], limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """整理檢索結果中的chunk資訊，方便輸出或記錄"""
+    summary = []
+    for res in results[: limit or len(results)]:
+        metadata = (
+            res.get("original_metadata")
+            or res.get("enhanced_metadata")
+            or res.get("metadata")
+            or {}
+        )
+        identifiers = extract_chunk_identifiers(res)
+        display_id = res.get("chunk_id") or next(iter(identifiers), None)
+        if not display_id:
+            display_id = metadata.get("chunk_id") or metadata.get("id") or "UNKNOWN_CHUNK_ID"
+        summary.append(
+            {
+                "chunk_id": res.get("chunk_id"),
+                "display_id": display_id,
+                "doc_id": res.get("doc_id"),
+                "level": res.get("level"),
+                "chapter": metadata.get("chapter"),
+                "section": metadata.get("section"),
+                "article": metadata.get("article"),
+                "score": res.get("hybrid_score")
+                or res.get("rrf_score")
+                or res.get("similarity"),
+            }
+        )
+    return summary
+
 def retrieve_experimental_groups(query: str, k: int, groups: List[str]) -> Dict[str, Any]:
     """一次性檢索多個實驗組，使用 hybrid-rrf-retrieve 端點"""
     # 從API獲取實驗組配置信息
@@ -249,7 +280,9 @@ def retrieve_experimental_groups(query: str, k: int, groups: List[str]) -> Dict[
                     "group_info": GRANULARITY_COMBINATIONS.get(group, {}),
                     "fused_results": data.get("results", []),
                     "total_results": data.get("final_results", 0),
-                    "fusion_method": data.get("fusion_method", "RRF")
+                    "fusion_method": data.get("fusion_method", "RRF"),
+                    "embedding_stats": data.get("embedding_stats"),     # 各層次候選/入選統計
+                    "level_distribution": data.get("level_distribution") # 最終結果的層次分佈
                 }
             else:
                 print(f"⚠️ {group} 檢索失敗: {response.status_code} - {response.text}")
@@ -387,16 +420,65 @@ def evaluate_rq1():
         print(f"查詢: {query_text[:60]}...")
         print(f"Ground Truth - E: {gt_e}, C: {gt_c}")
         
-        # 檢索A組
-        print("  🔍 檢索實驗組 (A/D/E)...")
+        # 檢索A組和D組
+        print("  🔍 檢索實驗組 (A/D)...")
         group_payloads = retrieve_experimental_groups(
             query_text,
             k=max(k_values),
             groups=GROUPS_TO_EVALUATE,
         )
+        
+        # 顯示每個實驗組的檢索結果詳細信息
         for group in GROUPS_TO_EVALUATE:
-            fused = group_payloads.get(group, {}).get("fused_results", [])
+            group_data = group_payloads.get(group, {})
+            fused = group_data.get("fused_results", [])
+            error = group_data.get("error")
+            
+            if error:
+                print(f"    - {GROUP_LABELS[group]} 檢索失敗: {error}")
+                continue
+            
             print(f"    - {GROUP_LABELS[group]} 返回 {len(fused)} 個結果")
+            
+            # 顯示層次分佈
+            level_dist = group_data.get("level_distribution")
+            if level_dist:
+                print(f"      📊 {GROUP_LABELS[group]} 檢索結果層次分佈:")
+                for level_name, count in sorted(level_dist.items()):
+                    print(f"         - {level_name}: {count} 個chunks")
+            else:
+                print(f"      ⚠️ {GROUP_LABELS[group]} 未提供層次分佈信息")
+            
+            # 顯示各層次的候選/入選統計
+            embedding_stats = group_data.get("embedding_stats")
+            if embedding_stats:
+                print(f"      🧬 {GROUP_LABELS[group]} 各層次候選/入選統計（vector / bm25）:")
+                for level_name in sorted(embedding_stats.keys()):
+                    stats = embedding_stats[level_name] or {}
+                    v_cand = stats.get("vector_candidates", 0)
+                    v_kept = stats.get("vector_retained", 0)
+                    b_cand = stats.get("bm25_candidates", 0)
+                    b_kept = stats.get("bm25_retained", 0)
+                    print(
+                        f"         - {level_name}: "
+                        f"vector {v_kept}/{v_cand}, bm25 {b_kept}/{b_cand}"
+                    )
+            
+            # 顯示檢索到的chunks詳細信息（Top-10）
+            if fused:
+                retrieved_summary = summarize_retrieved_chunks(fused, limit=10)
+                print(f"      📦 {GROUP_LABELS[group]} 檢索到的Chunks (Top-10):")
+                for idx, chunk in enumerate(retrieved_summary, 1):
+                    chunk_id = chunk.get("display_id") or chunk.get("chunk_id") or "UNKNOWN_CHUNK_ID"
+                    level = chunk.get("level") or "unknown"
+                    article = chunk.get("article") or ""
+                    score = chunk.get("score")
+                    score_str = f", 分數: {score:.4f}" if score is not None else ""
+                    article_str = f" ({article[:30]}...)" if article else ""
+                    print(f"         {idx:02d}. [{level}] {chunk_id}{article_str}{score_str}")
+                
+                if len(fused) > 10:
+                    print(f"         ... 還有 {len(fused) - 10} 個chunks未顯示")
         
         # 計算各K值的指標
         item_result = {
@@ -406,7 +488,11 @@ def evaluate_rq1():
             "ground_truth": ground_truth,
         }
         for group in GROUPS_TO_EVALUATE:
-            item_result[group] = {}
+            item_result[group] = {
+                "retrieved_chunks": summarize_retrieved_chunks(group_payloads.get(group, {}).get("fused_results", [])),
+                "level_distribution": group_payloads.get(group, {}).get("level_distribution"),
+                "embedding_stats": group_payloads.get(group, {}).get("embedding_stats")
+            }
         
         for k in k_values:
             summaries = []
@@ -521,20 +607,20 @@ def evaluate_rq1():
         # 與基線比較
         baseline = overall_averages.get("group_a", {}).get(k_key)
         if baseline:
-            for group in ["group_d", "group_e"]:
-                if k_key in overall_averages.get(group, {}):
-                    comp = overall_averages[group][k_key]
-                    strict_diff = comp["strict_f1"] - baseline["strict_f1"]
-                    relaxed_diff = comp["relaxed_f1"] - baseline["relaxed_f1"]
-                    print(f"\n  📈 提升幅度（{GROUP_LABELS[group]} vs Baseline）:")
-                    if baseline["strict_f1"] > 0:
-                        print(f"    嚴格F1@{k}提升: {strict_diff:+.4f} ({strict_diff / baseline['strict_f1'] * 100:+.2f}%)")
-                    else:
-                        print("    嚴格F1@{k}提升: N/A")
-                    if baseline["relaxed_f1"] > 0:
-                        print(f"    寬鬆F1@{k}提升: {relaxed_diff:+.4f} ({relaxed_diff / baseline['relaxed_f1'] * 100:+.2f}%)")
-                    else:
-                        print("    寬鬆F1@{k}提升: N/A")
+            group = "group_d"
+            if k_key in overall_averages.get(group, {}):
+                comp = overall_averages[group][k_key]
+                strict_diff = comp["strict_f1"] - baseline["strict_f1"]
+                relaxed_diff = comp["relaxed_f1"] - baseline["relaxed_f1"]
+                print(f"\n  📈 提升幅度（{GROUP_LABELS[group]} vs Baseline）:")
+                if baseline["strict_f1"] > 0:
+                    print(f"    嚴格F1@{k}提升: {strict_diff:+.4f} ({strict_diff / baseline['strict_f1'] * 100:+.2f}%)")
+                else:
+                    print("    嚴格F1@{k}提升: N/A")
+                if baseline["relaxed_f1"] > 0:
+                    print(f"    寬鬆F1@{k}提升: {relaxed_diff:+.4f} ({relaxed_diff / baseline['relaxed_f1'] * 100:+.2f}%)")
+                else:
+                    print("    寬鬆F1@{k}提升: N/A")
     
     # 按類型打印
     print("\n" + "=" * 80)
