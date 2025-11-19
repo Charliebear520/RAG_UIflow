@@ -700,6 +700,35 @@ def evaluate_rq4():
                         print(f"    {GROUP_LABELS[group]}:")
                         print(f"      嚴格 - P@{k}: {avg['strict_precision']:.4f}, R@{k}: {avg['strict_recall']:.4f}, F1@{k}: {avg['strict_f1']:.4f}")
                         print(f"      寬鬆 - P@{k}: {avg['relaxed_precision']:.4f}, R@{k}: {avg['relaxed_recall']:.4f}, F1@{k}: {avg['relaxed_f1']:.4f}")
+                
+                # 針對目前的比較組別（E vs C、E vs D）顯示提升幅度
+                comparisons = [
+                    ("group_e", "group_c"),
+                    ("group_e", "group_d"),
+                ]
+                for exp_key, base_key in comparisons:
+                    exp_avg = type_averages[query_type].get(exp_key, {}).get(k_key)
+                    base_avg = type_averages[query_type].get(base_key, {}).get(k_key)
+                    if not exp_avg or not base_avg:
+                        continue
+                    
+                    strict_diff = exp_avg["strict_f1"] - base_avg["strict_f1"]
+                    relaxed_diff = exp_avg["relaxed_f1"] - base_avg["relaxed_f1"]
+                    
+                    print(
+                        f"\n    📈 {query_type} 提升幅度 "
+                        f"({GROUP_LABELS.get(exp_key, exp_key)} vs {GROUP_LABELS.get(base_key, base_key)}):"
+                    )
+                    if base_avg["strict_f1"] > 0:
+                        strict_pct = strict_diff / base_avg["strict_f1"] * 100
+                        print(f"      嚴格F1@{k}: {strict_diff:+.4f} ({strict_pct:+.2f}%)")
+                    else:
+                        print("      嚴格F1@{k}: N/A")
+                    if base_avg["relaxed_f1"] > 0:
+                        relaxed_pct = relaxed_diff / base_avg["relaxed_f1"] * 100
+                        print(f"      寬鬆F1@{k}: {relaxed_diff:+.4f} ({relaxed_pct:+.2f}%)")
+                    else:
+                        print("      寬鬆F1@{k}: N/A")
     
     print("\n" + "=" * 80)
     print("評估完成！")

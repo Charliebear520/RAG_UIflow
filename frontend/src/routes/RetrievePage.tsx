@@ -105,7 +105,7 @@ export function RetrievePage() {
           setEmbedProvider(database.provider);
         }
 
-        // 統一使用 HybridRAG(RRF)
+        // 統一使用 HybridRAG（向量排序）
         setRetrievalMethod("hybrid_rrf");
 
         // 確保激活embedding資料庫（以防在EmbeddingDatabaseList中的激活失敗）
@@ -220,28 +220,28 @@ export function RetrievePage() {
             </div>
           )}
 
-        {/* 檢索方法：HybridRAG(RRF) */}
+        {/* 檢索方法：HybridRAG（向量排序） */}
         <div className="mb-3">
           <div className="alert alert-primary mb-0">
-            <strong>當前檢索方法：</strong> HybridRAG(RRF) - 純RRF融合，支持多層次Embedding
+            <strong>當前檢索方法：</strong> HybridRAG（向量排序）- 單純依照向量相似度，支持多層次Embedding
           </div>
         </div>
 
         {/* 方法說明 */}
         <div className="alert alert-info mb-3">
-          <h6 className="mb-2">HybridRAG(RRF) 檢索說明</h6>
+          <h6 className="mb-2">HybridRAG（向量排序）檢索說明</h6>
           <ul className="mb-0 small">
             <li>
-              <strong>RRF（Reciprocal Rank Fusion）</strong>
-              ：結合向量檢索和BM25關鍵字檢索的純融合方法，無需額外的規則配置
+              <strong>純向量相似度排序</strong>
+              ：僅依賴向量檢索結果，直接按相似度高低輸出，不再進行BM25或RRF融合
             </li>
             <li>
               <strong>自動多層次支持</strong>
               ：自動檢測並支持標準embedding和多層次embedding（6個粒度級別）
             </li>
             <li>
-              <strong>智能層次融合</strong>
-              ：從所有可用層次檢索並智能融合結果，提供全面的檢索效果
+              <strong>智能層次過濾</strong>
+              ：根據實驗組設定與索引狀態自動選擇可用層次，確保結果一致性
             </li>
           </ul>
         </div>
@@ -255,7 +255,7 @@ export function RetrievePage() {
             setBusy(true);
 
             try {
-              // 只保留 HybridRAG(RRF)
+              // 只保留 HybridRAG（向量排序）
               await hybridRrfRetrieve(query, k);
             } catch (error) {
               console.error("檢索錯誤:", error);
@@ -319,7 +319,7 @@ export function RetrievePage() {
           <div className="mt-3">
             <h3 className="h6">
               Top results{" "}
-              <span className="badge bg-info">HybridRAG(RRF)</span>
+              <span className="badge bg-info">HybridRAG（向量排序）</span>
               {retrieval &&
                 retrieval.length > 0 &&
                 retrieval[0].embedding_provider && (
@@ -559,6 +559,20 @@ export function RetrievePage() {
                 // 確定要顯示的結果數據
                 let resultsToShow = retrieval || null;
 
+                // 保證前端顯示順序與向量相似度一致（特別是 hybrid_rrf 模式）
+                if (
+                  retrievalMethod === "hybrid_rrf" &&
+                  Array.isArray(resultsToShow)
+                ) {
+                  resultsToShow = [...resultsToShow].sort((a, b) => {
+                    const scoreA =
+                      typeof a.vector_score === "number" ? a.vector_score : -Infinity;
+                    const scoreB =
+                      typeof b.vector_score === "number" ? b.vector_score : -Infinity;
+                    return scoreB - scoreA;
+                  });
+                }
+
                 console.log("🎯 結果顯示邏輯:", {
                   retrievalMethod,
                   hasRetrieval: !!retrieval,
@@ -589,13 +603,10 @@ export function RetrievePage() {
                           ) : retrievalMethod === "hybrid_rrf" ? (
                             <>
                               <span className="badge bg-success me-1">
-                                RRF分數: {r.rrf_score?.toFixed(5) || "N/A"}
+                                向量分數: {r.vector_score?.toFixed(5) || "N/A"}
                               </span>
                               <span className="badge bg-info me-1">
-                                向量排名: {r.vector_rank || "N/A"}
-                              </span>
-                              <span className="badge bg-warning me-1">
-                                BM25排名: {r.bm25_rank || "N/A"}
+                                向量排名: {r.vector_rank ?? "N/A"}
                               </span>
                             </>
                           ) : retrievalMethod === "multi_level" ? (

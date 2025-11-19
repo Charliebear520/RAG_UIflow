@@ -8559,14 +8559,23 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
         print(f"⏱️  向量檢索花費時間: {vector_retrieval_time:.3f} 秒")
         
         # 2. BM25檢索（支持標準和多層次）
+        # 所有實驗組（A~E）都只使用向量相似度排序，完全跳過BM25檢索
+        use_vector_only = True  # 所有組都只使用向量相似度
+        
         # 記錄BM25檢索開始時間
         bm25_retrieval_start = time.time()
         bm25_retrieval_time = 0.0
-        print("📊 執行BM25檢索...")
+        
+        if use_vector_only:
+            group_label = req.experimental_group if req.experimental_group else "所有組"
+            print(f"📊 {group_label} 跳過BM25檢索，僅使用向量相似度排序")
+        else:
+            print("📊 執行BM25檢索...")
+        
         # 優先使用多層次索引（如果存在）
-        if bm25_index.has_multi_level_index():
-            # 多層次BM25檢索：檢索所有層次並合併（實驗組B、C、D）
-            print(f"✅ 使用多層次BM25索引進行檢索（實驗組B/C/D）")
+        if not use_vector_only and bm25_index.has_multi_level_index():
+            # 多層次BM25檢索：檢索所有層次並合併（僅用於非A/B/C/D組，如group_e）
+            print(f"✅ 使用多層次BM25索引進行檢索")
             available_bm25_levels = bm25_index.get_available_levels()
             print(f"🔍 多層次BM25索引可用層次: {available_bm25_levels}")
             
@@ -8598,8 +8607,8 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                 elif "basic_unit_hierarchy" in bm25_level_set and "basic_unit" in bm25_level_set:
                     bm25_levels = ["basic_unit_hierarchy", "basic_unit"]
             
-            # 診斷信息：顯示BM25實際檢索的層次
-            if req.experimental_group in ["group_c", "group_d"]:
+            # 診斷信息：顯示BM25實際檢索的層次（僅在非A/B/C/D組時顯示）
+            if not use_vector_only and req.experimental_group in ["group_c", "group_d"]:
                 expected_levels = GRANULARITY_COMBINATIONS.get(req.experimental_group, {}).get("levels", [])
                 print(f"🔍 實驗組 {req.experimental_group} BM25檢索診斷:")
                 print(f"   期望層次: {expected_levels}")
@@ -8693,7 +8702,7 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                     embedding_stats[level_name]["bm25_retained"] += bm25_kept
                 except Exception as e:
                     print(f"   ⚠️ 層次 '{level_name}' BM25檢索失敗: {e}")
-        elif bm25_index.has_index():
+        elif not use_vector_only and bm25_index.has_index():
             # 標準BM25檢索
             bm25_indices, bm25_scores = bm25_index.search(req.query, req.k * 10)
             print(f"✅ 標準BM25檢索返回 {len(bm25_indices)} 個候選")
@@ -8733,36 +8742,34 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                             'bm25_score': float(score)
                         }
             embedding_stats[level_label]["bm25_retained"] += bm25_kept
-        else:
+        elif not use_vector_only:
             print("⚠️ BM25索引不可用，跳過BM25檢索")
         
         # 記錄BM25檢索結束時間
         bm25_retrieval_time = time.time() - bm25_retrieval_start
-        print(f"⏱️  BM25檢索花費時間: {bm25_retrieval_time:.3f} 秒")
+        if not use_vector_only:
+            print(f"⏱️  BM25檢索花費時間: {bm25_retrieval_time:.3f} 秒")
         
-        # 3. RRF融合 - 計算RRF分數：1 / (60 + rank)
+        # 3. 分數計算 - 所有實驗組（A~E）都只使用向量相似度排序
         fusion_start = time.time()
         fusion_time = 0.0
-        k_rrf = 60
+        
+        group_label = req.experimental_group if req.experimental_group else "所有組"
+        print(f"📊 {group_label} 使用純向量相似度排序（不融合BM25）")
+        
         for chunk_id, candidate in all_candidates.items():
-            rrf_score = 0.0
-            
-            # 向量排名分數
-            if candidate['vector_rank'] is not None:
-                rrf_score += 1.0 / (k_rrf + candidate['vector_rank'])
-            
-            # BM25排名分數
-            if candidate['bm25_rank'] is not None:
-                rrf_score += 1.0 / (k_rrf + candidate['bm25_rank'])
-            
-            candidate['rrf_score'] = rrf_score
-            candidate['hybrid_score'] = rrf_score
+            # 所有實驗組（A~E）都只使用向量相似度分數
+            vector_score = candidate.get('vector_score', 0.0)
+            candidate['rrf_score'] = vector_score
+            candidate['hybrid_score'] = vector_score
             
             # 添加分數分解
             candidate['score_breakdown'] = {
                 'vector_rank': candidate['vector_rank'],
-                'bm25_rank': candidate['bm25_rank'],
-                'rrf_score': rrf_score
+                'vector_score': vector_score,
+                'bm25_rank': candidate.get('bm25_rank'),
+                'rrf_score': vector_score,
+                'fusion_method': 'vector_only'
             }
         
         # 檢查是否有候選結果
@@ -8772,13 +8779,13 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                 "results": [],
                 "query": req.query,
                 "final_results": 0,
-                "fusion_method": "RRF",
+                "fusion_method": "vector_only",
                 "k_rrf": 60,
-                "warning": "No candidates found from vector or BM25 search"
+                "warning": "No candidates found from vector search"
             }
         
-        # 按RRF分數排序
-        final_results = sorted(all_candidates.values(), key=lambda x: x['rrf_score'], reverse=True)
+        # 按向量相似度分數排序（所有組都使用vector_score）
+        final_results = sorted(all_candidates.values(), key=lambda x: x.get('vector_score', 0.0), reverse=True)
         final_results = final_results[:req.k]
         
         # 統計最終結果中來自不同層次的分佈（用於診斷C組和D組差異）
@@ -8813,35 +8820,34 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
                         doc_id, level, chunk_index, store
                     )
         
-        # 記錄融合時間
+        # 記錄排序時間
         fusion_time = time.time() - fusion_start
-        print(f"⏱️  RRF融合花費時間: {fusion_time:.3f} 秒")
+        print(f"⏱️  向量相似度排序花費時間: {fusion_time:.3f} 秒")
         
         # 計算總時間
         total_retrieval_time = time.time() - retrieval_start_time
         
-        print(f"✅ HybridRAG(RRF)檢索完成，返回 {len(final_results)} 個結果")
+        print(f"✅ 向量檢索完成，返回 {len(final_results)} 個結果")
         print(f"{'='*60}")
         print(f"⏱️  檢索總花費時間: {total_retrieval_time:.3f} 秒")
         print(f"    - 查詢 Embedding: {query_embedding_time:.3f} 秒")
         print(f"    - 向量檢索: {vector_retrieval_time:.3f} 秒")
-        print(f"    - BM25檢索: {bm25_retrieval_time:.3f} 秒")
-        print(f"    - RRF融合: {fusion_time:.3f} 秒")
+        print(f"    - 向量相似度排序: {fusion_time:.3f} 秒")
         print(f"{'='*60}")
         
         result = {
             "results": final_results,
             "query": req.query,
             "final_results": len(final_results),
-            "fusion_method": "RRF",
-            "k_rrf": k_rrf,
+            "fusion_method": "vector_only",
+            "k_rrf": 60,
             "embedding_stats": embedding_stats,
             "level_distribution": level_distribution,  # 添加層次分佈統計
             "timing": {
                 "total_time": round(total_retrieval_time, 3),
                 "query_embedding_time": round(query_embedding_time, 3),
                 "vector_retrieval_time": round(vector_retrieval_time, 3),
-                "bm25_retrieval_time": round(bm25_retrieval_time, 3),
+                "bm25_retrieval_time": 0.0,
                 "fusion_time": round(fusion_time, 3)
             }
         }

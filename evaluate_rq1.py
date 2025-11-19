@@ -639,6 +639,26 @@ def evaluate_rq1():
                         print(f"    {GROUP_LABELS[group]}:")
                         print(f"      嚴格 - P@{k}: {avg['strict_precision']:.4f}, R@{k}: {avg['strict_recall']:.4f}, F1@{k}: {avg['strict_f1']:.4f}")
                         print(f"      寬鬆 - P@{k}: {avg['relaxed_precision']:.4f}, R@{k}: {avg['relaxed_recall']:.4f}, F1@{k}: {avg['relaxed_f1']:.4f}")
+                
+                # 顯示該查詢類型的提升幅度（D組 vs A組）
+                for k in k_values:
+                    k_key = f"k_{k}"
+                    avg_a = type_averages[query_type].get("group_a", {}).get(k_key)
+                    avg_d = type_averages[query_type].get("group_d", {}).get(k_key)
+                    if avg_a and avg_d:
+                        strict_diff = avg_d["strict_f1"] - avg_a["strict_f1"]
+                        relaxed_diff = avg_d["relaxed_f1"] - avg_a["relaxed_f1"]
+                        print(f"\n    📈 {query_type} 提升幅度 ({GROUP_LABELS['group_d']} vs {GROUP_LABELS['group_a']}):")
+                        if avg_a["strict_f1"] > 0:
+                            strict_pct = strict_diff / avg_a["strict_f1"] * 100
+                            print(f"      嚴格F1@{k}: {strict_diff:+.4f} ({strict_pct:+.2f}%)")
+                        else:
+                            print(f"      嚴格F1@{k}: N/A")
+                        if avg_a["relaxed_f1"] > 0:
+                            relaxed_pct = relaxed_diff / avg_a["relaxed_f1"] * 100
+                            print(f"      寬鬆F1@{k}: {relaxed_diff:+.4f} ({relaxed_pct:+.2f}%)")
+                        else:
+                            print(f"      寬鬆F1@{k}: N/A")
     
     print("\n" + "=" * 80)
     print("評估完成！")
