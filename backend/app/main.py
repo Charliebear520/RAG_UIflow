@@ -8424,8 +8424,11 @@ async def hybrid_rrf_retrieve(req: RetrieveRequest):
             
             for level_name in filtered_levels:
                 try:
-                    level_indices, level_scores = faiss_store.search_multi_level(level_name, query_vector, req.k * 10)
-                    print(f"   ✅ 層次 '{level_name}' 返回 {len(level_indices)} 個候選")
+                    level_total = req.k * 10
+                    if level_name in faiss_store.multi_level_index_info:
+                        level_total = faiss_store.multi_level_index_info[level_name].total_vectors
+                    level_indices, level_scores = faiss_store.search_multi_level(level_name, query_vector, level_total)
+                    print(f"   ✅ 層次 '{level_name}' 返回 {len(level_indices)} 個候選（總數: {level_total}）")
                     _ensure_embedding_entry(level_name)
                     embedding_stats[level_name]["vector_candidates"] += len(level_indices)
                     vector_kept = 0

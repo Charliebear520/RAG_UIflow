@@ -500,13 +500,12 @@ def evaluate_rq1():
                 fused_results = group_payloads.get(group, {}).get("fused_results", [])
                 metrics = calculate_metrics(fused_results, gt_e, gt_c, k)
                 item_result[group][f"k_{k}"] = metrics
-                if k == 5:
-                    summaries.append(
-                        f"    {GROUP_LABELS[group]} - Strict P@{k}: {metrics['strict_precision']:.3f}, "
-                        f"R@{k}: {metrics['strict_recall']:.3f}, F1@{k}: {metrics['strict_f1']:.3f}\n"
-                        f"                     Relaxed P@{k}: {metrics['relaxed_precision']:.3f}, "
-                        f"R@{k}: {metrics['relaxed_recall']:.3f}, F1@{k}: {metrics['relaxed_f1']:.3f}"
-                    )
+                summaries.append(
+                    f"    {GROUP_LABELS[group]} - Strict P@{k}: {metrics['strict_precision']:.3f}, "
+                    f"R@{k}: {metrics['strict_recall']:.3f}, F1@{k}: {metrics['strict_f1']:.3f}\n"
+                    f"                     Relaxed P@{k}: {metrics['relaxed_precision']:.3f}, "
+                    f"R@{k}: {metrics['relaxed_recall']:.3f}, F1@{k}: {metrics['relaxed_f1']:.3f}"
+                )
             if summaries:
                 print(f"  📊 K={k} 指標:")
                 for line in summaries:
